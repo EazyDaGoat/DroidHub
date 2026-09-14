@@ -1,33 +1,38 @@
-if not game:IsLoaded() then
-	game.Loaded:Wait()
+local Players = game:GetService("Players")
+if not game:IsLoaded() then game.Loaded:Wait() end
+-- Startup waits only for real dependencies; no arbitrary sleeps delay execution.
+local startupPlayer = Players.LocalPlayer
+while not startupPlayer do
+	Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+	startupPlayer = Players.LocalPlayer
 end
-task.wait(1.00)
-do
-	local startupPlayers = game:GetService("Players")
-	local startupPlayer = startupPlayers.LocalPlayer
-	while not startupPlayer do
-		startupPlayers:GetPropertyChangedSignal("LocalPlayer"):Wait()
-		startupPlayer = startupPlayers.LocalPlayer
-	end
-	while true do
-		local character = startupPlayer.Character
-		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-		local root = character and character:FindFirstChild("HumanoidRootPart")
-		if humanoid and root and root.Parent then
-			break
-		end
-		task.wait(0.10)
-	end
-
-
-	task.wait(1.00)
+while true do
+	local character = startupPlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if humanoid and root and root.Parent then break end
+	task.wait(0.10)
 end
-
+-- Frequently used services are cached once; hot loops never call GetService repeatedly.
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local TextService = game:GetService("TextService")
 local CoreGui = game:GetService("CoreGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
 local New = Instance.new
+local function safeRepGet(rep, key)
+	if not rep or type(rep.get) ~= "function" then return nil end
+	local ok, value = pcall(rep.get, key)
+	return ok and value or nil
+end
+local function safeTryIndex(root, path)
+	if not root or type(root.TryIndex) ~= "function" then return nil end
+	local ok, value = pcall(root.TryIndex, root, path)
+	return ok and value or nil
+end
 local U2,U2O,U2S=UDim2.new,UDim2.fromOffset,UDim2.fromScale
 local V2=Vector2.new
 local RGB=Color3.fromRGB
@@ -40,17 +45,26 @@ if not camera then
 	):Wait()
 	camera = workspace.CurrentCamera
 end
-local viewportSize = camera
-	and camera.ViewportSize
-	or V2(
-		1920,
-		1080
-	)
-
-
-
-
-
+local viewportSize = camera and camera.ViewportSize or V2(1920, 1080)
+-- Roblox can briefly report a 1x1/otherwise invalid viewport while the
+-- camera is being initialized. Never use that transient value as the
+-- responsive reference because every later UIScale calculation depends on it.
+if viewportSize.X < 320 or viewportSize.Y < 240 then
+	local deadline = os.clock() + 3
+	repeat
+		task.wait()
+		local liveCamera = workspace.CurrentCamera or camera
+		local liveViewport = liveCamera and liveCamera.ViewportSize
+		if liveViewport and liveViewport.X >= 320 and liveViewport.Y >= 240 then
+			camera = liveCamera
+			viewportSize = liveViewport
+			break
+		end
+	until os.clock() >= deadline
+end
+if viewportSize.X < 320 or viewportSize.Y < 240 then
+	viewportSize = V2(1920, 1080)
+end
 local DEFAULT_WIDTH_SCALE = 0.50
 local DEFAULT_HEIGHT_SCALE = 0.60
 local FONT_SIZE_SCALE = 1.17188
@@ -60,7 +74,6 @@ local function isPhonePanelLayout()
 	return UserInputService.TouchEnabled
 		and math.min(currentViewport.X, currentViewport.Y) < 700
 end
-
 local px = (function()
 	local startupPhoneLayout = UserInputService.TouchEnabled
 		and math.min(viewportSize.X, viewportSize.Y) < 700
@@ -74,7 +87,6 @@ local px = (function()
 		return math.min(-1, scaled)
 	end
 end)()
-
 local responsiveTextSize = (function()
 	local startupPhoneLayout = UserInputService.TouchEnabled
 		and math.min(viewportSize.X, viewportSize.Y) < 700
@@ -87,7 +99,6 @@ local responsiveTextSize = (function()
 		)
 	end
 end)()
-
 local function setResponsiveTextSize(object, baseSize)
 	object.TextSize = responsiveTextSize(baseSize)
 end
@@ -104,18 +115,22 @@ local LOGO_FONT_FACE = (function()
 		if type(writefile) ~= "function" or type(customAsset) ~= "function" then
 			return fallback
 		end
-
 		local ttfPath = "TuffHub_InsaniburgerRegular_v1.ttf"
 		local familyPath = "TuffHub_InsaniburgerRegular_v1.font"
-		local raw = game:HttpGet("https://www.1001fonts.com/download/font/insaniburger.regular.ttf")
-		if type(raw) ~= "string" or #raw < 10000 then
-			error("Insaniburger Regular download failed")
+		-- Cache the font file across executions; avoid a network request and disk write on every load.
+		local fontCached = false
+		if type(isfile) == "function" then
+			local okFile, exists = pcall(isfile, ttfPath)
+			fontCached = okFile and exists == true
 		end
-		writefile(ttfPath, raw)
-
+		if not fontCached then
+			local raw = game:HttpGet("https://www.1001fonts.com/download/font/insaniburger.regular.ttf")
+			if type(raw) ~= "string" or #raw < 10000 then error("Insaniburger Regular download failed") end
+			writefile(ttfPath, raw)
+		end
 		writefile(
 			familyPath,
-			game:GetService("HttpService"):JSONEncode({
+			HttpService:JSONEncode({
 				name = "Insaniburger",
 				faces = {{
 					name = "Regular",
@@ -125,10 +140,8 @@ local LOGO_FONT_FACE = (function()
 				}},
 			})
 		)
-
 		return Font.new(customAsset(familyPath))
 	end)
-
 	if not ok then
 		warn("TuffHub: Insaniburger failed to load; using GothamBlack fallback: " .. tostring(face))
 		return fallback
@@ -206,16 +219,17 @@ local AUTO_ACCEPT_KEY = "__TUFFHUB_AUTO_ACCEPT"
 local AUTO_SIT_KEY = "__TUFFHUB_AUTO_SIT"
 local AUTO_CANCEL_KEY = "__TUFFHUB_AUTO_CANCEL"
 local AUTO_SERVER_HOP_KEY = "__TUFFHUB_AUTO_SERVER_HOP"
-local RARITY_OPTIONS = {
-	"Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythical",
-	"Cosmic", "Secret", "Celestial", "Divine", "Infinity", "Meta", "Paradox",
-	"Eternal", "Tokens",
-}
 local BRAINROT_RARITY_OPTIONS = {
 	"Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythical",
-	"Cosmic", "Secret", "Celestial", "Divine", "Infinity", "Meta", "Paradox",
-	"Eternal",
+	"Cosmic", "Secret", "Celestial", "Divine", "Infinity", "Meta", "Paradox", "Eternal",
 }
+-- Eternal is receive-only; outgoing rarity selectors stop at Paradox.
+local OUTGOING_BRAINROT_RARITY_OPTIONS = {
+	"Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythical",
+	"Cosmic", "Secret", "Celestial", "Divine", "Infinity", "Meta", "Paradox",
+}
+local RARITY_OPTIONS = table.clone(BRAINROT_RARITY_OPTIONS)
+RARITY_OPTIONS[#RARITY_OPTIONS + 1] = "Tokens"
 local minigameAutoplayState
 local autoOfferState
 local autoAcceptState
@@ -223,7 +237,6 @@ local autoSitState
 local autoCancelState
 local autoServerHopState
 if IS_MINIGAME_PLACE then
-
 	minigameAutoplayState = {}
 	rawset(_G, MINIGAME_AUTOPLAY_KEY, minigameAutoplayState)
 	for _, id in ipairs({
@@ -237,39 +250,34 @@ if IS_MINIGAME_PLACE then
 	}) do
 		minigameAutoplayState[id] = false
 	end
-
 	autoOfferState = {}
 	rawset(_G, AUTO_OFFER_KEY, autoOfferState)
-	for _, rarity in ipairs({
-		"Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythical",
-		"Cosmic", "Secret", "Celestial", "Divine", "Infinity", "Meta", "Paradox",
-		"Eternal",
-	}) do
+	for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 		autoOfferState[rarity] = {
 			Enabled = false,
+			OfferModeRarity = true,
+			OfferModeSpecific = false,
 			Targets = {},
 			Amounts = {},
+			SpecificTargets = {},
 			Tokens = 0,
+			OfferAllTokens = false,
 		}
 	end
-
 	autoAcceptState = {}
 	rawset(_G, AUTO_ACCEPT_KEY, autoAcceptState)
-	for _, rarity in ipairs({
-		"Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythical",
-		"Cosmic", "Secret", "Celestial", "Divine", "Infinity", "Meta", "Paradox",
-		"Eternal",
-	}) do
+	for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 		autoAcceptState[rarity] = {
 			Enabled = false,
 			Amount = 1,
+			Mutations = {},
+			Traits = {},
 		}
 	end
 	autoAcceptState.Tokens = {
 		Enabled = false,
 		Amount = 1,
 	}
-
 	autoSitState = {
 		EmptyTables = {
 			Enabled = false,
@@ -279,17 +287,22 @@ if IS_MINIGAME_PLACE then
 			Targets = {},
 			Amounts = {},
 			Tokens = 1,
+			MustOwnAllSelected = false,
+			MustOwnOneSelected = true,
 		},
 	}
 	rawset(_G, AUTO_SIT_KEY, autoSitState)
-
 	autoCancelState = {
 		Enabled = false,
 		Targets = {},
 		Amounts = {},
+		Mutations = {},
+		Traits = {},
+		SpecificItems = {
+			{Item = nil, Mutations = {}, Traits = {}},
+		},
 	}
 	rawset(_G, AUTO_CANCEL_KEY, autoCancelState)
-
 	autoServerHopState = {
 		Enabled = false,
 		ServerTimeEnabled = false,
@@ -299,56 +312,74 @@ if IS_MINIGAME_PLACE then
 		WinWagerTimeAdded = 3,
 		BoothPurchaseTimeAdded = 1,
 		LeaveIfScriptUserInServer = true,
-
-
+		ServerBlacklistMinutes = 10,
+		JoinedServerBlacklist = {},
+		CanceledTradeCounts = {},
 		RuntimeStartedAt = os.clock(),
-
-
 		RuntimeBoothScriptRemoveUntil = {},
 		RuntimeTempBlacklistedUserIds = {},
 		RuntimeCanceledTradeCounts = {},
 		RuntimeCanceledTradeLastCountAt = {},
 		RuntimeUtilityToggleRows = {},
-
-
-
 		RuntimeServerHopPending = false,
 		RuntimeScriptUserHopRequested = false,
 		RuntimeScriptUserIds = {},
+		RuntimeScriptUserServerIds = {},
+		RuntimeGlobalPresenceConnectedAt = nil,
 		RuntimePresenceStartedAt = os.clock(),
 		RuntimePresencePlayerSeenAt = {},
 		RuntimeCheckServerHopRequested = false,
 		RuntimeManualServerHopRequested = false,
 		RuntimePlayedMinigameUserIds = {},
 		RuntimeOwnedBrainrotOptionLabels = {},
-
-
 		RuntimeAutoSitBusy = false,
 		RuntimeBoothMutationBusy = false,
 		RuntimeBoothMaxSlots = 3,
 		RuntimeSettingsResetEpoch = 0,
+		RuntimeSimpleAutofarmTargetRarity = nil,
+		RuntimeSimpleAutofarmWarningUntil = 0,
 		RecentServerIds = {},
 	}
 	rawset(_G, AUTO_SERVER_HOP_KEY, autoServerHopState)
-
 	autoServerHopState.Utility = {
-
+		SimpleAutofarmEnabled = false,
 		AutoPlayMaster = false,
 		AutoOfferMaster = false,
+		AutoOfferBasedOnRarity = false,
+		AutoOfferSpecificBrainrot = false,
+		AutoOfferSpecificBrainrotId = nil,
+		AutoOfferSpecificTokenAmount = 0,
+		AutoOfferSpecificOfferAllTokens = false,
+		AutoOfferTokensOfferAllTokens = false,
+		AutoOfferBrainrotMatchOfferAllTokens = false,
+		AutoOfferBasedOnTradeChat = false,
+		AutoOfferTradeChatOffers = {
+			{LookFor = "", Targets = {}, Amounts = {}, BrainrotId = nil, TokenAmount = 0, OfferAllTokens = false},
+		},
 		AutoAcceptMaster = false,
+		AutoAcceptMustHaveOne = true,
+		AutoAcceptMustHaveAll = false,
+		AutoAcceptSpecificItems = {
+			{Item = nil, Mutations = {}, Traits = {}},
+		},
 		CustomDelays = false,
-
-
-
 		AutoCancelMaster = false,
 		AutoCancelCheckOpponentsBrainrots = false,
+		AutoSitMustOwnAllSelected = false,
+		AutoSitMustOwnOneSelected = true,
+		AutoSitSpecificItems = {
+			{Item = nil, Mutations = {}, Traits = {}},
+		},
+		AutoCancelPlayerMustOwnAllSelected = false,
+		AutoCancelPlayerMustOwnAtLeastOneSelected = true,
+		AutoCancelSpecificItems = {
+			{Item = nil, Mutations = {}, Traits = {}},
+		},
 		AutoCancelTradeTimeoutEnabled = false,
 		AutoCancelTradeTimeout = 60,
 		AutoCancelNoValueTimeoutEnabled = false,
 		AutoCancelNoValueTimeout = 15,
 		AutoCancelBrainrotConditionDelay = 0,
-
-
 		AutoOfferTokensEnabled = false,
 		AutoOfferMatchTokensWithTokens = false,
 		AutoOfferTokenAddRatio = 1,
@@ -356,13 +387,16 @@ if IS_MINIGAME_PLACE then
 		AutoOfferMatchTokensWithBrainrots = false,
 		AutoOfferTokenAmount = 0,
 		AutoOfferTokenRarity = nil,
-
-
-
 		FallbackOffers = false,
 		FallbackToTokens = false,
 		FallbackToNextLowerRarityBrainrot = false,
+		FallbackToSpecificBrainrotItem = false,
+		FallbackSpecificBrainrotItem = nil,
 		FallbackNextLowerRarityAmount = 1,
+		FallbackAvoidMutationsEnabled = false,
+		FallbackAvoidMutations = {},
+		FallbackAvoidTraitsEnabled = false,
+		FallbackAvoidTraits = {},
 		FallbackTokensCommon = 0,
 		FallbackTokensUncommon = 0,
 		FallbackTokensRare = 0,
@@ -377,7 +411,6 @@ if IS_MINIGAME_PLACE then
 		FallbackTokensMeta = 0,
 		FallbackTokensParadox = 0,
 		FallbackTokensEternal = 0,
-
 		AutoChat = false,
 		AutoChatMessage = "",
 		AutoChatMessageRevision = 0,
@@ -386,7 +419,6 @@ if IS_MINIGAME_PLACE then
 		ChatIntervalMinutes = 1,
 		AutoChatDoNotSendDuringActiveTrade = false,
 		AutoChatExecutionDelay = 0,
-
 		AutoTradeChat = false,
 		AutoTradeMessage = "",
 		AutoTradeMessageRevision = 0,
@@ -409,27 +441,39 @@ if IS_MINIGAME_PLACE then
 		DeleteInventoryThreshold = 95,
 		NeverDeleteEnabled = false,
 		NeverDeleteItems = {},
-
-
+		AvoidDeletingTraits = {},
+		AvoidDeletingMutations = {},
 		AutoEquipBestBrainrot = false,
+		AutoEquipModeHold = false,
+		AutoEquipModeMount = false,
+		AutoEquipModeHoldMount = false,
+		AutoEquipUseBestBrainrot = true,
+		AutoEquipUseSpecificBrainrot = false,
+		HoldEquipBestBrainrot = true,
+		HoldEquipSpecificBrainrot = false,
+		HoldSpecificBrainrotId = nil,
+		MountEquipBestBrainrot = true,
+		MountEquipSpecificBrainrot = false,
+		MountSpecificBrainrotId = nil,
+		-- Legacy keys kept for migration/backward compatibility.
 		EquipBestBrainrot = false,
 		EquipBestMountableBrainrot = false,
 		EquipSpecificBrainrot = false,
 		SpecificBrainrotId = nil,
 		MountBrainrotIfPossible = false,
-
-
 		AutoshowBestBrainrots = false,
 		AutoshowAllTokens = false,
 		CustomOpeningOffer = false,
+		CustomOpeningTokens = false,
 		OpeningOfferBrainrot1 = nil,
 		OpeningOfferBrainrot2 = nil,
 		OpeningOfferBrainrot3 = nil,
 		OpeningOfferBrainrot4 = nil,
 		OpeningOfferBrainrot5 = nil,
 		OpeningOfferBrainrot6 = nil,
-
-
+		OpeningOfferCustomTokenAmount = false,
+		OpeningOfferTokenAmount = 0,
+		OpeningOfferShowAllTokens = false,
 		InitialJoinDelay = 1.125,
 		DelayAfterTradeMessage = 0.75,
 		ReactionDelay = 1.6875,
@@ -438,8 +482,6 @@ if IS_MINIGAME_PLACE then
 		AddTokenDelay = 0,
 		RemoveTokenDelay = 0,
 		AcceptOfferDelay = 0.1875,
-
-
 		AutoChooseGame = false,
 		GameToChoose = "Popcorn Burst",
 		MatchOpponentGame = false,
@@ -447,18 +489,17 @@ if IS_MINIGAME_PLACE then
 		AutoChooseRound1Delay = 0,
 		AutoChooseRound2Delay = 2.5,
 		AutoChooseRound3Delay = 5,
+		AutoChooseRoundsRound1Delay = 0,
+		AutoChooseRoundsRound2Delay = 2.5,
+		AutoChooseRoundsRound3Delay = 5,
 		AutoChooseRounds = false,
 		RoundsToChoose = "1",
 		MatchOpponentRounds = false,
 		FallbackRoundChoices = {},
-
-
 		LeaveWhenAboutToLose = false,
 		PrintWinsLossesToTerminal = false,
 		PrintKicksToTerminal = false,
 		AutoReconnect = false,
-
-
 		PauseMinigameFeatures = false,
 		MoveDelayConnectFour = 0,
 		MoveDelayFootballDraft = 0,
@@ -466,29 +507,25 @@ if IS_MINIGAME_PLACE then
 		MoveDelayBattleship = 0,
 		MoveDelayNumberGuess = 0,
 		MoveDelayKnockout = 0,
-
-
 		TempBlacklistPlayersAfterCanceledTrade = false,
 		TempBlacklistAfterCanceledTrades = 1,
 		PermanentBlacklistPlayersAfterCanceledTrade = false,
 		PermanentBlacklistAfterCanceledTrades = 3,
 		PermanentBlacklistedUserIds = {},
-
-
 		CheckServerHopNobodyServer = false,
 		CheckServerHopPlayedEveryoneServer = false,
 		CheckServerHopNobodyMinigamesArea = false,
 		CheckServerHopPlayedEveryoneMinigamesArea = false,
 		CheckServerBrainrotRarities = {},
-
-
-
+		CheckServerSpecificItems = {},
+		CheckServerMutations = {},
+		CheckServerTraits = {},
+		CheckServerMustOwnAll = false,
+		CheckServerMustOwnOne = true,
 		PauseScript = false,
 		UndoAllSettings = false,
 		GuiMinimized = false,
 		PanelExpanded = {},
-
-
 		AutoBooth = false,
 		AutoBoothName = "",
 		AutoBoothListBestFirst = false,
@@ -523,8 +560,18 @@ if IS_MINIGAME_PLACE then
 		AutoBoothListing3MessageWhenListed = false,
 		AutoBoothListing3ListedMessage = "",
 	}
+	for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+		autoServerHopState.Utility["AutoOffer" .. rarity .. "OfferAllTokens"] = false
+		autoServerHopState.Utility["Fallback" .. rarity .. "OfferAllTokens"] = false
+		autoServerHopState.Utility["FallbackSpecific" .. rarity .. "Item"] = nil
+		autoServerHopState.Utility["AutoAccept" .. rarity .. "Mutations"] = {}
+		autoServerHopState.Utility["AutoAccept" .. rarity .. "Traits"] = {}
+		autoServerHopState.Utility["AutoSit" .. rarity .. "Mutations"] = {}
+		autoServerHopState.Utility["AutoSit" .. rarity .. "Traits"] = {}
+		autoServerHopState.Utility["AutoCancel" .. rarity .. "Mutations"] = {}
+		autoServerHopState.Utility["AutoCancel" .. rarity .. "Traits"] = {}
+	end
 	rawset(_G, "__TUFFHUB_UTILITY_FEATURES", autoServerHopState.Utility)
-
 	do
 		for index = 1, 14 do
 			local prefix = "AutoBoothListing" .. tostring(index)
@@ -543,15 +590,13 @@ if IS_MINIGAME_PLACE then
 			autoServerHopState.Utility[prefix .. "MessageDelay"] = 0
 		end
 	end
-
-
 	autoServerHopState.BoothBrainrotOptions = function()
 		local cached = autoServerHopState.RuntimeBoothBrainrotOptions
 		if type(cached) == "table" then return cached end
 		local options = {}
 		pcall(function()
 			local config = require(
-				game:GetService("ReplicatedStorage")
+				ReplicatedStorage
 					:WaitForChild("Shared")
 					:WaitForChild("Config")
 					:WaitForChild("Brainrots")
@@ -566,14 +611,13 @@ if IS_MINIGAME_PLACE then
 		autoServerHopState.RuntimeBoothBrainrotOptions = options
 		return options
 	end
-
 	autoServerHopState.BoothTraitOptions = function()
 		local cached = autoServerHopState.RuntimeBoothTraitOptions
 		if type(cached) == "table" then return cached end
 		local options = {}
 		pcall(function()
 			local traits = require(
-				game:GetService("ReplicatedStorage")
+				ReplicatedStorage
 					:WaitForChild("Shared")
 					:WaitForChild("Traits")
 			)
@@ -587,14 +631,13 @@ if IS_MINIGAME_PLACE then
 		autoServerHopState.RuntimeBoothTraitOptions = options
 		return options
 	end
-
 	autoServerHopState.BoothMutationOptions = function()
 		local cached = autoServerHopState.RuntimeBoothMutationOptions
 		if type(cached) == "table" then return cached end
 		local options = {}
 		pcall(function()
 			local mutations = require(
-				game:GetService("ReplicatedStorage")
+				ReplicatedStorage
 					:WaitForChild("Shared")
 					:WaitForChild("Mutations")
 			)
@@ -610,14 +653,13 @@ if IS_MINIGAME_PLACE then
 		autoServerHopState.RuntimeBoothMutationOptions = options
 		return options
 	end
-
 	autoServerHopState.RefreshBoothMaxSlots = function()
 		local maximum = tonumber(autoServerHopState.RuntimeBoothMaxSlots) or 3
 		pcall(function()
 			if not autoServerHopState.RuntimeBoothReplicator
 				or not autoServerHopState.RuntimeGetMaxBoothSlots
 			then
-				local RS = game:GetService("ReplicatedStorage")
+				local RS = ReplicatedStorage
 				autoServerHopState.RuntimeBoothReplicator = require(
 					RS:WaitForChild("Client")
 						:WaitForChild("Modules")
@@ -645,16 +687,14 @@ if IS_MINIGAME_PLACE then
 		autoServerHopState.RuntimeBoothMaxSlots = maximum
 		return maximum
 	end
-
 	if IS_MINIGAME_PLACE then
 		autoServerHopState.RefreshBoothMaxSlots()
 	end
-
 	autoServerHopState.RefreshOwnedBrainrotOptions = function()
 		local labels = {}
 		local options = {}
 		local ok = pcall(function()
-			local RS = game:GetService("ReplicatedStorage")
+			local RS = ReplicatedStorage
 			local Replicator = require(
 				RS:WaitForChild("Client")
 					:WaitForChild("Modules")
@@ -668,7 +708,6 @@ if IS_MINIGAME_PLACE then
 			local playerData = Replicator.get("PlayerData")
 			local inventory = playerData and playerData:TryIndex({"Inventory"})
 			if type(inventory) ~= "table" then return end
-
 			local duplicateCounts = {}
 			for _, item in pairs(inventory) do
 				if type(item) == "table" then
@@ -684,7 +723,6 @@ if IS_MINIGAME_PLACE then
 					end
 				end
 			end
-
 			local seenNameIndex = {}
 			for id, item in pairs(inventory) do
 				if type(item) == "table" then
@@ -706,7 +744,6 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 		end)
-
 		if not ok then
 			table.clear(options)
 			table.clear(labels)
@@ -718,7 +755,29 @@ if IS_MINIGAME_PLACE then
 		autoServerHopState.RuntimeOwnedBrainrotOptionLabels = labels
 		return options
 	end
-
+	autoServerHopState.RefreshOwnedMountableBrainrotOptions = function()
+		local all = autoServerHopState.RefreshOwnedBrainrotOptions()
+		local options = {}
+		local ok, Rideable = pcall(function()
+			return require(
+				ReplicatedStorage
+					:WaitForChild("Shared")
+					:WaitForChild("Config")
+					:WaitForChild("RideableBrainrots")
+			)
+		end)
+		if not ok or type(Rideable) ~= "table" or type(Rideable.isRideable) ~= "function" then
+			return options
+		end
+		for _, id in ipairs(all) do
+			local label = autoServerHopState.OwnedBrainrotOptionLabel(id)
+			local baseName = string.gsub(tostring(label), " #%d+$", "")
+			local rideable = false
+			pcall(function() rideable = Rideable.isRideable(baseName) == true end)
+			if rideable then options[#options + 1] = id end
+		end
+		return options
+	end
 	autoServerHopState.OwnedBrainrotOptionLabel = function(id)
 		if id == nil then return "None" end
 		local labels = autoServerHopState.RuntimeOwnedBrainrotOptionLabels
@@ -726,7 +785,214 @@ if IS_MINIGAME_PLACE then
 			and labels[tostring(id)]
 			or tostring(id)
 	end
-
+	local simpleAutofarmRarityOrder, simpleAutofarmInventoryModules = {}, nil
+	for index, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do simpleAutofarmRarityOrder[rarity] = index end
+	-- Immutable modules are required once; the recurring progression check only scans inventory.
+	autoServerHopState.SimpleAutofarmInventorySummary = function()
+		local counts, total, highest = {}, 0, nil
+		if not simpleAutofarmInventoryModules then
+			pcall(function()
+				local client = ReplicatedStorage:WaitForChild("Client"):WaitForChild("Modules")
+				local sharedUtils = ReplicatedStorage:WaitForChild("Shared"):WaitForChild("utils")
+				simpleAutofarmInventoryModules = {
+					Replicator = require(client:WaitForChild("ReplicatorClient")),
+					GetItemType = require(sharedUtils:WaitForChild("GetItemType")),
+					EconomyMath = require(sharedUtils:WaitForChild("EconomyMath")),
+				}
+			end)
+		end
+		local modules = simpleAutofarmInventoryModules
+		if not modules then return total, highest, counts end
+		local okData, playerData = pcall(modules.Replicator.get, "PlayerData")
+		if not okData or not playerData then return total, highest, counts end
+		local okInventory, inventory = pcall(playerData.TryIndex, playerData, {"Inventory"})
+		if not okInventory or type(inventory) ~= "table" then return total, highest, counts end
+		for _, item in pairs(inventory) do
+			if type(item) == "table" then
+				local okType, itemType = pcall(modules.GetItemType, item)
+				if okType and itemType == "Brainrot" then
+					local name = tostring(item.name or (item.sub and item.sub.name) or "")
+					local rarity = item.rarity or item.Rarity or (item.sub and (item.sub.rarity or item.sub.Rarity))
+					if type(rarity) ~= "string" or not simpleAutofarmRarityOrder[rarity] then
+						local okRarity, resolved = pcall(modules.EconomyMath.GetBrainrotRarity, name)
+						rarity = okRarity and resolved or nil
+					end
+					local sub = item.sub
+					local metaMarked = item.meta == true or item.Meta == true or item.isMeta == true or item.IsMeta == true
+						or (sub and (sub.meta == true or sub.Meta == true or sub.isMeta == true or sub.IsMeta == true))
+					if rarity == "Infinity" and metaMarked then rarity = "Meta" end
+					if simpleAutofarmRarityOrder[rarity] then
+						total += 1
+						counts[rarity] = (counts[rarity] or 0) + 1
+						if not highest or simpleAutofarmRarityOrder[rarity] > simpleAutofarmRarityOrder[highest] then highest = rarity end
+					end
+				end
+			end
+		end
+		return total, highest, counts
+	end
+	autoServerHopState.HasAnyBrainrot = function()
+		local total = autoServerHopState.SimpleAutofarmInventorySummary()
+		return (tonumber(total) or 0) > 0
+	end
+	autoServerHopState.RefreshOwnedTradeableItemOptions = function()
+		local labels = {}
+		local options = {}
+		local ok = pcall(function()
+			local RS = ReplicatedStorage
+			local Replicator = require(
+				RS:WaitForChild("Client")
+					:WaitForChild("Modules")
+					:WaitForChild("ReplicatorClient")
+			)
+			local ItemToString = require(
+				RS:WaitForChild("Shared")
+					:WaitForChild("utils")
+					:WaitForChild("ItemToString")
+			)
+			local ItemIsTradeable = require(
+				RS:WaitForChild("Shared")
+					:WaitForChild("utils")
+					:WaitForChild("ItemIsTradeable")
+			)
+			local EconomyMath = require(
+				RS:WaitForChild("Shared")
+					:WaitForChild("utils")
+					:WaitForChild("EconomyMath")
+			)
+			local playerData = Replicator.get("PlayerData")
+			local inventory = playerData and playerData:TryIndex({"Inventory"})
+			if type(inventory) ~= "table" then return end
+			for id, item in pairs(inventory) do
+				if type(item) == "table" and not item.locked then
+					local tradeable = false
+					pcall(function() tradeable = ItemIsTradeable(item) == true end)
+					local explicit = item.rarity
+						or item.Rarity
+						or (item.sub and (item.sub.rarity or item.sub.Rarity))
+					local rarity = explicit
+					if type(rarity) ~= "string" then
+						local name = item.name or (item.sub and item.sub.name)
+						pcall(function() rarity = EconomyMath.GetBrainrotRarity(name) end)
+					end
+					if rarity == "Eternal" then
+						tradeable = false
+					elseif explicit == "Paradox" or explicit == "Meta" then
+						tradeable = true
+					end
+					if tradeable and rarity ~= "Eternal" then
+						local sid = tostring(id)
+						local display
+						pcall(function()
+							display = ItemToString(item, {
+								rich = false,
+								displayLevel = false,
+							})
+						end)
+						labels[sid] = tostring(
+							display
+								or item.name
+								or (item.sub and item.sub.name)
+								or item.displayName
+								or item.DisplayName
+								or sid
+						)
+						options[#options + 1] = sid
+					end
+				end
+			end
+		end)
+		if not ok then
+			table.clear(options)
+			table.clear(labels)
+		end
+		table.sort(options, function(a, b)
+			return string.lower(tostring(labels[a] or a))
+				< string.lower(tostring(labels[b] or b))
+		end)
+		autoServerHopState.RuntimeOwnedTradeableItemLabels = labels
+		return options
+	end
+	autoServerHopState.OwnedTradeableItemOptionLabel = function(id)
+		if id == nil then return "None" end
+		local labels = autoServerHopState.RuntimeOwnedTradeableItemLabels
+		return type(labels) == "table"
+			and labels[tostring(id)]
+			or tostring(id)
+	end
+	autoServerHopState.RefreshOwnedOfferableBrainrotOptions = function()
+		local allowed = {}
+		for _, id in ipairs(autoServerHopState.RefreshOwnedTradeableItemOptions()) do
+			allowed[tostring(id)] = true
+		end
+		local options = {}
+		for _, id in ipairs(autoServerHopState.RefreshOwnedBrainrotOptions()) do
+			if allowed[tostring(id)] then options[#options + 1] = id end
+		end
+		return options
+	end
+	autoServerHopState.OwnedInventoryItemNameOptions = function()
+		local names = {}
+		pcall(function()
+			local RS = ReplicatedStorage
+			local Replicator = require(
+				RS:WaitForChild("Client")
+					:WaitForChild("Modules")
+					:WaitForChild("ReplicatorClient")
+			)
+			local ItemToString = require(
+				RS:WaitForChild("Shared")
+					:WaitForChild("utils")
+					:WaitForChild("ItemToString")
+			)
+			local playerData = Replicator.get("PlayerData")
+			local inventory = playerData and playerData:TryIndex({"Inventory"})
+			if type(inventory) ~= "table" then return end
+			for _, item in pairs(inventory) do
+				if type(item) == "table" then
+					local display
+					pcall(function()
+						display = ItemToString(item, {
+							rich = false,
+							displayLevel = false,
+							displayMutation = false,
+						})
+					end)
+					local name = tostring(
+						display
+							or item.name
+							or (item.sub and item.sub.name)
+							or item.displayName
+							or item.DisplayName
+							or ""
+					)
+					if name ~= "" then names[name] = true end
+				end
+			end
+		end)
+		local options = {}
+		for name in pairs(names) do options[#options + 1] = name end
+		table.sort(options, function(a, b)
+			return string.lower(a) < string.lower(b)
+		end)
+		return options
+	end
+	autoServerHopState.CurrentTradeTokenBalance = function()
+		local balance = 0
+		pcall(function()
+			local RS = ReplicatedStorage
+			local Replicator = require(
+				RS:WaitForChild("Client")
+					:WaitForChild("Modules")
+					:WaitForChild("ReplicatorClient")
+			)
+			local playerData = Replicator.get("PlayerData")
+			if playerData then
+				balance = math.max(0, math.floor(tonumber(playerData:TryIndex({"TradeTokens"})) or 0))
+			end
+		end)
+		return balance
+	end
 	autoServerHopState.AllDeletableItemOptions = function()
 		local names = {}
 		local function addName(value)
@@ -735,17 +1001,14 @@ if IS_MINIGAME_PLACE then
 				names[value] = true
 			end
 		end
-
 		pcall(function()
-			local RS = game:GetService("ReplicatedStorage")
+			local RS = ReplicatedStorage
 			local shared = RS:WaitForChild("Shared")
 			local config = shared:WaitForChild("Config")
-
 			local brainrots = require(config:WaitForChild("Brainrots"))
 			for _, name in ipairs(brainrots.BrainrotNames or {}) do
 				addName(name)
 			end
-
 			local luckyBlocks = require(config:WaitForChild("LuckyBlocks"))
 			for key, entry in pairs(luckyBlocks or {}) do
 				if type(entry) == "table" then
@@ -760,7 +1023,6 @@ if IS_MINIGAME_PLACE then
 					)
 				end
 			end
-
 			local utilityItems = require(config:WaitForChild("UtilityItems"))
 			for key, entry in pairs(utilityItems or {}) do
 				addName(
@@ -769,7 +1031,6 @@ if IS_MINIGAME_PLACE then
 						or key
 				)
 			end
-
 			local consumables = require(config:WaitForChild("Consumables"))
 			for key, entry in pairs(consumables or {}) do
 				addName(
@@ -778,7 +1039,6 @@ if IS_MINIGAME_PLACE then
 						or key
 				)
 			end
-
 			local dice = require(config:WaitForChild("Dice"))
 			for key, entry in pairs(dice or {}) do
 				addName(
@@ -787,7 +1047,6 @@ if IS_MINIGAME_PLACE then
 						or key
 				)
 			end
-
 			local baseSkins = require(config:WaitForChild("BaseSkins"))
 			for key, entry in pairs(baseSkins.Skins or baseSkins or {}) do
 				if type(entry) == "table" then
@@ -797,7 +1056,6 @@ if IS_MINIGAME_PLACE then
 					)
 				end
 			end
-
 			local boothSkins = require(config:WaitForChild("BoothSkins"))
 			for key, entry in pairs(boothSkins.Skins or boothSkins or {}) do
 				if type(entry) == "table" then
@@ -807,7 +1065,6 @@ if IS_MINIGAME_PLACE then
 					)
 				end
 			end
-
 			pcall(function()
 				local gearModule = require(
 					RS:WaitForChild("SharedModules"):WaitForChild("GearModule")
@@ -816,8 +1073,6 @@ if IS_MINIGAME_PLACE then
 					addName(name)
 				end
 			end)
-
-
 			local ItemToString = require(
 				shared:WaitForChild("utils"):WaitForChild("ItemToString")
 			)
@@ -848,7 +1103,6 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 		end)
-
 		local options = {}
 		for name in pairs(names) do
 			options[#options + 1] = name
@@ -858,44 +1112,43 @@ if IS_MINIGAME_PLACE then
 		end)
 		return options
 	end
-
 	autoServerHopState.RecordCanceledTrade = function(userId)
 		userId = tonumber(userId)
-		local localPlayer = game:GetService("Players").LocalPlayer
+		local localPlayer = Players.LocalPlayer
 		if not userId
 			or userId <= 0
 			or (localPlayer and userId == localPlayer.UserId)
 		then
 			return false
 		end
-
 		local utility = autoServerHopState.Utility
 		if utility.TempBlacklistPlayersAfterCanceledTrade ~= true
 			and utility.PermanentBlacklistPlayersAfterCanceledTrade ~= true
 		then
 			return false
 		end
-
 		local key = tostring(userId)
 		local now = os.clock()
 		autoServerHopState.RuntimeCanceledTradeLastCountAt =
 			autoServerHopState.RuntimeCanceledTradeLastCountAt or {}
 		local lastCountedAt =
 			tonumber(autoServerHopState.RuntimeCanceledTradeLastCountAt[key]) or -math.huge
-
-
-
 		if now - lastCountedAt < 2.0 then
 			return false
 		end
 		autoServerHopState.RuntimeCanceledTradeLastCountAt[key] = now
-
-		autoServerHopState.RuntimeCanceledTradeCounts =
-			autoServerHopState.RuntimeCanceledTradeCounts or {}
+		autoServerHopState.CanceledTradeCounts =
+			type(autoServerHopState.CanceledTradeCounts) == "table"
+				and autoServerHopState.CanceledTradeCounts
+				or {}
 		local count =
-			(math.floor(tonumber(autoServerHopState.RuntimeCanceledTradeCounts[key]) or 0) + 1)
+			(math.floor(tonumber(autoServerHopState.CanceledTradeCounts[key]) or 0) + 1)
+		autoServerHopState.CanceledTradeCounts[key] = count
+		autoServerHopState.RuntimeCanceledTradeCounts =
+			type(autoServerHopState.RuntimeCanceledTradeCounts) == "table"
+				and autoServerHopState.RuntimeCanceledTradeCounts
+				or {}
 		autoServerHopState.RuntimeCanceledTradeCounts[key] = count
-
 		if utility.TempBlacklistPlayersAfterCanceledTrade == true then
 			local threshold = math.clamp(
 				math.floor(tonumber(utility.TempBlacklistAfterCanceledTrades) or 1),
@@ -908,7 +1161,6 @@ if IS_MINIGAME_PLACE then
 				autoServerHopState.RuntimeTempBlacklistedUserIds[key] = true
 			end
 		end
-
 		if utility.PermanentBlacklistPlayersAfterCanceledTrade == true then
 			local threshold = math.clamp(
 				math.floor(tonumber(utility.PermanentBlacklistAfterCanceledTrades) or 3),
@@ -923,11 +1175,11 @@ if IS_MINIGAME_PLACE then
 				utility.PermanentBlacklistedUserIds[key] = true
 			end
 		end
+		local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
+		if type(saver) == "function" then task.defer(saver, true) end
 		return true
 	end
-
 	;(function()
-		local HttpService = game:GetService("HttpService")
 		local SETTINGS_FILE = "TuffHub_Settings_v1.json"
 		local MEMORY_KEY = "__TUFFHUB_PERSISTED_SETTINGS_V1"
 		local SAVE_KEY = "__TUFFHUB_SAVE_SETTINGS_NOW"
@@ -935,9 +1187,7 @@ if IS_MINIGAME_PLACE then
 		local generation = {}
 		local lastEncoded
 		local lastDiskWriteAt = 0
-
 		rawset(_G, GENERATION_KEY, generation)
-
 		local function environmentFunction(name)
 			local environments = {_G}
 			pcall(function()
@@ -960,10 +1210,8 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 		end
-
 		local readFile = environmentFunction("readfile")
 		local writeFile = environmentFunction("writefile")
-
 		local function copyJsonSafe(value, seen)
 			local valueType = type(value)
 			if valueType == "boolean"
@@ -974,11 +1222,9 @@ if IS_MINIGAME_PLACE then
 				return value
 			end
 			if valueType ~= "table" then return nil end
-
 			seen = seen or {}
 			if seen[value] then return nil end
 			seen[value] = true
-
 			local copy = {}
 			for key, child in pairs(value) do
 				local keyType = type(key)
@@ -990,14 +1236,31 @@ if IS_MINIGAME_PLACE then
 			seen[value] = nil
 			return copy
 		end
-
 		local utilityKeys = {
 			"AutoPlayMaster",
 			"AutoOfferMaster",
+			"AutoOfferBasedOnRarity",
+			"AutoOfferSpecificBrainrot",
+			"AutoOfferSpecificBrainrotId",
+			"AutoOfferSpecificTokenAmount",
+			"AutoOfferSpecificOfferAllTokens",
+			"AutoOfferTokensOfferAllTokens",
+			"AutoOfferBrainrotMatchOfferAllTokens",
+			"AutoOfferBasedOnTradeChat",
+			"AutoOfferTradeChatOffers",
 			"AutoAcceptMaster",
+			"AutoAcceptMustHaveOne",
+			"AutoAcceptMustHaveAll",
+			"AutoAcceptSpecificItems",
+			"AutoSitMustOwnAllSelected",
+			"AutoSitMustOwnOneSelected",
+			"AutoSitSpecificItems",
 			"CustomDelays",
 			"AutoCancelMaster",
 			"AutoCancelCheckOpponentsBrainrots",
+			"AutoCancelPlayerMustOwnAllSelected",
+			"AutoCancelPlayerMustOwnAtLeastOneSelected",
+			"AutoCancelSpecificItems",
 			"AutoCancelTradeTimeoutEnabled",
 			"AutoCancelTradeTimeout",
 			"AutoCancelNoValueTimeoutEnabled",
@@ -1013,7 +1276,13 @@ if IS_MINIGAME_PLACE then
 			"FallbackOffers",
 			"FallbackToTokens",
 			"FallbackToNextLowerRarityBrainrot",
+			"FallbackToSpecificBrainrotItem",
+			"FallbackSpecificBrainrotItem",
 			"FallbackNextLowerRarityAmount",
+			"FallbackAvoidMutationsEnabled",
+			"FallbackAvoidMutations",
+			"FallbackAvoidTraitsEnabled",
+			"FallbackAvoidTraits",
 			"FallbackTokensCommon",
 			"FallbackTokensUncommon",
 			"FallbackTokensRare",
@@ -1050,7 +1319,20 @@ if IS_MINIGAME_PLACE then
 			"DeleteInventoryThreshold",
 			"NeverDeleteEnabled",
 			"NeverDeleteItems",
+			"AvoidDeletingTraits",
+			"AvoidDeletingMutations",
 			"AutoEquipBestBrainrot",
+			"AutoEquipModeHold",
+			"AutoEquipModeMount",
+			"AutoEquipModeHoldMount",
+			"AutoEquipUseBestBrainrot",
+			"AutoEquipUseSpecificBrainrot",
+			"HoldEquipBestBrainrot",
+			"HoldEquipSpecificBrainrot",
+			"HoldSpecificBrainrotId",
+			"MountEquipBestBrainrot",
+			"MountEquipSpecificBrainrot",
+			"MountSpecificBrainrotId",
 			"EquipBestBrainrot",
 			"EquipBestMountableBrainrot",
 			"EquipSpecificBrainrot",
@@ -1059,12 +1341,16 @@ if IS_MINIGAME_PLACE then
 			"AutoshowBestBrainrots",
 			"AutoshowAllTokens",
 			"CustomOpeningOffer",
+			"CustomOpeningTokens",
 			"OpeningOfferBrainrot1",
 			"OpeningOfferBrainrot2",
 			"OpeningOfferBrainrot3",
 			"OpeningOfferBrainrot4",
 			"OpeningOfferBrainrot5",
 			"OpeningOfferBrainrot6",
+			"OpeningOfferCustomTokenAmount",
+			"OpeningOfferTokenAmount",
+			"OpeningOfferShowAllTokens",
 			"InitialJoinDelay",
 			"DelayAfterTradeMessage",
 			"ReactionDelay",
@@ -1080,6 +1366,9 @@ if IS_MINIGAME_PLACE then
 			"AutoChooseRound1Delay",
 			"AutoChooseRound2Delay",
 			"AutoChooseRound3Delay",
+			"AutoChooseRoundsRound1Delay",
+			"AutoChooseRoundsRound2Delay",
+			"AutoChooseRoundsRound3Delay",
 			"AutoChooseRounds",
 			"RoundsToChoose",
 			"MatchOpponentRounds",
@@ -1105,6 +1394,11 @@ if IS_MINIGAME_PLACE then
 			"CheckServerHopNobodyMinigamesArea",
 			"CheckServerHopPlayedEveryoneMinigamesArea",
 			"CheckServerBrainrotRarities",
+			"CheckServerSpecificItems",
+			"CheckServerMutations",
+			"CheckServerTraits",
+			"CheckServerMustOwnAll",
+			"CheckServerMustOwnOne",
 			"PauseScript",
 			"GuiMinimized",
 			"PanelExpanded",
@@ -1142,6 +1436,17 @@ if IS_MINIGAME_PLACE then
 			"AutoBoothListing3MessageWhenListed",
 			"AutoBoothListing3ListedMessage",
 		}
+		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+			utilityKeys[#utilityKeys + 1] = "AutoOffer" .. rarity .. "OfferAllTokens"
+			utilityKeys[#utilityKeys + 1] = "Fallback" .. rarity .. "OfferAllTokens"
+			utilityKeys[#utilityKeys + 1] = "FallbackSpecific" .. rarity .. "Item"
+			utilityKeys[#utilityKeys + 1] = "AutoAccept" .. rarity .. "Mutations"
+			utilityKeys[#utilityKeys + 1] = "AutoAccept" .. rarity .. "Traits"
+			utilityKeys[#utilityKeys + 1] = "AutoSit" .. rarity .. "Mutations"
+			utilityKeys[#utilityKeys + 1] = "AutoSit" .. rarity .. "Traits"
+			utilityKeys[#utilityKeys + 1] = "AutoCancel" .. rarity .. "Mutations"
+			utilityKeys[#utilityKeys + 1] = "AutoCancel" .. rarity .. "Traits"
+		end
 		for index = 4, 14 do
 			local prefix = "AutoBoothListing" .. tostring(index)
 			utilityKeys[#utilityKeys + 1] = prefix .. "Enabled"
@@ -1159,7 +1464,6 @@ if IS_MINIGAME_PLACE then
 			utilityKeys[#utilityKeys + 1] = prefix .. "MinimumCopies"
 			utilityKeys[#utilityKeys + 1] = prefix .. "MessageDelay"
 		end
-
 		local function snapshotSettings()
 			local utility = {}
 			for _, key in ipairs(utilityKeys) do
@@ -1185,30 +1489,191 @@ if IS_MINIGAME_PLACE then
 					BoothPurchaseTimeAdded =
 						tonumber(autoServerHopState.BoothPurchaseTimeAdded) or 1,
 					LeaveIfScriptUserInServer = autoServerHopState.LeaveIfScriptUserInServer == true,
+					ServerBlacklistMinutes =
+						math.clamp(math.floor(tonumber(autoServerHopState.ServerBlacklistMinutes) or 10), 1, 60),
+					JoinedServerBlacklist = copyJsonSafe(autoServerHopState.JoinedServerBlacklist),
+					CanceledTradeCounts = copyJsonSafe(autoServerHopState.CanceledTradeCounts),
 					RecentServerIds = copyJsonSafe(autoServerHopState.RecentServerIds),
 					Utility = utility,
 				},
 			}
 		end
-
 		local defaultSnapshot = snapshotSettings()
-
+		local regularProfileSnapshot = copyJsonSafe(defaultSnapshot)
+		local simpleAutofarmProfile
+		local function buildSimpleAutofarmDefaultSnapshot()
+			local snapshot = copyJsonSafe(defaultSnapshot)
+			local utility = snapshot.ServerHop.Utility
+			for _, id in ipairs({
+				"ConnectFour", "FootballDraft", "CandyBomb", "Battleship",
+				"NumberGuess", "Knockout", "PopcornBurst",
+			}) do
+				snapshot.MinigameAutoplay[id] = true
+			end
+			utility.AutoPlayMaster = true
+			for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+				local config = snapshot.AutoOffer[rarity]
+				if type(config) == "table" then
+					config.Enabled = true
+					config.OfferModeRarity = true
+					config.OfferModeSpecific = false
+					config.SpecificTargets = {}
+					config.OfferAllTokens = false
+					-- Eternal is receive-only: trade six Paradox + 250k tokens for it.
+					if rarity == "Eternal" then
+						config.Targets = {Paradox = true}
+						config.Amounts = {Paradox = 6}
+						config.Tokens = 250000
+					else
+						config.Targets = {[rarity] = true}
+						config.Amounts = {[rarity] = 1}
+						config.Tokens = 0
+					end
+				end
+			end
+			utility.AutoOfferMaster = true
+			utility.AutoOfferTokensEnabled = true
+			utility.AutoOfferMatchTokensWithTokens = true
+			utility.AutoOfferTokenAddRatio = 1
+			-- This is updated live by the Simple Autofarm progression watcher:
+			-- Divine and below = 10; Infinity and above = 100.
+			utility.AutoOfferLowestTokensToMatch = 10
+			utility.AutoOfferMatchTokensWithBrainrots = false
+			utility.AutoOfferBasedOnTradeChat = false
+			utility.AutoAcceptMaster = true
+			utility.AutoAcceptMustHaveOne = true
+			utility.AutoAcceptMustHaveAll = false
+			utility.AutoAcceptSpecificItems = {{Item = nil, Mutations = {}, Traits = {}}}
+			snapshot.AutoSit.EmptyTables.Enabled = true
+			snapshot.AutoSit.OneOfTwo.Enabled = true
+			snapshot.AutoSit.OneOfTwo.Targets = {}
+			snapshot.AutoSit.OneOfTwo.Amounts = {}
+			utility.AutoSitMustOwnAllSelected = false
+			utility.AutoSitMustOwnOneSelected = true
+			utility.AutoSitSpecificItems = {{Item = nil, Mutations = {}, Traits = {}}}
+			snapshot.AutoCancel.Enabled = true
+			snapshot.AutoCancel.Targets = {}
+			snapshot.AutoCancel.Amounts = {}
+			utility.AutoCancelMaster = true
+			utility.AutoCancelCheckOpponentsBrainrots = true
+			utility.AutoCancelPlayerMustOwnAllSelected = false
+			utility.AutoCancelPlayerMustOwnAtLeastOneSelected = true
+			utility.AutoCancelSpecificItems = {{Item = nil, Mutations = {}, Traits = {}}}
+			utility.AutoCancelTradeTimeoutEnabled = true
+			utility.AutoCancelTradeTimeout = 30
+			utility.AutoCancelNoValueTimeoutEnabled = true
+			utility.AutoCancelNoValueTimeout = 15
+			snapshot.ServerHop.Enabled = true
+			snapshot.ServerHop.ServerTimeEnabled = true
+			snapshot.ServerHop.ServerTime = 5
+			snapshot.ServerHop.TimeSinceLastGameEnabled = true
+			snapshot.ServerHop.TimeSinceLastGame = 2
+			snapshot.ServerHop.WinWagerTimeAdded = 3
+			snapshot.ServerHop.BoothPurchaseTimeAdded = 1
+			snapshot.ServerHop.LeaveIfScriptUserInServer = true
+			snapshot.ServerHop.ServerBlacklistMinutes = 60
+			utility.CheckServerHopNobodyServer = false
+			utility.CheckServerHopPlayedEveryoneServer = false
+			utility.CheckServerHopNobodyMinigamesArea = true
+			utility.CheckServerHopPlayedEveryoneMinigamesArea = false
+			utility.CheckServerBrainrotRarities = {}
+			utility.CheckServerSpecificItems = {}
+			utility.CheckServerMutations = {}
+			utility.CheckServerTraits = {}
+			utility.CheckServerMustOwnAll = false
+			utility.CheckServerMustOwnOne = true
+			utility.AutoDeleteWorstInventory = true
+			utility.DeleteNonBrainrotsFirst = true
+			utility.DeleteWorstBrainrotsFirst = false
+			utility.DeleteInventoryThreshold = 95
+			utility.AutoshowBestBrainrots = true
+			utility.CustomOpeningOffer = false
+			utility.AutoshowAllTokens = true
+			utility.CustomOpeningTokens = false
+			utility.AutoEquipBestBrainrot = true
+			utility.AutoEquipModeHold = false
+			utility.AutoEquipModeMount = false
+			utility.AutoEquipModeHoldMount = true
+			utility.AutoEquipUseBestBrainrot = true
+			utility.AutoEquipUseSpecificBrainrot = false
+			utility.AutoChooseGame = true
+			utility.GameToChoose = "Popcorn Burst"
+			utility.MatchOpponentGame = true
+			utility.FallbackGameChoices = {
+				["Candy Bomb"] = true, ["Higher Or Lower"] = true,
+				["Connect 4"] = true, ["Battle Ship"] = true,
+				["Knockout"] = true, ["Football Draft"] = true,
+			}
+			utility.AutoChooseRound1Delay = 0
+			utility.AutoChooseRound2Delay = 2.5
+			utility.AutoChooseRound3Delay = 5
+			utility.AutoChooseRounds = true
+			utility.RoundsToChoose = "1"
+			utility.MatchOpponentRounds = true
+			utility.FallbackRoundChoices = { ["3"] = true, ["5"] = true }
+			utility.AutoChooseRoundsRound1Delay = 0
+			utility.AutoChooseRoundsRound2Delay = 2.5
+			utility.AutoChooseRoundsRound3Delay = 5
+			utility.FallbackOffers = true
+			utility.FallbackToTokens = true
+			utility.FallbackToNextLowerRarityBrainrot = true
+			utility.FallbackToSpecificBrainrotItem = false
+			utility.FallbackNextLowerRarityAmount = 6
+			local fallbackTokens = {
+				Common = 25, Uncommon = 25, Rare = 25,
+				Epic = 50, Legendary = 50, Mythical = 50,
+				Cosmic = 100, Secret = 100, Celestial = 100,
+				Divine = 250, Infinity = 500, Meta = 1000,
+				Paradox = 10000, Eternal = 250000,
+			}
+			for rarity, amount in pairs(fallbackTokens) do
+				utility["FallbackTokens" .. rarity] = amount
+				utility["Fallback" .. rarity .. "OfferAllTokens"] = false
+			end
+			utility.AutoBooth = true
+			utility.AutoBoothListBestFirst = true
+			utility.AutoBoothListWorstFirst = false
+			for index = 1, 14 do
+				local prefix = "AutoBoothListing" .. tostring(index)
+				utility[prefix .. "Enabled"] = false
+			end
+			utility.TempBlacklistPlayersAfterCanceledTrade = true
+			utility.TempBlacklistAfterCanceledTrades = 1
+			utility.PermanentBlacklistPlayersAfterCanceledTrade = true
+			utility.PermanentBlacklistAfterCanceledTrades = 3
+			utility.LeaveWhenAboutToLose = true
+			utility.AutoReconnect = true
+			utility.PrintWinsLossesToTerminal = true
+			utility.PrintKicksToTerminal = true
+			utility.PauseScript = false
+			utility.PauseMinigameFeatures = false
+			return snapshot
+		end
+		simpleAutofarmProfile = buildSimpleAutofarmDefaultSnapshot()
 		local function mergeInto(target, saved)
 			if type(target) ~= "table" or type(saved) ~= "table" then return end
 			for key, value in pairs(saved) do
 				local valueType = type(value)
+				local current = target[key]
+				local currentType = type(current)
 				if valueType == "table" then
-					if type(target[key]) ~= "table" then target[key] = {} end
-					mergeInto(target[key], value)
+					if current == nil then
+						current = {}
+						target[key] = current
+					elseif currentType ~= "table" then
+						continue
+					end
+					mergeInto(current, value)
 				elseif valueType == "boolean"
 					or valueType == "number"
 					or valueType == "string"
 				then
-					target[key] = value
+					if current == nil or currentType == valueType then
+						target[key] = value
+					end
 				end
 			end
 		end
-
 		local function applySnapshot(saved)
 			if type(saved) ~= "table" then return false end
 			mergeInto(minigameAutoplayState, saved.MinigameAutoplay)
@@ -1216,7 +1681,6 @@ if IS_MINIGAME_PLACE then
 			mergeInto(autoAcceptState, saved.AutoAccept)
 			mergeInto(autoSitState, saved.AutoSit)
 			mergeInto(autoCancelState, saved.AutoCancel)
-
 			local serverHop = saved.ServerHop
 			if type(serverHop) == "table" then
 				if type(serverHop.Enabled) == "boolean" then
@@ -1253,6 +1717,30 @@ if IS_MINIGAME_PLACE then
 				if type(serverHop.LeaveIfScriptUserInServer) == "boolean" then
 					autoServerHopState.LeaveIfScriptUserInServer = serverHop.LeaveIfScriptUserInServer
 				end
+				if type(serverHop.ServerBlacklistMinutes) == "number" then
+					autoServerHopState.ServerBlacklistMinutes = math.clamp(
+						math.floor(serverHop.ServerBlacklistMinutes),
+						1,
+						60
+					)
+				end
+				if type(serverHop.JoinedServerBlacklist) == "table" then
+					autoServerHopState.JoinedServerBlacklist = {}
+					for id, joinedAt in pairs(serverHop.JoinedServerBlacklist) do
+						if type(id) == "string" and id ~= "" and tonumber(joinedAt) then
+							autoServerHopState.JoinedServerBlacklist[id] = tonumber(joinedAt)
+						end
+					end
+				end
+				if type(serverHop.CanceledTradeCounts) == "table" then
+					autoServerHopState.CanceledTradeCounts = {}
+					for userId, count in pairs(serverHop.CanceledTradeCounts) do
+						local normalized = math.max(0, math.floor(tonumber(count) or 0))
+						if normalized > 0 then
+							autoServerHopState.CanceledTradeCounts[tostring(userId)] = normalized
+						end
+					end
+				end
 				if type(serverHop.RecentServerIds) == "table" then
 					autoServerHopState.RecentServerIds = {}
 					for _, id in ipairs(serverHop.RecentServerIds) do
@@ -1269,11 +1757,7 @@ if IS_MINIGAME_PLACE then
 					end
 					mergeInto(autoServerHopState.Utility, filteredUtility)
 				end
-
 				if type(savedUtility) == "table" then
-
-
-
 					if savedUtility.ChatIntervalMinutes == nil then
 						local oldSeconds = tonumber(savedUtility.ChatInterval) or 60
 						autoServerHopState.Utility.ChatIntervalMinutes = math.clamp(
@@ -1282,18 +1766,11 @@ if IS_MINIGAME_PLACE then
 							5
 						)
 					end
-
-
-
-
 					if savedUtility.AutoOfferTokenAmount == 1000
 						and savedUtility.AutoOfferTokenRarity == nil
 					then
 						autoServerHopState.Utility.AutoOfferTokenAmount = 0
 					end
-
-
-
 					if savedUtility.AutoPlayMaster == nil then
 						for _, enabled in pairs(minigameAutoplayState) do
 							if enabled == true then
@@ -1321,10 +1798,6 @@ if IS_MINIGAME_PLACE then
 					if savedUtility.CustomDelays == nil then
 						autoServerHopState.Utility.CustomDelays = true
 					end
-
-
-
-
 					if savedUtility.AutoCancelMaster == nil then
 						autoServerHopState.Utility.AutoCancelMaster =
 							autoCancelState.Enabled == true
@@ -1334,9 +1807,6 @@ if IS_MINIGAME_PLACE then
 							autoCancelState.Enabled == true
 					end
 				end
-
-
-
 				if type(savedUtility) == "table" then
 					for index = 1, 14 do
 						local prefix = "AutoBoothListing" .. tostring(index)
@@ -1399,8 +1869,9 @@ if IS_MINIGAME_PLACE then
 					end
 				end
 			end
-
-
+			-- Removed Auto Booth specific-only controls must never survive old saves.
+			autoServerHopState.Utility.AutoBoothSpecificOnly = false
+			autoServerHopState.Utility.AutoBoothSpecificBrainrots = {}
 			autoServerHopState.RuntimeStartedAt = os.clock()
 			autoServerHopState.Utility.AutoChatEditing = false
 			autoServerHopState.Utility.AutoTradeChatEditing = false
@@ -1410,19 +1881,19 @@ if IS_MINIGAME_PLACE then
 			autoServerHopState.Utility._LastTradeMessageSentAt = nil
 			autoServerHopState.Utility.UndoAllSettings = false
 			autoServerHopState.RuntimeTempBlacklistedUserIds = {}
-			autoServerHopState.RuntimeCanceledTradeCounts = {}
+			autoServerHopState.RuntimeCanceledTradeCounts =
+				copyJsonSafe(autoServerHopState.CanceledTradeCounts) or {}
 			autoServerHopState.RuntimeCanceledTradeLastCountAt = {}
 			autoServerHopState.RuntimeUtilityToggleRows = {}
 			autoServerHopState.RuntimeServerHopPending = false
 			autoServerHopState.RuntimeScriptUserHopRequested = false
 			autoServerHopState.RuntimeScriptUserIds = {}
+			autoServerHopState.RuntimeScriptUserServerIds = {}
+			autoServerHopState.RuntimeGlobalPresenceConnectedAt = nil
 			autoServerHopState.RuntimePresenceStartedAt = os.clock()
 			autoServerHopState.RuntimeCheckServerHopRequested = false
 			autoServerHopState.RuntimeManualServerHopRequested = false
 			autoServerHopState.RuntimePlayedMinigameUserIds = {}
-
-
-
 			if autoServerHopState.Utility.EquipBestBrainrot == true
 				and autoServerHopState.Utility.EquipBestMountableBrainrot == true
 			then
@@ -1433,7 +1904,55 @@ if IS_MINIGAME_PLACE then
 			then
 				autoServerHopState.Utility.DeleteWorstBrainrotsFirst = false
 			end
-
+			-- Auto Offer and Auto Accept now have explicit master toggles.
+			-- Legacy global Auto Offer mode keys are retained only for settings migration.
+			autoServerHopState.Utility.AutoOfferBasedOnRarity = false
+			autoServerHopState.Utility.AutoOfferSpecificBrainrot = false
+			if autoServerHopState.Utility.AutoCancelPlayerMustOwnAllSelected == true
+				and autoServerHopState.Utility.AutoCancelPlayerMustOwnAtLeastOneSelected == true
+			then
+				autoServerHopState.Utility.AutoCancelPlayerMustOwnAtLeastOneSelected = false
+			elseif autoServerHopState.Utility.AutoCancelPlayerMustOwnAllSelected ~= true
+				and autoServerHopState.Utility.AutoCancelPlayerMustOwnAtLeastOneSelected ~= true
+			then
+				autoServerHopState.Utility.AutoCancelPlayerMustOwnAtLeastOneSelected = true
+			end
+			-- Migrate the old opening-token controls into the new independent token mode.
+			if autoServerHopState.Utility.OpeningOfferCustomTokenAmount == true then
+				autoServerHopState.Utility.CustomOpeningTokens = true
+			end
+			if autoServerHopState.Utility.OpeningOfferShowAllTokens == true then
+				autoServerHopState.Utility.AutoshowAllTokens = true
+			end
+			autoServerHopState.Utility.OpeningOfferCustomTokenAmount = false
+			autoServerHopState.Utility.OpeningOfferShowAllTokens = false
+			if autoServerHopState.Utility.AutoshowBestBrainrots == true
+				and autoServerHopState.Utility.CustomOpeningOffer == true
+			then
+				autoServerHopState.Utility.CustomOpeningOffer = false
+			end
+			if autoServerHopState.Utility.AutoshowAllTokens == true
+				and autoServerHopState.Utility.CustomOpeningTokens == true
+			then
+				autoServerHopState.Utility.CustomOpeningTokens = false
+			end
+			if autoServerHopState.Utility.AutoEquipBestBrainrot ~= true then
+				autoServerHopState.Utility.AutoEquipModeHold = false
+				autoServerHopState.Utility.AutoEquipModeMount = false
+				autoServerHopState.Utility.AutoEquipModeHoldMount = false
+			end
+			-- Exactly one equip mode may be active. If malformed persisted data has
+			-- multiple modes, prefer Hold + Mount, then Mount, then Hold.
+			if autoServerHopState.Utility.AutoEquipModeHoldMount == true then
+				autoServerHopState.Utility.AutoEquipModeHold = false
+				autoServerHopState.Utility.AutoEquipModeMount = false
+			elseif autoServerHopState.Utility.AutoEquipModeMount == true then
+				autoServerHopState.Utility.AutoEquipModeHold = false
+			end
+			autoServerHopState.Utility.AutoEquipBestBrainrot =
+				autoServerHopState.Utility.AutoEquipModeHold == true
+				or autoServerHopState.Utility.AutoEquipModeMount == true
+				or autoServerHopState.Utility.AutoEquipModeHoldMount == true
 			local gameFallbacks = autoServerHopState.Utility.FallbackGameChoices
 			if type(gameFallbacks) == "table" then
 				gameFallbacks[autoServerHopState.Utility.GameToChoose] = nil
@@ -1446,38 +1965,155 @@ if IS_MINIGAME_PLACE then
 			end
 			return true
 		end
-
-
-
+		local function applyProfileSnapshot(profile)
+			if type(profile) ~= "table" then return false end
+			local toggleRegistry = autoServerHopState.RuntimeUtilityToggleRows
+			local joinedBlacklist = copyJsonSafe(autoServerHopState.JoinedServerBlacklist) or {}
+			local canceledCounts = copyJsonSafe(autoServerHopState.CanceledTradeCounts) or {}
+			local recentServers = copyJsonSafe(autoServerHopState.RecentServerIds) or {}
+			local permanentBlacklisted = copyJsonSafe(
+				autoServerHopState.Utility.PermanentBlacklistedUserIds
+			) or {}
+			-- Reset the live schema before applying a profile so empty tables in one
+			-- profile cannot inherit selections from the other profile.
+			table.clear(minigameAutoplayState)
+			table.clear(autoOfferState)
+			table.clear(autoAcceptState)
+			table.clear(autoSitState)
+			table.clear(autoCancelState)
+			mergeInto(minigameAutoplayState, defaultSnapshot.MinigameAutoplay)
+			mergeInto(autoOfferState, defaultSnapshot.AutoOffer)
+			mergeInto(autoAcceptState, defaultSnapshot.AutoAccept)
+			mergeInto(autoSitState, defaultSnapshot.AutoSit)
+			mergeInto(autoCancelState, defaultSnapshot.AutoCancel)
+			local defaultServerHop = defaultSnapshot.ServerHop or {}
+			autoServerHopState.Enabled = defaultServerHop.Enabled == true
+			autoServerHopState.ServerTimeEnabled = defaultServerHop.ServerTimeEnabled == true
+			autoServerHopState.ServerTime = tonumber(defaultServerHop.ServerTime) or 10
+			autoServerHopState.TimeSinceLastGameEnabled = defaultServerHop.TimeSinceLastGameEnabled == true
+			autoServerHopState.TimeSinceLastGame = tonumber(defaultServerHop.TimeSinceLastGame) or 3
+			autoServerHopState.WinWagerTimeAdded = tonumber(defaultServerHop.WinWagerTimeAdded) or 3
+			autoServerHopState.BoothPurchaseTimeAdded = tonumber(defaultServerHop.BoothPurchaseTimeAdded) or 1
+			autoServerHopState.LeaveIfScriptUserInServer = defaultServerHop.LeaveIfScriptUserInServer == true
+			autoServerHopState.ServerBlacklistMinutes = tonumber(defaultServerHop.ServerBlacklistMinutes) or 10
+			local defaultUtility = defaultServerHop.Utility or {}
+			for _, key in ipairs(utilityKeys) do
+				autoServerHopState.Utility[key] = copyJsonSafe(defaultUtility[key])
+			end
+			local ok = applySnapshot(profile)
+			autoServerHopState.JoinedServerBlacklist = joinedBlacklist
+			autoServerHopState.CanceledTradeCounts = canceledCounts
+			autoServerHopState.RecentServerIds = recentServers
+			autoServerHopState.Utility.PermanentBlacklistedUserIds = permanentBlacklisted
+			autoServerHopState.RuntimeCanceledTradeCounts = copyJsonSafe(canceledCounts) or {}
+			if type(toggleRegistry) == "table" and next(toggleRegistry) ~= nil then
+				autoServerHopState.RuntimeUtilityToggleRows = toggleRegistry
+			end
+			return ok
+		end
+		local SIMPLE_AUTOFARM_PROFILE_VERSION = 4
+		local function migrateSimpleAutofarmProfile(simple)
+			if type(simple) ~= "table" or type(simple.Profile) ~= "table" then return end
+			local version = math.floor(tonumber(simple.Version) or 1)
+			if version >= SIMPLE_AUTOFARM_PROFILE_VERSION then return end
+			local profile = simple.Profile
+			local serverHop = type(profile.ServerHop) == "table" and profile.ServerHop or nil
+			local utility = serverHop and type(serverHop.Utility) == "table" and serverHop.Utility or nil
+			if not serverHop or not utility then return end
+			-- Keep-running defaults from earlier profile versions. These settings are
+			-- required for Simple Autofarm to continue finding/starting matches.
+			serverHop.Enabled = true
+			serverHop.LeaveIfScriptUserInServer = true
+			utility.AutoReconnect = true
+			utility.PrintWinsLossesToTerminal = true
+			utility.PrintKicksToTerminal = true
+			utility.AutoCancelTradeTimeoutEnabled = true
+			utility.AutoCancelTradeTimeout = 30
+			utility.AutoCancelNoValueTimeoutEnabled = true
+			utility.AutoCancelNoValueTimeout = 15
+			utility.AutoOfferLowestTokensToMatch = 10
+			local autoSit = type(profile.AutoSit) == "table" and profile.AutoSit or nil
+			local emptyTables = autoSit and type(autoSit.EmptyTables) == "table"
+				and autoSit.EmptyTables or nil
+			if emptyTables then
+				emptyTables.Enabled = true
+			end
+			-- v4: Eternal is never offered from inventory. It is bought with
+			-- six Paradox plus exactly 250,000 tokens.
+			local autoOffer = type(profile.AutoOffer) == "table" and profile.AutoOffer or nil
+			local eternal = autoOffer and type(autoOffer.Eternal) == "table" and autoOffer.Eternal or nil
+			if eternal then
+				eternal.Enabled = true
+				eternal.OfferModeRarity = true
+				eternal.OfferModeSpecific = false
+				eternal.Targets = {Paradox = true}
+				eternal.Amounts = {Paradox = 6}
+				eternal.SpecificTargets = {}
+				eternal.Tokens = 250000
+				eternal.OfferAllTokens = false
+			end
+			utility.FallbackTokensEternal = 250000
+			utility.FallbackEternalOfferAllTokens = false
+		end
+		local function loadSettingsEnvelope(saved)
+			if type(saved) ~= "table" then return false end
+			applySnapshot(saved)
+			regularProfileSnapshot = snapshotSettings()
+			local simple = saved.SimpleAutofarm
+			migrateSimpleAutofarmProfile(simple)
+			if type(simple) == "table" and type(simple.Profile) == "table" then
+				simpleAutofarmProfile = copyJsonSafe(simple.Profile)
+			end
+			autoServerHopState.Utility.SimpleAutofarmEnabled = false
+			if type(simple) == "table"
+				and simple.Enabled == true
+				and autoServerHopState.HasAnyBrainrot()
+			then
+				applyProfileSnapshot(simpleAutofarmProfile)
+				autoServerHopState.Utility.SimpleAutofarmEnabled = true
+			end
+			return true
+		end
 		if readFile then
 			pcall(function()
 				local encoded = readFile(SETTINGS_FILE)
 				if type(encoded) == "string" and encoded ~= "" then
-					applySnapshot(HttpService:JSONDecode(encoded))
+					loadSettingsEnvelope(HttpService:JSONDecode(encoded))
 				end
 			end)
 		end
 		local memorySnapshot = rawget(_G, MEMORY_KEY)
 		if type(memorySnapshot) == "table" then
-			applySnapshot(memorySnapshot)
+			loadSettingsEnvelope(memorySnapshot)
 		end
-
-
+		if not regularProfileSnapshot then regularProfileSnapshot = snapshotSettings() end
+		local function settingsEnvelopeForSave()
+			local current = snapshotSettings()
+			if autoServerHopState.Utility.SimpleAutofarmEnabled == true then
+				simpleAutofarmProfile = copyJsonSafe(current)
+			else
+				regularProfileSnapshot = copyJsonSafe(current)
+			end
+			local envelope = copyJsonSafe(regularProfileSnapshot or current) or current
+			envelope.SimpleAutofarm = {
+				Version = SIMPLE_AUTOFARM_PROFILE_VERSION,
+				Enabled = autoServerHopState.Utility.SimpleAutofarmEnabled == true,
+				Profile = copyJsonSafe(simpleAutofarmProfile or buildSimpleAutofarmDefaultSnapshot()),
+			}
+			return envelope
+		end
 		local function saveSettings(forceDisk)
-			local snapshot = snapshotSettings()
+			local snapshot = settingsEnvelopeForSave()
 			rawset(_G, MEMORY_KEY, snapshot)
-
 			local ok, encoded = pcall(function()
 				return HttpService:JSONEncode(snapshot)
 			end)
 			if not ok or type(encoded) ~= "string" then return false end
 			if encoded == lastEncoded and not forceDisk then return true end
-
 			if not writeFile then
 				lastEncoded = encoded
 				return true
 			end
-
 			local now = os.clock()
 			if forceDisk or now - lastDiskWriteAt >= 0.20 then
 				local wrote = pcall(writeFile, SETTINGS_FILE, encoded)
@@ -1489,11 +2125,64 @@ if IS_MINIGAME_PLACE then
 			end
 			return false
 		end
-
+		local function refreshSettingsUiSoon()
+			autoServerHopState.RuntimeSettingsResetEpoch =
+				(tonumber(autoServerHopState.RuntimeSettingsResetEpoch) or 0) + 1
+			task.defer(function()
+				local refresh = rawget(_G, "__TUFFHUB_REFRESH_ALL_SETTINGS_UI")
+				if type(refresh) == "function" then pcall(refresh) end
+			end)
+		end
+		local function showSimpleAutofarmWarning()
+			autoServerHopState.RuntimeSimpleAutofarmWarningUntil = os.clock() + 5
+			local show = rawget(_G, "__TUFFHUB_SHOW_SIMPLE_AUTOFARM_WARNING")
+			if type(show) == "function" then pcall(show) end
+		end
+		local function setSimpleAutofarmEnabled(enabled)
+			enabled = enabled == true
+			local currentlyEnabled = autoServerHopState.Utility.SimpleAutofarmEnabled == true
+			if enabled == currentlyEnabled then return true end
+			if enabled and not autoServerHopState.HasAnyBrainrot() then
+				autoServerHopState.Utility.SimpleAutofarmEnabled = false
+				showSimpleAutofarmWarning()
+				refreshSettingsUiSoon()
+				return false
+			end
+			if enabled then
+				regularProfileSnapshot = copyJsonSafe(snapshotSettings())
+				applyProfileSnapshot(simpleAutofarmProfile or buildSimpleAutofarmDefaultSnapshot())
+				autoServerHopState.Utility.SimpleAutofarmEnabled = true
+			else
+				simpleAutofarmProfile = copyJsonSafe(snapshotSettings())
+				applyProfileSnapshot(regularProfileSnapshot or defaultSnapshot)
+				autoServerHopState.Utility.SimpleAutofarmEnabled = false
+			end
+			autoServerHopState.RuntimeSimpleAutofarmTargetRarity = nil
+			autoServerHopState.RuntimePlayedMinigameUserIds = {}
+			refreshSettingsUiSoon()
+			saveSettings(true)
+			return true
+		end
+		local function resetSimpleAutofarmSettings()
+			simpleAutofarmProfile = buildSimpleAutofarmDefaultSnapshot()
+			if autoServerHopState.Utility.SimpleAutofarmEnabled == true then
+				applyProfileSnapshot(simpleAutofarmProfile)
+				autoServerHopState.Utility.SimpleAutofarmEnabled = true
+				autoServerHopState.RuntimeSimpleAutofarmTargetRarity = nil
+				autoServerHopState.RuntimePlayedMinigameUserIds = {}
+			end
+			refreshSettingsUiSoon()
+			saveSettings(true)
+			return true
+		end
+		rawset(_G, "__TUFFHUB_SET_SIMPLE_AUTOFARM", setSimpleAutofarmEnabled)
+		rawset(_G, "__TUFFHUB_RESET_SIMPLE_AUTOFARM", resetSimpleAutofarmSettings)
 		local function resetAllSettingsState()
+			if autoServerHopState.Utility.SimpleAutofarmEnabled == true then
+				return resetSimpleAutofarmSettings()
+			end
 			local defaults = defaultSnapshot
 			if type(defaults) ~= "table" then return false end
-
 			table.clear(minigameAutoplayState)
 			table.clear(autoOfferState)
 			table.clear(autoAcceptState)
@@ -1504,7 +2193,6 @@ if IS_MINIGAME_PLACE then
 			mergeInto(autoAcceptState, defaults.AutoAccept)
 			mergeInto(autoSitState, defaults.AutoSit)
 			mergeInto(autoCancelState, defaults.AutoCancel)
-
 			local defaultServerHop = defaults.ServerHop or {}
 			autoServerHopState.Enabled = defaultServerHop.Enabled == true
 			autoServerHopState.ServerTimeEnabled = defaultServerHop.ServerTimeEnabled == true
@@ -1514,20 +2202,18 @@ if IS_MINIGAME_PLACE then
 			autoServerHopState.WinWagerTimeAdded = tonumber(defaultServerHop.WinWagerTimeAdded) or 3
 			autoServerHopState.BoothPurchaseTimeAdded = tonumber(defaultServerHop.BoothPurchaseTimeAdded) or 1
 			autoServerHopState.LeaveIfScriptUserInServer = defaultServerHop.LeaveIfScriptUserInServer == true
+			autoServerHopState.ServerBlacklistMinutes =
+				math.clamp(math.floor(tonumber(defaultServerHop.ServerBlacklistMinutes) or 10), 1, 60)
+			autoServerHopState.JoinedServerBlacklist = {}
+			autoServerHopState.CanceledTradeCounts = {}
 			autoServerHopState.RecentServerIds = {}
 			autoServerHopState.RuntimeTempBlacklistedUserIds = {}
 			autoServerHopState.RuntimeCanceledTradeCounts = {}
 			autoServerHopState.RuntimeCanceledTradeLastCountAt = {}
 			autoServerHopState.RuntimeServerHopPending = false
-
 			local defaultUtility = defaultServerHop.Utility or {}
 			for _, key in ipairs(utilityKeys) do
-				local value = copyJsonSafe(defaultUtility[key])
-				if type(value) == "table" then
-					autoServerHopState.Utility[key] = value
-				else
-					autoServerHopState.Utility[key] = value
-				end
+				autoServerHopState.Utility[key] = copyJsonSafe(defaultUtility[key])
 			end
 			autoServerHopState.Utility.UndoAllSettings = false
 			autoServerHopState.Utility.AutoChatEditing = false
@@ -1542,15 +2228,13 @@ if IS_MINIGAME_PLACE then
 			rawset(_G, MEMORY_KEY, nil)
 			return saveSettings(true)
 		end
-
 		rawset(_G, "__TUFFHUB_RESET_ALL_SETTINGS_STATE", resetAllSettingsState)
 		rawset(_G, SAVE_KEY, saveSettings)
 		saveSettings(false)
-
-
+		-- UI commits save immediately; this low-frequency flush only catches programmatic edits.
 		task.spawn(function()
 			while rawget(_G, GENERATION_KEY) == generation do
-				task.wait(0.25)
+				task.wait(1)
 				saveSettings(false)
 			end
 		end)
@@ -1599,30 +2283,8 @@ screenGui.ResetOnSpawn = false
 screenGui.DisplayOrder = 1000000
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = guiParent
-
-;(function()
-	local function saveAppliedSettings()
-		local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
-		if type(saver) == "function" then pcall(saver, true) end
-	end
-
-	UserInputService.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch
-		then
-			task.defer(saveAppliedSettings)
-		elseif input.KeyCode == Enum.KeyCode.Return
-			or input.KeyCode == Enum.KeyCode.KeypadEnter
-		then
-
-			task.defer(saveAppliedSettings)
-		end
-	end)
-end)()
-
-
-
-
+-- Settings are deduplicated by the periodic safety flush and explicit commit actions;
+-- avoid serializing/writing the full profile on every mouse or touch release.
 if IS_MINIGAME_PLACE then
 	do
 		local oldUniversalKeys = {
@@ -1666,7 +2328,6 @@ if IS_MINIGAME_PLACE then
 		end
 	end
 end
-
 local window = New("Frame")
 window.Name = "Window"
 window.AnchorPoint = V2(
@@ -1700,7 +2361,6 @@ local function currentWindowRenderScale()
 		responsiveWindowScale and responsiveWindowScale.Scale or 1
 	)
 end
-
 local function logicalPixelsForRenderedMinimum(renderedPixels)
 	return math.max(
 		1,
@@ -1767,24 +2427,25 @@ local function applyDeviceWindowSize(
 	local currentCamera = workspace.CurrentCamera or camera
 	local currentViewport = currentCamera and currentCamera.ViewportSize or viewportSize
 	local responsiveWindowScale = window:FindFirstChild("ResponsiveWindowScale")
-	local scale = math.max(
-			0.05,
-			math.min(
-				currentViewport.X / math.max(1, viewportSize.X),
-				currentViewport.Y / math.max(1, viewportSize.Y)
-			)
-		)
+	local viewportX = math.max(320, tonumber(currentViewport.X) or 1920)
+	local viewportY = math.max(240, tonumber(currentViewport.Y) or 1080)
+	local scale = math.clamp(
+		math.min(
+			viewportX / math.max(320, viewportSize.X),
+			viewportY / math.max(240, viewportSize.Y)
+		),
+		0.25,
+		4
+	)
+	local renderedWidth = math.min(viewportX * DEFAULT_WIDTH_SCALE, viewportX * 0.92)
+	local renderedHeight = math.min(viewportY * DEFAULT_HEIGHT_SCALE, viewportY * 0.92)
 	if responsiveWindowScale then
 		responsiveWindowScale.Scale = scale
 	end
 	window.Size = U2O(
-			roundEvenPixel(
-				(currentViewport.X * DEFAULT_WIDTH_SCALE) / scale
-			),
-			roundEvenPixel(
-				(currentViewport.Y * DEFAULT_HEIGHT_SCALE) / scale
-			)
-		)
+		roundEvenPixel(renderedWidth / scale),
+		roundEvenPixel(renderedHeight / scale)
+	)
 	if recenter then
 		window.Position = U2S(0.5, 0.5)
 	end
@@ -1796,6 +2457,18 @@ camera:GetPropertyChangedSignal(
 	applyDeviceWindowSize(
 		true
 	)
+end)
+workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+	local newCamera = workspace.CurrentCamera
+	if newCamera then
+		camera = newCamera
+		applyDeviceWindowSize(true)
+		newCamera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+			if workspace.CurrentCamera == newCamera then
+				applyDeviceWindowSize(true)
+			end
+		end)
+	end
 end)
 local function ensureCorner(
 	object,
@@ -1883,7 +2556,6 @@ local function setPanelOpen(open)
 	if type(saver) == "function" then
 		pcall(saver, true)
 	end
-
 	local restoreButton = screenGui:FindFirstChild("MinimizedTHButton")
 	if restoreButton then
 		restoreButton.Visible = not open
@@ -2206,20 +2878,14 @@ local function getEmbeddedIconAsset(
 		or type(customAssetFunction) ~= "function" then
 		return nil
 	end
-	local fileName = "TuffHub_"
-		.. string.lower(name)
-		.. "_icon.png"
-	local decoded = decodeBase64(
-			encoded
-		)
-	local wrote = pcall(
-			writefile,
-			fileName,
-			decoded
-		)
-	if not wrote then
-		return nil
+	local fileName = "TuffHub_" .. string.lower(name) .. "_icon.png"
+	-- Embedded icons are immutable. Reuse the cached file instead of decoding/writing base64 every run.
+	local cached = false
+	if type(isfile) == "function" then
+		local okFile, exists = pcall(isfile, fileName)
+		cached = okFile and exists == true
 	end
+	if not cached and not pcall(writefile, fileName, decodeBase64(encoded)) then return nil end
 	local ok,
 		asset = pcall(
 			customAssetFunction,
@@ -3185,14 +3851,12 @@ local function tweenChevronColor(
 end
 local panelChevronAsset=getEmbeddedIconAsset("Chevron")
 local activePanelDropdown
-
 local function pointInsideGui(gui, point)
 	if not gui or not gui.Parent or not gui.Visible then return false end
 	local pos, size = gui.AbsolutePosition, gui.AbsoluteSize
 	return point.X >= pos.X and point.X <= pos.X + size.X
 		and point.Y >= pos.Y and point.Y <= pos.Y + size.Y
 end
-
 local function closeActivePanelDropdown()
 	if activePanelDropdown then
 		local popup = activePanelDropdown.Popup
@@ -3200,6 +3864,7 @@ local function closeActivePanelDropdown()
 		local overlay = activePanelDropdown.Overlay
 		local followConnection = activePanelDropdown.FollowConnection
 		local outsideConnection = activePanelDropdown.OutsideConnection
+		local onClose = activePanelDropdown.OnClose
 		if followConnection then followConnection:Disconnect() end
 		if outsideConnection then outsideConnection:Disconnect() end
 		if overlay then
@@ -3209,9 +3874,9 @@ local function closeActivePanelDropdown()
 			if blocker then blocker:Destroy() end
 		end
 		activePanelDropdown = nil
+		if type(onClose) == "function" then task.defer(onClose) end
 	end
 end
-
 local function createEmptyCollapsiblePanel(
 	tabItem,
 	panelIndex,
@@ -3405,7 +4070,6 @@ local function createEmptyCollapsiblePanel(
 	local activeSliderTouch
 	local sliderChangedConnection
 	local sliderEndedConnection
-
 	local function stopSliderDrag()
 		activeSliderUpdate = nil
 		activeSliderTouch = nil
@@ -3418,7 +4082,6 @@ local function createEmptyCollapsiblePanel(
 			sliderEndedConnection = nil
 		end
 	end
-
 	local function beginSliderDrag(input, updateSlider)
 		stopSliderDrag()
 		activeSliderUpdate = updateSlider
@@ -3426,7 +4089,6 @@ local function createEmptyCollapsiblePanel(
 			and input
 			or nil
 		updateSlider(input.Position.X)
-
 		sliderChangedConnection = UserInputService.InputChanged:Connect(function(changed)
 			if not activeSliderUpdate then return end
 			if activeSliderTouch then
@@ -3437,7 +4099,6 @@ local function createEmptyCollapsiblePanel(
 				activeSliderUpdate(changed.Position.X)
 			end
 		end)
-
 		sliderEndedConnection = UserInputService.InputEnded:Connect(function(ended)
 			if activeSliderTouch then
 				if ended == activeSliderTouch then stopSliderDrag() end
@@ -3446,9 +4107,7 @@ local function createEmptyCollapsiblePanel(
 			end
 		end)
 	end
-
 	panel.Destroying:Connect(stopSliderDrag)
-
 	local function setToggleVisual(toggleTrack, toggleKnob, featureLabel, enabled)
 		toggleTrack.BackgroundColor3 = enabled and PINK or FEATURE_OFF_COLOR
 		featureLabel.TextColor3 = enabled and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR
@@ -3456,7 +4115,6 @@ local function createEmptyCollapsiblePanel(
 			and U2(0, toggleWidth - toggleHeight + knobInset, 0, knobInset)
 			or U2O(knobInset, knobInset)
 	end
-
 	local function selectedTargetList(stateEntry, options)
 		local selected = {}
 		if stateEntry and type(stateEntry.Targets) == "table" then
@@ -3466,7 +4124,6 @@ local function createEmptyCollapsiblePanel(
 		end
 		return selected
 	end
-
 	local function fitWholeDropdownNames(button, names, placeholder)
 		local hasSelection = type(names) == "table" and #names > 0
 		button.TextColor3 = hasSelection and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR
@@ -3474,12 +4131,10 @@ local function createEmptyCollapsiblePanel(
 			button.Text = placeholder or "Select"
 			return
 		end
-
 		local normalized = {}
 		for _, name in ipairs(names) do
 			normalized[#normalized + 1] = tostring(name)
 		end
-
 		local rawWidth = button.AbsoluteSize.X
 		if rawWidth <= 1 then
 			local parentWidth = button.Parent and button.Parent.AbsoluteSize.X or 0
@@ -3502,13 +4157,11 @@ local function createEmptyCollapsiblePanel(
 			dropdownTextWidthCache[key] = width
 			return width
 		end
-
 		local fullText = table.concat(normalized, ", ")
 		if #normalized == 1 or textWidth(fullText) <= availableWidth then
 			button.Text = fullText
 			return
 		end
-
 		local suffix = ", ..."
 		for count = #normalized - 1, 1, -1 do
 			local candidate = table.concat(normalized, ", ", 1, count) .. suffix
@@ -3517,14 +4170,11 @@ local function createEmptyCollapsiblePanel(
 				return
 			end
 		end
-
 		button.Text = normalized[1]
 	end
-
 	local function updateDropdownText(button, stateEntry, placeholder, options)
 		fitWholeDropdownNames(button, selectedTargetList(stateEntry, options), placeholder)
 	end
-
 	local function brainrotAmountTotal(stateEntry, exceptRarity)
 		local total = 0
 		if not stateEntry then return total end
@@ -3536,7 +4186,6 @@ local function createEmptyCollapsiblePanel(
 		end
 		return total
 	end
-
 	local function relayoutRows(skipPanelRefresh)
 		local y = featureTopPadding
 		for _, rowData in ipairs(featureRows) do
@@ -3562,6 +4211,7 @@ local function createEmptyCollapsiblePanel(
 					or secondaryControlHeight
 			end
 			local visibleControls = 0
+			local visibleControlsHeight = 0
 			if rowData.AmountContainer then
 				rowData.AmountContainer.Position = U2O(
 					rowData.AmountContainer.Position.X.Offset,
@@ -3569,7 +4219,10 @@ local function createEmptyCollapsiblePanel(
 				)
 				for _, control in ipairs(rowData.AmountControls or {}) do
 					if rowData.AmountContainer.Visible and control.Frame.Visible then
-						control.Frame.Position = U2O(0, visibleControls * amountControlsHeight)
+						local controlHeight = tonumber(control.Height) or amountControlsHeight
+						control.Frame.Position = U2O(0, visibleControlsHeight)
+						control.Frame.Size = U2(1, control.Frame.Size.X.Offset, 0, controlHeight)
+						visibleControlsHeight += controlHeight
 						visibleControls += 1
 					end
 				end
@@ -3577,10 +4230,10 @@ local function createEmptyCollapsiblePanel(
 					1,
 					rowData.AmountContainer.Size.X.Offset,
 					0,
-					visibleControls * amountControlsHeight
+					visibleControlsHeight
 				)
 			end
-			local extra = secondaryHeight + visibleControls * amountControlsHeight
+			local extra = secondaryHeight + visibleControlsHeight
 			rowData.Row.Size = U2(1, -(px(28) + rowIndent), 0, baseHeight + extra)
 			y += baseHeight + extra + featureRowGap
 		end
@@ -3596,16 +4249,10 @@ local function createEmptyCollapsiblePanel(
 		else
 			panel.Size = U2O(panel.Size.X.Offset, expandedHeight)
 		end
-
-
-
-
-
 		if not skipPanelRefresh and refreshUnsupportedPanels then
 			task.defer(refreshUnsupportedPanels)
 		end
 	end
-
 	local function utilityParentKeys(definition)
 		if definition and type(definition.UtilityParentKeys) == "table" then
 			return definition.UtilityParentKeys
@@ -3614,7 +4261,6 @@ local function createEmptyCollapsiblePanel(
 			return {definition.UtilityParentKey}
 		end
 	end
-
 	local function visibilityUtilityParentKeys(definition)
 		if definition and type(definition.VisibilityUtilityParentKeys) == "table" then
 			return definition.VisibilityUtilityParentKeys
@@ -3623,7 +4269,6 @@ local function createEmptyCollapsiblePanel(
 			return {definition.VisibilityUtilityParentKey}
 		end
 	end
-
 	local function utilityParentsEnabled(stateEntry, parentKeys)
 		if type(parentKeys) ~= "table" then return true end
 		for _, key in ipairs(parentKeys) do
@@ -3631,7 +4276,6 @@ local function createEmptyCollapsiblePanel(
 		end
 		return true
 	end
-
 	local function refreshUtilityChildVisibility()
 		for _, rowData in ipairs(featureRows) do
 			local utilityVisible = true
@@ -3651,7 +4295,6 @@ local function createEmptyCollapsiblePanel(
 					end
 				end
 			end
-
 			if type(rowData.VisibilityUtilityParentKeys) == "table" then
 				local masterVisible = utilityParentsEnabled(
 					autoServerHopState.Utility,
@@ -3659,7 +4302,6 @@ local function createEmptyCollapsiblePanel(
 				)
 				rowData.Row.Visible = utilityVisible and masterVisible
 			end
-
 			if rowData.MinigameParentId ~= nil then
 				local minigameVisible =
 					type(minigameAutoplayState) == "table"
@@ -3669,7 +4311,30 @@ local function createEmptyCollapsiblePanel(
 					rowData.AmountContainer.Visible = rowData.Row.Visible
 				end
 			end
-
+			if rowData.VisibilityAutoOfferSource ~= nil then
+				local entry = type(autoOfferState) == "table" and autoOfferState[rowData.VisibilityAutoOfferSource] or nil
+				rowData.Row.Visible = rowData.Row.Visible and type(entry) == "table" and entry.Enabled == true
+			end
+			if rowData.VisibilityAcceptKey ~= nil then
+				local entry = type(autoAcceptState) == "table" and autoAcceptState[rowData.VisibilityAcceptKey] or nil
+				rowData.Row.Visible = rowData.Row.Visible and type(entry) == "table" and entry.Enabled == true
+			end
+			if rowData.VisibilityAutoCancelTarget ~= nil then
+				rowData.Row.Visible = rowData.Row.Visible
+					and type(autoCancelState) == "table"
+					and type(autoCancelState.Targets) == "table"
+					and autoCancelState.Targets[rowData.VisibilityAutoCancelTarget] == true
+			end
+			if rowData.VisibilitySitKey ~= nil then
+				local entry = type(autoSitState) == "table" and autoSitState[rowData.VisibilitySitKey] or nil
+				rowData.Row.Visible = rowData.Row.Visible and type(entry) == "table" and entry.Enabled == true
+			end
+			if rowData.VisibilityAutoSitTarget ~= nil then
+				local entry = type(autoSitState) == "table" and autoSitState.OneOfTwo or nil
+				rowData.Row.Visible = rowData.Row.Visible
+					and type(entry) == "table" and type(entry.Targets) == "table"
+					and entry.Targets[rowData.VisibilityAutoSitTarget] == true
+			end
 			if rowData.BoothSlotIndex ~= nil then
 				local slotVisible = rowData.BoothSlotIndex
 					<= (tonumber(autoServerHopState.RuntimeBoothMaxSlots) or 3)
@@ -3685,7 +4350,178 @@ local function createEmptyCollapsiblePanel(
 			end
 		end
 	end
-
+	local function ensureDropdownRoomBelow(button, desiredHeight)
+		if not button or not button.Parent or not button:IsDescendantOf(rightContent) then return end
+		local buttonBottom = button.AbsolutePosition.Y + button.AbsoluteSize.Y
+		local windowBottom = window.AbsolutePosition.Y + window.AbsoluteSize.Y
+		local roomBelow = math.max(0, windowBottom - buttonBottom - px(6))
+		if roomBelow >= desiredHeight then return end
+		local maxCanvasY = math.max(0, rightContent.AbsoluteCanvasSize.Y - rightContent.AbsoluteSize.Y)
+		local needed = desiredHeight - roomBelow
+		rightContent.CanvasPosition = V2(
+			rightContent.CanvasPosition.X,
+			math.clamp(rightContent.CanvasPosition.Y + needed, 0, maxCanvasY)
+		)
+	end
+	local function attachDropdownOutsideClose(popup, button, overlay)
+		local openedAt = os.clock()
+		local outsideConnection
+		outsideConnection = UserInputService.InputBegan:Connect(function(input)
+			if not activePanelDropdown or activePanelDropdown.Popup ~= popup then return end
+			if input.UserInputType ~= Enum.UserInputType.MouseButton1
+				and input.UserInputType ~= Enum.UserInputType.Touch
+			then return end
+			if os.clock() - openedAt < 0.05 then return end
+			if pointInsideGui(popup, input.Position) or pointInsideGui(button, input.Position) then return end
+			task.defer(function()
+				if activePanelDropdown and activePanelDropdown.Popup == popup then
+					closeActivePanelDropdown()
+				end
+			end)
+		end)
+		if activePanelDropdown and activePanelDropdown.Popup == popup then
+			activePanelDropdown.OutsideConnection = outsideConnection
+		end
+	end
+	local function openManagedMultiDropdown(button, options, selection, labelProvider, placeholder, onChanged, canSelect, onClosed)
+		if activePanelDropdown and activePanelDropdown.Button == button then
+			closeActivePanelDropdown()
+			return
+		end
+		closeActivePanelDropdown()
+		options = type(options) == "table" and options or {}
+		selection = type(selection) == "table" and selection or {}
+		labelProvider = type(labelProvider) == "function" and labelProvider or tostring
+		local searchHeight = px(29)
+		local contentHeight = searchHeight + px(6) + #options * px(25)
+		local desiredHeight = math.min(contentHeight, math.max(px(25), window.AbsoluteSize.Y - button.AbsoluteSize.Y - px(12)))
+		ensureDropdownRoomBelow(button, desiredHeight)
+		local overlay = New("Frame")
+		overlay.Name = "DropdownOverlay"
+		overlay.Position = U2S(0, 0)
+		overlay.Size = U2S(1, 1)
+		overlay.BackgroundTransparency = 1
+		overlay.BorderSizePixel = 0
+		overlay.Active = false
+		overlay.ZIndex = 59998
+		overlay.Parent = screenGui
+		local popup = New("ScrollingFrame")
+		popup.Name = "PanelDropdown"
+		popup.BackgroundColor3 = PANEL_BACKGROUND
+		popup.BorderSizePixel = 0
+		popup.ClipsDescendants = true
+		popup.Active = true
+		popup.ScrollBarThickness = px(3)
+		popup.ScrollingDirection = Enum.ScrollingDirection.Y
+		popup.AutomaticCanvasSize = Enum.AutomaticSize.None
+		popup.CanvasSize = U2O(0, contentHeight)
+		popup.ZIndex = 60000
+		popup.Parent = overlay
+		ensureCorner(popup, px(7))
+		local stroke = New("UIStroke")
+		stroke.Color = LINE_COLOR
+		stroke.Thickness = LINE_THICKNESS
+		stroke.Transparency = LINE_TRANSPARENCY
+		stroke.Parent = popup
+		local function syncPosition()
+			if not popup.Parent or not button.Parent or not overlay.Parent then return end
+			local pos, size = button.AbsolutePosition, button.AbsoluteSize
+			local overlayPos = overlay.AbsolutePosition
+			local rootPos, rootSize = window.AbsolutePosition, window.AbsoluteSize
+			local edge = px(6)
+			local width = math.max(1, math.floor(size.X + 0.5))
+			local x = math.clamp(pos.X, rootPos.X + edge, math.max(rootPos.X + edge, rootPos.X + rootSize.X - width - edge))
+			local y = pos.Y + size.Y
+			local available = math.max(0, rootPos.Y + rootSize.Y - edge - y)
+			popup.Position = U2O(x - overlayPos.X, y - overlayPos.Y)
+			popup.Size = U2O(width, math.min(contentHeight, available))
+		end
+		local search = New("TextBox")
+		search.Name = "Search"
+		search.Position = U2O(px(4), px(4))
+		search.Size = U2(1, -px(8), 0, px(22))
+		search.BackgroundColor3 = FEATURE_OFF_COLOR
+		search.BorderSizePixel = 0
+		search.ClearTextOnFocus = false
+		search.PlaceholderText = "Search"
+		search.PlaceholderColor3 = MUTED_TEXT_COLOR
+		search.Text = ""
+		search.TextColor3 = MENU_TEXT_SELECTED
+		search.FontFace = MENU_FONT_FACE
+		setResponsiveTextSize(search, 13)
+		search.TextXAlignment = Enum.TextXAlignment.Left
+		search.TextTruncate = Enum.TextTruncate.AtEnd
+		search.ClipsDescendants = true
+		search.ZIndex = 60002
+		search.Parent = popup
+		ensureCorner(search, px(5))
+		rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(search)
+		local optionRows = {}
+		local function selectedLabels()
+			local names = {}
+			for _, option in ipairs(options) do
+				if selection[option] == true then names[#names + 1] = tostring(labelProvider(option)) end
+			end
+			return names
+		end
+		local function updateButton()
+			fitWholeDropdownNames(button, selectedLabels(), placeholder or "Select")
+		end
+		for _, option in ipairs(options) do
+			local label = tostring(labelProvider(option))
+			local row = New("TextButton")
+			row.Size = U2(1, -px(8), 0, px(23))
+			row.BackgroundColor3 = FEATURE_OFF_COLOR
+			row.BorderSizePixel = 0
+			row.AutoButtonColor = false
+			row.Text = label
+			row.FontFace = MENU_FONT_FACE
+			setResponsiveTextSize(row, 13)
+			row.TextTruncate = Enum.TextTruncate.AtEnd
+			row.ClipsDescendants = true
+			row.ZIndex = 60001
+			row.Parent = popup
+			ensureCorner(row, px(5))
+			optionRows[#optionRows + 1] = {Button=row, Option=option, Search=string.lower(label)}
+			local function syncVisual()
+				local selected = selection[option] == true
+				row.BackgroundTransparency = selected and 0 or 1
+				row.TextColor3 = selected and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR
+			end
+			syncVisual()
+			row.MouseButton1Click:Connect(function()
+				local selecting = selection[option] ~= true
+				if selecting and type(canSelect) == "function" and canSelect(option) ~= true then return end
+				selection[option] = selecting and true or nil
+				syncVisual()
+				updateButton()
+				if type(onChanged) == "function" then onChanged(option, selecting) end
+			end)
+		end
+		local function filter()
+			local query = string.lower(tostring(search.Text or ""))
+			local visible = 0
+			for _, data in ipairs(optionRows) do
+				local show = query == "" or string.find(data.Search, query, 1, true) ~= nil
+				data.Button.Visible = show
+				if show then
+					data.Button.Position = U2O(px(4), searchHeight + px(3) + visible * px(25))
+					visible += 1
+				end
+			end
+			contentHeight = searchHeight + px(6) + visible * px(25)
+			popup.CanvasSize = U2O(0, contentHeight)
+			syncPosition()
+		end
+		search:GetPropertyChangedSignal("Text"):Connect(filter)
+		local follow = RunService.RenderStepped:Connect(syncPosition)
+		activePanelDropdown = {Popup=popup, Button=button, Overlay=overlay, FollowConnection=follow, OnClose=onClosed}
+		attachDropdownOutsideClose(popup, button, overlay)
+		updateButton()
+		filter()
+		syncPosition()
+		task.defer(function() if search.Parent then pcall(search.CaptureFocus, search) end end)
+	end
 	local function createFeatureRow(featureIndex, definition)
 		local featureRow = New("Frame")
 		featureRow.Name = "Feature" .. tostring(featureIndex) .. "Row"
@@ -3694,7 +4530,6 @@ local function createEmptyCollapsiblePanel(
 		featureRow.BorderSizePixel = 0
 		featureRow.ZIndex = 45012
 		featureRow.Parent = body
-
 		local function resolvedDefinitionOptions()
 			if definition and type(definition.OptionsProvider) == "function" then
 				local ok, options = pcall(definition.OptionsProvider)
@@ -3724,15 +4559,27 @@ local function createEmptyCollapsiblePanel(
 		local isServerHop = definition and (definition.ServerHopKey ~= nil or isServerHopSliderOnly)
 		local isServerHopMaster = isServerHop and definition.ServerHopKey == "Enabled"
 		local isServerHopChild = isServerHop and not isServerHopMaster
+			and not (definition and definition.ServerHopIndependent == true)
 		local isUtilityToggle = definition and definition.UtilityToggleKey ~= nil
 		local isUtilityText = definition and definition.UtilityTextKey ~= nil
 		local isUtilitySlider = definition and definition.UtilitySliderKey ~= nil
 		local isUtilityDropdown = definition and definition.UtilityDropdownKey ~= nil
 		local isUtilityMultiDropdown = definition and definition.UtilityMultiDropdownKey ~= nil
 		local isCustomReplyManager = definition and definition.CustomReplyManager == true
+		local isSimpleAutofarmWarning = definition and definition.SimpleAutofarmWarning == true
+		local isActionButton = definition and definition.ActionButton == true
+		local isTradeChatOfferManager = definition and definition.TradeChatOfferManager == true
+		local isSpecificCriteriaManager = definition and definition.SpecificCriteriaManager == true
+		local isAutoOfferSourceManager = definition and definition.AutoOfferSourceManager == true
+		local isAutoCancelRarity = definition and definition.AutoCancelRarityKey ~= nil
 		local componentLabelGap = px(18)
 		local utilityParents = utilityParentKeys(definition)
 		local visibilityUtilityParents = visibilityUtilityParentKeys(definition)
+		local visibilityAcceptKey = definition and definition.VisibilityAcceptKey or nil
+		local visibilityAutoOfferSource = definition and definition.VisibilityAutoOfferSource or nil
+		local visibilityAutoCancelTarget = definition and definition.VisibilityAutoCancelTarget or nil
+		local visibilitySitKey = definition and definition.VisibilitySitKey or nil
+		local visibilityAutoSitTarget = definition and definition.VisibilityAutoSitTarget or nil
 		local childIndentLevel = 0
 		if type(utilityParents) == "table" then
 			childIndentLevel = math.max(childIndentLevel, #utilityParents)
@@ -3749,12 +4596,13 @@ local function createEmptyCollapsiblePanel(
 			or isUtilitySlider
 			or isUtilityDropdown
 			or isUtilityMultiDropdown
+			or isSpecificCriteriaManager
 		)
 			and type(utilityParents) == "table"
 		local utilityExclusiveGroup = definition and definition.UtilityExclusiveGroup or nil
 		local utilityExclusiveRequired =
 			definition and definition.UtilityExclusiveRequired == true
-		featureRow.Visible = (
+		featureRow.Visible = not isSimpleAutofarmWarning and (
 			not isServerHopChild
 			or (autoServerHopState and autoServerHopState.Enabled == true)
 		) and (
@@ -3770,6 +4618,21 @@ local function createEmptyCollapsiblePanel(
 				and minigameAutoplayState[definition.MinigameParentId] == true
 			)
 		) and (
+			visibilityAutoOfferSource == nil
+			or (type(autoOfferState) == "table" and type(autoOfferState[visibilityAutoOfferSource]) == "table" and autoOfferState[visibilityAutoOfferSource].Enabled == true)
+		) and (
+			visibilityAcceptKey == nil
+			or (type(autoAcceptState) == "table" and type(autoAcceptState[visibilityAcceptKey]) == "table" and autoAcceptState[visibilityAcceptKey].Enabled == true)
+		) and (
+			visibilityAutoCancelTarget == nil
+			or (type(autoCancelState) == "table" and type(autoCancelState.Targets) == "table" and autoCancelState.Targets[visibilityAutoCancelTarget] == true)
+		) and (
+			visibilitySitKey == nil
+			or (type(autoSitState) == "table" and type(autoSitState[visibilitySitKey]) == "table" and autoSitState[visibilitySitKey].Enabled == true)
+		) and (
+			visibilityAutoSitTarget == nil
+			or (type(autoSitState) == "table" and type(autoSitState.OneOfTwo) == "table" and type(autoSitState.OneOfTwo.Targets) == "table" and autoSitState.OneOfTwo.Targets[visibilityAutoSitTarget] == true)
+		) and (
 			(definition and definition.BoothSlotIndex) == nil
 			or definition.BoothSlotIndex
 				<= (tonumber(autoServerHopState.RuntimeBoothMaxSlots) or 3)
@@ -3777,9 +4640,13 @@ local function createEmptyCollapsiblePanel(
 		local stateEntry
 		if isAutoSit then
 			stateEntry = autoSitState and autoSitState[definition.SitKey] or nil
+		elseif isAutoOfferSourceManager then
+			stateEntry = autoOfferState and autoOfferState[definition.Source] or nil
+		elseif isAutoCancelRarity then
+			stateEntry = autoCancelState
 		elseif isAutoCancel or isDropdownOnly then
 			stateEntry = autoCancelState
-		elseif isUtilityDropdown or isUtilityMultiDropdown then
+		elseif isUtilityDropdown or isUtilityMultiDropdown or isSpecificCriteriaManager then
 			stateEntry = autoServerHopState.Utility
 		elseif hasDropdown then
 			stateEntry = autoOfferState and autoOfferState[definition.Source] or nil
@@ -3792,10 +4659,10 @@ local function createEmptyCollapsiblePanel(
 			or isUtilitySlider
 			or isUtilityDropdown
 			or isUtilityMultiDropdown
+			or isSpecificCriteriaManager
 		then
 			stateEntry = autoServerHopState.Utility
 		end
-
 		local isDependentText = isServerHopChild
 			or isUtilityChild
 			or type(visibilityUtilityParents) == "table"
@@ -3808,7 +4675,6 @@ local function createEmptyCollapsiblePanel(
 				or featureRowHeight
 		local childTextIndent = 0
 		local dynamicBaseHeight
-
 		local featureLabel = New("TextLabel")
 		featureLabel.Name = "Label"
 		featureLabel.AnchorPoint = V2(0, 0.5)
@@ -3835,7 +4701,77 @@ local function createEmptyCollapsiblePanel(
 		featureLabel.TextTruncate = Enum.TextTruncate.None
 		featureLabel.ZIndex = 45013
 		featureLabel.Parent = featureRow
-
+		local actionButton
+		if isSimpleAutofarmWarning then
+			featureLabel.Size = U2(1, 0, 1, 0)
+			featureLabel.Text = "must own atleast 1 brainrot"
+			featureLabel.TextColor3 = RGB(255, 74, 74)
+			featureLabel.TextXAlignment = Enum.TextXAlignment.Left
+			featureRow.Visible = false
+			rawset(_G, "__TUFFHUB_SHOW_SIMPLE_AUTOFARM_WARNING", function()
+				if not featureRow.Parent then return end
+				local expires = os.clock() + 5
+				autoServerHopState.RuntimeSimpleAutofarmWarningUntil = expires
+				featureRow.Visible = true
+				relayoutRows()
+				task.delay(5, function()
+					if featureRow.Parent
+						and tonumber(autoServerHopState.RuntimeSimpleAutofarmWarningUntil) == expires
+					then
+						featureRow.Visible = false
+						relayoutRows()
+					end
+				end)
+			end)
+		elseif isActionButton then
+			featureLabel.Visible = false
+			actionButton = New("TextButton")
+			actionButton.Name = "ActionButton"
+			actionButton.AnchorPoint = V2(0.5, 0.5)
+			actionButton.Position = U2S(0.5, 0.5)
+			actionButton.Size = U2(1, 0, 0, px(26))
+			actionButton.BackgroundColor3 = FEATURE_OFF_COLOR
+			actionButton.BorderSizePixel = 0
+			actionButton.AutoButtonColor = false
+			actionButton.Text = tostring(definition.Label or "Action")
+			actionButton.TextColor3 = MENU_TEXT_SELECTED
+			actionButton.FontFace = MENU_FONT_FACE
+			setResponsiveTextSize(actionButton, 14)
+			actionButton.TextTruncate = Enum.TextTruncate.AtEnd
+			actionButton.ZIndex = 45014
+			actionButton.Parent = featureRow
+			ensureCorner(actionButton, px(6))
+			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(actionButton)
+			actionButton.MouseButton1Click:Connect(function()
+				if definition.Action == "ResetSimpleAutofarm" then
+					local reset = rawget(_G, "__TUFFHUB_RESET_SIMPLE_AUTOFARM")
+					if type(reset) == "function" then pcall(reset) end
+				elseif definition.Action == "UndoAllSettings" then
+					local reset = rawget(_G, "__TUFFHUB_RESET_ALL_SETTINGS_STATE")
+					if type(reset) == "function" then pcall(reset) end
+					local refresh = rawget(_G, "__TUFFHUB_REFRESH_ALL_SETTINGS_UI")
+					if type(refresh) == "function" then pcall(refresh) end
+				elseif definition.Action == "ManualServerHop" then
+					autoServerHopState.RuntimeManualServerHopRequested = true
+					autoServerHopState.RuntimeServerHopPending = true
+				elseif definition.Action == "ManualKickMinigame" then
+					pcall(function()
+						local RS = ReplicatedStorage
+						local Replicator = require(
+							RS:WaitForChild("Client")
+								:WaitForChild("Modules")
+								:WaitForChild("ReplicatorClient")
+						)
+						local active = Replicator.get("ActiveMinigame")
+						local phase = active and active:TryIndex({"phase"})
+						local gameId = active and active:TryIndex({"session", "gameId"})
+						if phase ~= nil or gameId ~= nil then
+							Players.LocalPlayer:Kick("Manual Minigame Kick")
+						end
+					end)
+				end
+			end)
+		end
 		local wrappedMeasureWidth
 		local wrappedMeasureText
 		local wrappedMeasureTextSize
@@ -3844,7 +4780,6 @@ local function createEmptyCollapsiblePanel(
 			if featureLabel.Text == "" or defaultFeatureBaseHeight <= 0 then
 				return px(16)
 			end
-
 			-- Never estimate wrapping from a not-yet-laid-out 0px panel. The
 			-- panel geometry pass supplies LayoutWidth before final measurement.
 			local panelWidth = panelData
@@ -3853,7 +4788,6 @@ local function createEmptyCollapsiblePanel(
 			if panelWidth == nil or panelWidth <= 1 then
 				return px(16)
 			end
-
 			local featureRowWidth = math.max(
 				1,
 				panelWidth - px(28)
@@ -3867,7 +4801,6 @@ local function createEmptyCollapsiblePanel(
 					) + 0.5
 				)
 			)
-
 			local currentText = featureLabel.Text
 			local currentTextSize = featureLabel.TextSize
 			if wrappedMeasureWidth == width
@@ -3876,11 +4809,9 @@ local function createEmptyCollapsiblePanel(
 			then
 				return wrappedMeasureHeight
 			end
-
 			wrappedMeasureWidth = width
 			wrappedMeasureText = currentText
 			wrappedMeasureTextSize = currentTextSize
-
 			-- Preserve the original compact 32px row exactly whenever the text
 			-- fits on one line. Extra height is added only after a real wrap.
 			local oneLineWidth = TextService:GetTextSize(
@@ -3893,7 +4824,6 @@ local function createEmptyCollapsiblePanel(
 				wrappedMeasureHeight = px(16)
 				return wrappedMeasureHeight
 			end
-
 			wrappedMeasureHeight = math.max(
 				px(16),
 				math.ceil(
@@ -3907,7 +4837,6 @@ local function createEmptyCollapsiblePanel(
 			)
 			return wrappedMeasureHeight
 		end
-
 		dynamicBaseHeight = function()
 			if defaultFeatureBaseHeight <= 0 then
 				return defaultFeatureBaseHeight
@@ -3915,7 +4844,6 @@ local function createEmptyCollapsiblePanel(
 			return defaultFeatureBaseHeight
 				+ math.max(0, wrappedFeatureLabelHeight() - px(16))
 		end
-
 		local toggleTrack = New("TextButton")
 		toggleTrack.Name = "ToggleTrack"
 		toggleTrack.AnchorPoint = V2(1, 0.5)
@@ -3927,15 +4855,17 @@ local function createEmptyCollapsiblePanel(
 		toggleTrack.ZIndex = 45013
 		toggleTrack.Parent = featureRow
 		toggleTrack.Visible = not isDropdownOnly
+			and not isSimpleAutofarmWarning
+			and not isActionButton
 			and not isAutoCancelFilterOnly
 			and not isServerHopSliderOnly
 			and not isUtilityText
 			and not isUtilitySlider
 			and not isUtilityDropdown
 			and not isUtilityMultiDropdown
+			and not isSpecificCriteriaManager
 		ensureCorner(toggleTrack, toggleHeight * 0.5)
 		rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(toggleTrack)
-
 		local toggleKnob = New("Frame")
 		toggleKnob.Name = "ToggleKnob"
 		toggleKnob.Size = U2O(toggleHeight - knobInset * 2, toggleHeight - knobInset * 2)
@@ -3944,13 +4874,12 @@ local function createEmptyCollapsiblePanel(
 		toggleKnob.ZIndex = 45014
 		toggleKnob.Parent = toggleTrack
 		ensureCorner(toggleKnob, (toggleHeight - knobInset * 2) * 0.5)
-
 		local featureEnabled
 		if isDropdownOnly then
 			featureEnabled = true
 		elseif isUtilityToggle then
 			featureEnabled = stateEntry and stateEntry[definition.UtilityToggleKey] == true or false
-		elseif isUtilityText or isUtilitySlider or isUtilityDropdown or isUtilityMultiDropdown then
+		elseif isUtilityText or isUtilitySlider or isUtilityDropdown or isUtilityMultiDropdown or isSpecificCriteriaManager then
 			featureEnabled = stateEntry
 				and utilityParentsEnabled(stateEntry, utilityParents)
 				or false
@@ -3958,9 +4887,15 @@ local function createEmptyCollapsiblePanel(
 			featureEnabled = isAutoCancelFilterOnly
 				or (stateEntry and stateEntry.Enabled == true or false)
 		elseif isServerHopSliderOnly then
-			featureEnabled = autoServerHopState and autoServerHopState.Enabled == true or false
+			featureEnabled = definition.ServerHopSliderAlwaysVisible == true
+				or (autoServerHopState and autoServerHopState.Enabled == true or false)
 		elseif isServerHop then
 			featureEnabled = stateEntry and stateEntry[definition.ServerHopKey] == true or false
+		elseif isAutoOfferSourceManager then
+			featureEnabled = stateEntry and stateEntry.Enabled == true or false
+		elseif isAutoCancelRarity then
+			featureEnabled = stateEntry and type(stateEntry.Targets) == "table"
+				and stateEntry.Targets[definition.AutoCancelRarityKey] == true or false
 		elseif hasDropdown or isAutoAccept or isAutoSit then
 			featureEnabled = stateEntry and stateEntry.Enabled == true or false
 		else
@@ -3969,8 +4904,9 @@ local function createEmptyCollapsiblePanel(
 				and minigameAutoplayState[definition.Id] == true
 				or false
 		end
-		setToggleVisual(toggleTrack, toggleKnob, featureLabel, featureEnabled)
-
+		if not isSimpleAutofarmWarning and not isActionButton then
+			setToggleVisual(toggleTrack, toggleKnob, featureLabel, featureEnabled)
+		end
 		local amountContainer
 		local secondaryContainer
 		local secondaryLabel
@@ -3980,8 +4916,6 @@ local function createEmptyCollapsiblePanel(
 		local utilityTextBox
 		local standardDropdownButton
 		local dynamicSecondaryHeight
-
-
 		if isCustomReplyManager and stateEntry then
 			secondaryContainer = New("Frame")
 			secondaryContainer.Name = "CustomReplyManager"
@@ -3992,12 +4926,10 @@ local function createEmptyCollapsiblePanel(
 			secondaryContainer.Visible = featureEnabled
 			secondaryContainer.ZIndex = 45013
 			secondaryContainer.Parent = featureRow
-
 			local entriesKey = definition.CustomReplyTableKey or "AutoTradeCustomReplies"
 			if type(stateEntry[entriesKey]) ~= "table" then
 				stateEntry[entriesKey] = {}
 			end
-
 			local dynamicHeightValue = px(1)
 			local customAddRow
 			local customAddLabel
@@ -4042,12 +4974,7 @@ local function createEmptyCollapsiblePanel(
 						addLabelHeight + px(8)
 					)
 					customAddRow.Size = U2(1, 0, 0, addRowHeight)
-					customAddLabel.Size = U2(
-						1,
-						-(toggleWidth + componentLabelGap),
-						0,
-						addLabelHeight
-					)
+					customAddLabel.Size = U2(1, 0, 0, math.max(px(26), addLabelHeight))
 					dynamicHeightValue =
 						customContentBeforeAdd + addRowHeight + px(5)
 					secondaryContainer.Size = U2(
@@ -4059,14 +4986,12 @@ local function createEmptyCollapsiblePanel(
 				end
 				return dynamicHeightValue
 			end
-
 			local function saveCustomReplies()
 				local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
 				if type(saver) == "function" then
 					task.defer(saver, true)
 				end
 			end
-
 			local function makeReplyInput(y, placeholder, initialValue, onCommit)
 				local inputBox = New("TextBox")
 				inputBox.Position = U2O(0, y)
@@ -4094,12 +5019,10 @@ local function createEmptyCollapsiblePanel(
 				inputBox.Parent = secondaryContainer
 				ensureCorner(inputBox, px(6))
 				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(inputBox)
-
 				local padding = New("UIPadding")
 				padding.PaddingLeft = UDim.new(0, px(9))
 				padding.PaddingRight = UDim.new(0, px(9))
 				padding.Parent = inputBox
-
 				inputBox:GetPropertyChangedSignal("Text"):Connect(function()
 					inputBox.TextColor3 = inputBox.Text ~= ""
 						and MENU_TEXT_SELECTED
@@ -4110,17 +5033,18 @@ local function createEmptyCollapsiblePanel(
 					saveCustomReplies()
 				end)
 			end
-
 			local rebuildCustomReplies
 			rebuildCustomReplies = function()
 				for _, child in ipairs(secondaryContainer:GetChildren()) do
 					child:Destroy()
 				end
-
 				local entries = stateEntry[entriesKey]
 				if type(entries) ~= "table" then
 					entries = {}
 					stateEntry[entriesKey] = entries
+				end
+				if #entries == 0 then
+					entries[1] = {LookFor = "", Reply = ""}
 				end
 				local y = px(5)
 				for entryIndex, entry in ipairs(entries) do
@@ -4128,7 +5052,6 @@ local function createEmptyCollapsiblePanel(
 						entry = {LookFor = "", Reply = ""}
 						entries[entryIndex] = entry
 					end
-
 					makeReplyInput(
 						y,
 						"Message to look for",
@@ -4138,7 +5061,6 @@ local function createEmptyCollapsiblePanel(
 						end
 					)
 					y += px(31)
-
 					makeReplyInput(
 						y,
 						"Reply to message",
@@ -4148,108 +5070,725 @@ local function createEmptyCollapsiblePanel(
 						end
 					)
 					y += px(31)
-
-					local removeButton = New("TextButton")
-					removeButton.Name = "RemoveCustomMessage"
-					removeButton.Position = U2O(0, y)
-					removeButton.Size = U2(1, 0, 0, px(24))
-					removeButton.BackgroundColor3 = FEATURE_OFF_COLOR
-					removeButton.BorderSizePixel = 0
-					removeButton.AutoButtonColor = false
-					removeButton.Text = "Remove Custom Message"
-					removeButton.TextColor3 = MUTED_TEXT_COLOR
-					removeButton.FontFace = MENU_FONT_FACE
-					setResponsiveTextSize(removeButton, 13)
-					removeButton.ZIndex = 45015
-					removeButton.Parent = secondaryContainer
-					ensureCorner(removeButton, px(5))
-					rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(removeButton)
-					removeButton.MouseButton1Click:Connect(function()
-						table.remove(entries, entryIndex)
+					local clearButton = New("TextButton")
+					clearButton.Name = "ClearCustomMessage"
+					clearButton.Position = U2O(0, y)
+					clearButton.Size = U2(1, 0, 0, px(24))
+					clearButton.BackgroundColor3 = FEATURE_OFF_COLOR
+					clearButton.BorderSizePixel = 0
+					clearButton.AutoButtonColor = false
+					clearButton.Text = "Clear Trade Chat Reply"
+					clearButton.TextColor3 = MENU_TEXT_SELECTED
+					clearButton.FontFace = MENU_FONT_FACE
+					setResponsiveTextSize(clearButton, 13)
+					clearButton.ZIndex = 45015
+					clearButton.Parent = secondaryContainer
+					ensureCorner(clearButton, px(5))
+					rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(clearButton)
+					clearButton.MouseButton1Click:Connect(function()
+						entry.LookFor = ""
+						entry.Reply = ""
 						saveCustomReplies()
 						task.defer(rebuildCustomReplies)
 					end)
 					y += px(31)
+					if entryIndex > 1 then
+						local removeButton = New("TextButton")
+						removeButton.Name = "RemoveCustomMessage"
+						removeButton.Position = U2O(0, y)
+						removeButton.Size = U2(1, 0, 0, px(24))
+						removeButton.BackgroundColor3 = FEATURE_OFF_COLOR
+						removeButton.BorderSizePixel = 0
+						removeButton.AutoButtonColor = false
+						removeButton.Text = "Remove Trade Chat Reply"
+						removeButton.TextColor3 = MUTED_TEXT_COLOR
+						removeButton.FontFace = MENU_FONT_FACE
+						setResponsiveTextSize(removeButton, 13)
+						removeButton.ZIndex = 45015
+						removeButton.Parent = secondaryContainer
+						ensureCorner(removeButton, px(5))
+						rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(removeButton)
+						removeButton.MouseButton1Click:Connect(function()
+							table.remove(entries, entryIndex)
+							saveCustomReplies()
+							task.defer(rebuildCustomReplies)
+						end)
+						y += px(31)
+					end
+					if entryIndex < #entries then
+						y += px(14)
+					end
 				end
-
 				local addRow = New("Frame")
 				customAddRow = addRow
-				customContentBeforeAdd = y
+				customContentBeforeAdd = y + px(10)
 				addRow.Name = "AddAnotherCustomMessage"
-				addRow.Position = U2O(0, y)
+				addRow.Position = U2O(0, y + px(10))
 				addRow.Size = U2(1, 0, 0, featureRowHeight)
 				addRow.BackgroundTransparency = 1
 				addRow.BorderSizePixel = 0
 				addRow.ZIndex = 45013
 				addRow.Parent = secondaryContainer
-
-				local addLabel = New("TextLabel")
-				customAddLabel = addLabel
-				addLabel.AnchorPoint = V2(0, 0.5)
-				addLabel.Position = U2(0, 0, 0.5, 0)
-				addLabel.Size = U2(1, -(toggleWidth + componentLabelGap), 0, px(16))
-				addLabel.BackgroundTransparency = 1
-				addLabel.Text = "Add Another Custom Message"
-				addLabel.TextColor3 = MENU_TEXT_SELECTED
-				addLabel.FontFace = MENU_FONT_FACE
-				setResponsiveTextSize(addLabel, 14)
-				addLabel.TextXAlignment = Enum.TextXAlignment.Left
-				addLabel.TextYAlignment = Enum.TextYAlignment.Center
-				addLabel.TextWrapped = true
-				addLabel.TextTruncate = Enum.TextTruncate.None
-				addLabel.ZIndex = 45014
-				addLabel.Parent = addRow
-
-				local addToggle = New("TextButton")
-				addToggle.AnchorPoint = V2(1, 0.5)
-				addToggle.Position = U2(1, 0, 0.5, 0)
-				addToggle.Size = U2O(toggleWidth, toggleHeight)
-				addToggle.BackgroundColor3 = FEATURE_OFF_COLOR
-				addToggle.BorderSizePixel = 0
-				addToggle.AutoButtonColor = false
-				addToggle.Text = ""
-				addToggle.ZIndex = 45014
-				addToggle.Parent = addRow
-				ensureCorner(addToggle, toggleHeight * 0.5)
-				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(addToggle)
-
-				local addKnob = New("Frame")
-				addKnob.Size = U2O(
-					toggleHeight - knobInset * 2,
-					toggleHeight - knobInset * 2
-				)
-				addKnob.Position = U2O(knobInset, knobInset)
-				addKnob.BackgroundColor3 = MENU_TEXT_SELECTED
-				addKnob.BorderSizePixel = 0
-				addKnob.ZIndex = 45015
-				addKnob.Parent = addToggle
-				ensureCorner(addKnob, (toggleHeight - knobInset * 2) * 0.5)
-
-				addToggle.MouseButton1Click:Connect(function()
-					TweenService:Create(
-						addToggle,
-						TI(0.10, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-						{BackgroundColor3 = PINK}
-					):Play()
-					TweenService:Create(
-						addKnob,
-						TI(0.10, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-						{Position = U2(0, toggleWidth - toggleHeight + knobInset, 0, knobInset)}
-					):Play()
-
+				local addButton = New("TextButton")
+				customAddLabel = addButton
+				addButton.AnchorPoint = V2(0, 0.5)
+				addButton.Position = U2(0, 0, 0.5, 0)
+				addButton.Size = U2(1, 0, 0, px(26))
+				addButton.BackgroundColor3 = FEATURE_OFF_COLOR
+				addButton.BorderSizePixel = 0
+				addButton.AutoButtonColor = false
+				addButton.Text = "Add Another Custom Message"
+				addButton.TextColor3 = MENU_TEXT_SELECTED
+				addButton.FontFace = MENU_FONT_FACE
+				setResponsiveTextSize(addButton, 14)
+				addButton.TextXAlignment = Enum.TextXAlignment.Center
+				addButton.TextYAlignment = Enum.TextYAlignment.Center
+				addButton.ZIndex = 45014
+				addButton.Parent = addRow
+				ensureCorner(addButton, px(6))
+				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(addButton)
+				addButton.MouseButton1Click:Connect(function()
 					entries[#entries + 1] = {LookFor = "", Reply = ""}
 					saveCustomReplies()
 					task.defer(rebuildCustomReplies)
 				end)
-
-				addToggle.Position = U2(1, 0, 0.5, 0)
 				dynamicHeightValue = dynamicSecondaryHeight()
 				task.defer(relayoutRows)
 			end
-
 			rebuildCustomReplies()
 		end
-
+		if isAutoOfferSourceManager and stateEntry then
+			secondaryContainer = New("Frame")
+			secondaryContainer.Name = "AutoOfferSourceManager"
+			secondaryContainer.Position = U2O(0, featureRowHeight)
+			secondaryContainer.Size = U2(1, 0, 0, 0)
+			secondaryContainer.BackgroundTransparency = 1
+			secondaryContainer.BorderSizePixel = 0
+			secondaryContainer.Visible = featureEnabled
+			secondaryContainer.ZIndex = 45013
+			secondaryContainer.Parent = featureRow
+			stateEntry.OfferModeRarity = stateEntry.OfferModeRarity ~= false
+			stateEntry.OfferModeSpecific = stateEntry.OfferModeSpecific == true
+			stateEntry.Targets = type(stateEntry.Targets) == "table" and stateEntry.Targets or {}
+			stateEntry.Amounts = type(stateEntry.Amounts) == "table" and stateEntry.Amounts or {}
+			stateEntry.SpecificTargets = type(stateEntry.SpecificTargets) == "table" and stateEntry.SpecificTargets or {}
+			stateEntry.Tokens = math.clamp(math.floor(tonumber(stateEntry.Tokens) or 0), 0, 1000000)
+			stateEntry.OfferAllTokens = stateEntry.OfferAllTokens == true
+			local managerHeight = px(1)
+			dynamicSecondaryHeight = function() return managerHeight end
+			local rebuildAutoOfferSource
+			local function saveAutoOfferSource()
+				local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
+				if type(saver) == "function" then task.defer(saver, true) end
+			end
+			local function selectedSpecificCount()
+				local count = 0
+				for _, selected in pairs(stateEntry.SpecificTargets) do if selected == true then count += 1 end end
+				return count
+			end
+			local function selectedRarityUnits(exceptRarity)
+				local count = 0
+				for _, rarity in ipairs(OUTGOING_BRAINROT_RARITY_OPTIONS) do
+					if rarity ~= exceptRarity and stateEntry.Targets[rarity] == true then
+						count += math.clamp(math.floor(tonumber(stateEntry.Amounts[rarity]) or 1), 1, 6)
+					end
+				end
+				return count
+			end
+			local function makeToggleRow(text, y, getter, setter)
+				local row = New("Frame")
+				row.Position = U2O(0, y)
+				row.Size = U2(1, 0, 0, featureRowHeight)
+				row.BackgroundTransparency = 1
+				row.ZIndex = 45014
+				row.Parent = secondaryContainer
+				local label = New("TextLabel")
+				label.AnchorPoint = V2(0, 0.5)
+				label.Position = U2(0, 0, 0.5, 0)
+				label.Size = U2(1, -(toggleWidth + componentLabelGap), 1, 0)
+				label.BackgroundTransparency = 1
+				label.Text = text
+				label.TextColor3 = getter() and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR
+				label.FontFace = MENU_FONT_FACE
+				setResponsiveTextSize(label, 14)
+				label.TextXAlignment = Enum.TextXAlignment.Left
+				label.TextTruncate = Enum.TextTruncate.AtEnd
+				label.ZIndex = 45015
+				label.Parent = row
+				local track = New("TextButton")
+				track.AnchorPoint = V2(1, 0.5)
+				track.Position = U2(1, 0, 0.5, 0)
+				track.Size = U2O(toggleWidth, toggleHeight)
+				track.BackgroundColor3 = getter() and PINK or FEATURE_OFF_COLOR
+				track.BorderSizePixel = 0
+				track.AutoButtonColor = false
+				track.Text = ""
+				track.ZIndex = 45015
+				track.Parent = row
+				ensureCorner(track, toggleHeight * 0.5)
+				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(track)
+				local knob = New("Frame")
+				knob.Size = U2O(toggleHeight - knobInset * 2, toggleHeight - knobInset * 2)
+				knob.Position = getter() and U2(0, toggleWidth - toggleHeight + knobInset, 0, knobInset) or U2O(knobInset, knobInset)
+				knob.BackgroundColor3 = MENU_TEXT_SELECTED
+				knob.BorderSizePixel = 0
+				knob.ZIndex = 45016
+				knob.Parent = track
+				ensureCorner(knob, (toggleHeight - knobInset * 2) * 0.5)
+				track.MouseButton1Click:Connect(function()
+					setter(not getter())
+					saveAutoOfferSource()
+					task.defer(rebuildAutoOfferSource)
+				end)
+			end
+			local function makeDropdownRow(labelText, y, buttonText)
+				local row = New("Frame")
+				row.Position = U2O(0, y)
+				row.Size = U2(1, 0, 0, featureRowHeight)
+				row.BackgroundTransparency = 1
+				row.ZIndex = 45014
+				row.Parent = secondaryContainer
+				local label = New("TextLabel")
+				label.AnchorPoint = V2(0, 0.5)
+				label.Position = U2(0, 0, 0.5, 0)
+				label.Size = U2(1, -(dropdownWidth + componentLabelGap), 1, 0)
+				label.BackgroundTransparency = 1
+				label.Text = labelText
+				label.TextColor3 = MENU_TEXT_SELECTED
+				label.FontFace = MENU_FONT_FACE
+				setResponsiveTextSize(label, 14)
+				label.TextXAlignment = Enum.TextXAlignment.Left
+				label.TextTruncate = Enum.TextTruncate.AtEnd
+				label.ZIndex = 45015
+				label.Parent = row
+				local button = New("TextButton")
+				button.AnchorPoint = V2(1, 0.5)
+				button.Position = U2(1, 0, 0.5, 0)
+				button.Size = U2O(dropdownWidth, px(24))
+				button.BackgroundColor3 = FEATURE_OFF_COLOR
+				button.BorderSizePixel = 0
+				button.AutoButtonColor = false
+				button.Text = buttonText or "Select"
+				button.TextColor3 = MENU_TEXT_SELECTED
+				button.FontFace = MENU_FONT_FACE
+				setResponsiveTextSize(button, 13)
+				button.TextTruncate = Enum.TextTruncate.AtEnd
+				button.ClipsDescendants = true
+				button.ZIndex = 45015
+				button.Parent = row
+				ensureCorner(button, px(6))
+				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(button)
+				return button
+			end
+			local function makeSlider(labelText, y, initial, minValue, maxValue, commit)
+				local frame = New("Frame")
+				frame.Position = U2O(0, y)
+				frame.Size = U2(1, 0, 0, amountControlsHeight)
+				frame.BackgroundTransparency = 1
+				frame.ZIndex = 45014
+				frame.Parent = secondaryContainer
+				local label = New("TextLabel")
+				label.Size = U2(1, -amountValueWidth - componentLabelGap, 0, px(15))
+				label.BackgroundTransparency = 1
+				label.Text = labelText
+				label.TextColor3 = MENU_TEXT_SELECTED
+				label.FontFace = MENU_FONT_FACE
+				setResponsiveTextSize(label, 14)
+				label.TextXAlignment = Enum.TextXAlignment.Left
+				label.TextTruncate = Enum.TextTruncate.AtEnd
+				label.Parent = frame
+				local value = New("TextBox")
+				value.AnchorPoint = V2(1, 0)
+				value.Position = U2(1, 0, 0, 0)
+				value.Size = U2O(amountValueWidth, px(20))
+				value.BackgroundColor3 = FEATURE_OFF_COLOR
+				value.BorderSizePixel = 0
+				value.ClearTextOnFocus = false
+				value.FontFace = MENU_FONT_FACE
+				value.TextColor3 = MENU_TEXT_SELECTED
+				setResponsiveTextSize(value, 13)
+				value.TextTruncate = Enum.TextTruncate.AtEnd
+				value.ClipsDescendants = true
+				value.Parent = frame
+				ensureCorner(value, px(5))
+				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(value)
+				local track = New("Frame")
+				track.Position = U2O(0, px(27))
+				track.Size = U2(1, 0, 0, px(5))
+				track.BackgroundColor3 = FEATURE_OFF_COLOR
+				track.BorderSizePixel = 0
+				track.Active = true
+				track.Parent = frame
+				ensureCorner(track, px(3))
+				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(track)
+				local fill = New("Frame")
+				fill.BackgroundColor3 = PINK
+				fill.BorderSizePixel = 0
+				fill.Parent = track
+				ensureCorner(fill, px(3))
+				local knob = New("Frame")
+				knob.AnchorPoint = V2(0.5, 0.5)
+				knob.Size = U2O(px(11), px(11))
+				knob.BackgroundColor3 = MENU_TEXT_SELECTED
+				knob.BorderSizePixel = 0
+				knob.Parent = track
+				ensureCorner(knob, px(6))
+				local function setValue(v, save)
+					v = math.clamp(math.floor(tonumber(v) or minValue), minValue, maxValue)
+					local adjusted = commit(v)
+					if adjusted ~= nil then v = math.clamp(math.floor(tonumber(adjusted) or v), minValue, maxValue) end
+					value.Text = tostring(v)
+					local alpha = maxValue == minValue and 0 or ((v - minValue) / (maxValue - minValue))
+					fill.Size = U2S(alpha, 1)
+					knob.Position = U2(alpha, 0, 0.5, 0)
+					if save then saveAutoOfferSource() end
+				end
+				setValue(initial, false)
+				value.FocusLost:Connect(function() setValue(value.Text, true) end)
+				track.InputBegan:Connect(function(input)
+					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+						beginSliderDrag(input, function(x)
+							local alpha = math.clamp((x - track.AbsolutePosition.X) / math.max(1, track.AbsoluteSize.X), 0, 1)
+							setValue(minValue + math.floor(alpha * (maxValue - minValue) + 0.5), true)
+						end)
+					end
+				end)
+			end
+			rebuildAutoOfferSource = function()
+				closeActivePanelDropdown()
+				for _, child in ipairs(secondaryContainer:GetChildren()) do child:Destroy() end
+				local y = px(2)
+				makeToggleRow("Offer Based On Rarity", y, function() return stateEntry.OfferModeRarity == true end, function(v) stateEntry.OfferModeRarity = v end)
+				y += featureRowHeight
+				if stateEntry.OfferModeRarity == true then
+					local rarityButton = makeDropdownRow("Offer", y, "Select")
+					fitWholeDropdownNames(rarityButton, selectedTargetList(stateEntry, OUTGOING_BRAINROT_RARITY_OPTIONS), "Select")
+					rarityButton.MouseButton1Click:Connect(function()
+						openManagedMultiDropdown(rarityButton, OUTGOING_BRAINROT_RARITY_OPTIONS, stateEntry.Targets, tostring, "Select", function(option, selected)
+							if selected then stateEntry.Amounts[option] = math.clamp(math.floor(tonumber(stateEntry.Amounts[option]) or 1), 1, 6) else stateEntry.Amounts[option] = nil end
+							saveAutoOfferSource()
+						end, function(option)
+							return selectedRarityUnits(nil) + selectedSpecificCount() < 6
+						end, rebuildAutoOfferSource)
+					end)
+					y += featureRowHeight
+					for _, rarity in ipairs(OUTGOING_BRAINROT_RARITY_OPTIONS) do
+						if stateEntry.Targets[rarity] == true then
+							makeSlider(rarity .. " Amount", y, stateEntry.Amounts[rarity] or 1, 1, 6, function(v)
+								local maxAllowed = math.max(1, 6 - selectedSpecificCount() - selectedRarityUnits(rarity))
+								stateEntry.Amounts[rarity] = math.min(v, maxAllowed)
+								return stateEntry.Amounts[rarity]
+							end)
+							y += amountControlsHeight + px(2)
+						end
+					end
+					makeSlider("Token Amount", y, stateEntry.Tokens, 0, 1000000, function(v) stateEntry.Tokens = v return v end)
+					y += amountControlsHeight + px(2)
+					makeToggleRow("Offer All Tokens", y, function() return stateEntry.OfferAllTokens == true end, function(v) stateEntry.OfferAllTokens = v end)
+					y += featureRowHeight
+				end
+				makeToggleRow("Offer Specific Brainrot", y, function() return stateEntry.OfferModeSpecific == true end, function(v) stateEntry.OfferModeSpecific = v end)
+				y += featureRowHeight
+				if stateEntry.OfferModeSpecific == true then
+					local specificButton = makeDropdownRow("Offer", y, "Select")
+					local options = autoServerHopState.RefreshOwnedOfferableBrainrotOptions()
+					local names = {}
+					for _, id in ipairs(options) do if stateEntry.SpecificTargets[id] == true then names[#names + 1] = autoServerHopState.OwnedBrainrotOptionLabel(id) end end
+					fitWholeDropdownNames(specificButton, names, "Select")
+					specificButton.MouseButton1Click:Connect(function()
+						openManagedMultiDropdown(specificButton, options, stateEntry.SpecificTargets, autoServerHopState.OwnedBrainrotOptionLabel, "Select", function() saveAutoOfferSource() end, function()
+							return selectedRarityUnits(nil) + selectedSpecificCount() < 6
+						end, rebuildAutoOfferSource)
+					end)
+					y += featureRowHeight
+				end
+				managerHeight = y + px(3)
+				secondaryContainer.Size = U2(1, 0, 0, managerHeight)
+				task.defer(relayoutRows)
+			end
+			rebuildAutoOfferSource()
+		end
+		if isTradeChatOfferManager and stateEntry then
+			secondaryContainer = New("Frame")
+			secondaryContainer.Name = "TradeChatOfferManager"
+			secondaryContainer.Position = U2O(0, featureRowHeight)
+			secondaryContainer.Size = U2(1, 0, 0, 0)
+			secondaryContainer.BackgroundTransparency = 1
+			secondaryContainer.BorderSizePixel = 0
+			secondaryContainer.Visible = featureEnabled
+			secondaryContainer.ZIndex = 45013
+			secondaryContainer.Parent = featureRow
+			local entriesKey = "AutoOfferTradeChatOffers"
+			local function blankTradeChatOffer()
+				return {LookFor="", Targets={}, Amounts={}, SpecificItems={}, TokenAmount=0, OfferAllTokens=false}
+			end
+			if type(stateEntry[entriesKey]) ~= "table" or #stateEntry[entriesKey] == 0 then
+				stateEntry[entriesKey] = {blankTradeChatOffer()}
+			end
+			local managerHeight = px(1)
+			dynamicSecondaryHeight = function() return managerHeight end
+			local rebuildTradeChatOffers
+			local function normalizeTradeChatEntry(entry)
+				if type(entry) ~= "table" then entry = blankTradeChatOffer() end
+				entry.LookFor = tostring(entry.LookFor or "")
+				entry.Targets = type(entry.Targets) == "table" and entry.Targets or {}
+				entry.Amounts = type(entry.Amounts) == "table" and entry.Amounts or {}
+				entry.SpecificItems = type(entry.SpecificItems) == "table" and entry.SpecificItems or {}
+				if entry.BrainrotId ~= nil then entry.SpecificItems[tostring(entry.BrainrotId)] = true entry.BrainrotId = nil end
+				entry.TokenAmount = math.clamp(math.floor(tonumber(entry.TokenAmount) or 0), 0, 1000000)
+				entry.OfferAllTokens = entry.OfferAllTokens == true
+				local allowed = {}
+				for _, rarity in ipairs(OUTGOING_BRAINROT_RARITY_OPTIONS) do allowed[rarity] = true end
+				for rarity in pairs(entry.Targets) do if not allowed[rarity] then entry.Targets[rarity]=nil entry.Amounts[rarity]=nil end end
+				for rarity in pairs(entry.Amounts) do if not allowed[rarity] then entry.Amounts[rarity]=nil end end
+				for rarity in pairs(entry.Targets) do
+					if entry.Targets[rarity] == true then entry.Amounts[rarity] = math.clamp(math.floor(tonumber(entry.Amounts[rarity]) or 1),1,6) end
+				end
+				return entry
+			end
+			local function saveTradeChatOffers()
+				local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
+				if type(saver) == "function" then task.defer(saver, true) end
+			end
+			rebuildTradeChatOffers = function()
+				closeActivePanelDropdown()
+				for _, child in ipairs(secondaryContainer:GetChildren()) do child:Destroy() end
+				local entries = stateEntry[entriesKey]
+				if type(entries) ~= "table" or #entries == 0 then entries={blankTradeChatOffer()} stateEntry[entriesKey]=entries end
+				local y = px(5)
+				local function buttonBase(text, yPos)
+					local b=New("TextButton") b.Position=U2O(0,yPos) b.Size=U2(1,0,0,px(25)) b.BackgroundColor3=FEATURE_OFF_COLOR b.BorderSizePixel=0 b.AutoButtonColor=false b.Text=text b.TextColor3=MENU_TEXT_SELECTED b.FontFace=MENU_FONT_FACE setResponsiveTextSize(b,13) b.TextTruncate=Enum.TextTruncate.AtEnd b.ClipsDescendants=true b.ZIndex=45015 b.Parent=secondaryContainer ensureCorner(b,px(5)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(b) return b
+				end
+				local function textBoxBase(text, placeholder, yPos)
+					local box=New("TextBox") box.Position=U2O(0,yPos) box.Size=U2(1,0,0,px(26)) box.BackgroundColor3=FEATURE_OFF_COLOR box.BorderSizePixel=0 box.ClearTextOnFocus=false box.Text=tostring(text or "") box.PlaceholderText=placeholder or "" box.PlaceholderColor3=MUTED_TEXT_COLOR box.TextColor3=MENU_TEXT_SELECTED box.FontFace=MENU_FONT_FACE setResponsiveTextSize(box,13) box.TextXAlignment=Enum.TextXAlignment.Left box.TextTruncate=Enum.TextTruncate.AtEnd box.ClipsDescendants=true box.ZIndex=45015 box.Parent=secondaryContainer ensureCorner(box,px(5)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(box)
+					local pad=New("UIPadding") pad.PaddingLeft=UDim.new(0,px(8)) pad.PaddingRight=UDim.new(0,px(8)) pad.Parent=box
+					return box
+				end
+				local function labeledDropdown(labelText, yPos)
+					local row=New("Frame") row.Position=U2O(0,yPos) row.Size=U2(1,0,0,featureRowHeight) row.BackgroundTransparency=1 row.ZIndex=45014 row.Parent=secondaryContainer
+					local label=New("TextLabel") label.AnchorPoint=V2(0,0.5) label.Position=U2(0,0,0.5,0) label.Size=U2(1,-(dropdownWidth+componentLabelGap),1,0) label.BackgroundTransparency=1 label.Text=labelText label.TextColor3=MENU_TEXT_SELECTED label.FontFace=MENU_FONT_FACE setResponsiveTextSize(label,14) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.AtEnd label.ClipsDescendants=true label.ZIndex=45015 label.Parent=row
+					local b=New("TextButton") b.AnchorPoint=V2(1,0.5) b.Position=U2(1,0,0.5,0) b.Size=U2O(dropdownWidth,px(24)) b.BackgroundColor3=FEATURE_OFF_COLOR b.BorderSizePixel=0 b.AutoButtonColor=false b.Text="Select" b.TextColor3=MUTED_TEXT_COLOR b.FontFace=MENU_FONT_FACE setResponsiveTextSize(b,13) b.TextTruncate=Enum.TextTruncate.AtEnd b.ClipsDescendants=true b.ZIndex=45015 b.Parent=row ensureCorner(b,px(6)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(b)
+					return b
+				end
+				local function checkboxRow(text,yPos,getter,setter)
+					local row=New("Frame") row.Position=U2O(0,yPos) row.Size=U2(1,0,0,featureRowHeight) row.BackgroundTransparency=1 row.ZIndex=45014 row.Parent=secondaryContainer
+					local label=New("TextLabel") label.AnchorPoint=V2(0,0.5) label.Position=U2(0,0,0.5,0) label.Size=U2(1,-(toggleWidth+componentLabelGap),1,0) label.BackgroundTransparency=1 label.Text=text label.TextColor3=getter() and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR label.FontFace=MENU_FONT_FACE setResponsiveTextSize(label,14) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.AtEnd label.Parent=row
+					local track=New("TextButton") track.AnchorPoint=V2(1,0.5) track.Position=U2(1,0,0.5,0) track.Size=U2O(toggleWidth,toggleHeight) track.BackgroundColor3=getter() and PINK or FEATURE_OFF_COLOR track.BorderSizePixel=0 track.AutoButtonColor=false track.Text="" track.ZIndex=45015 track.Parent=row ensureCorner(track,toggleHeight*0.5) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(track)
+					local knob=New("Frame") knob.Size=U2O(toggleHeight-knobInset*2,toggleHeight-knobInset*2) knob.Position=getter() and U2(0,toggleWidth-toggleHeight+knobInset,0,knobInset) or U2O(knobInset,knobInset) knob.BackgroundColor3=MENU_TEXT_SELECTED knob.BorderSizePixel=0 knob.Parent=track ensureCorner(knob,(toggleHeight-knobInset*2)*0.5)
+					track.MouseButton1Click:Connect(function() setter(not getter()) saveTradeChatOffers() task.defer(rebuildTradeChatOffers) end)
+				end
+				local function makeOfferSlider(labelText, initialValue, minValue, maxValue, yPos, onCommit)
+					local frame=New("Frame") frame.Position=U2O(0,yPos) frame.Size=U2(1,0,0,amountControlsHeight) frame.BackgroundTransparency=1 frame.ZIndex=45015 frame.Parent=secondaryContainer
+					local label=New("TextLabel") label.Size=U2(1,-amountValueWidth-componentLabelGap,0,px(15)) label.BackgroundTransparency=1 label.Text=labelText label.TextColor3=MENU_TEXT_SELECTED label.FontFace=MENU_FONT_FACE setResponsiveTextSize(label,13) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.AtEnd label.Parent=frame
+					local value=New("TextBox") value.AnchorPoint=V2(1,0) value.Position=U2(1,0,0,0) value.Size=U2O(amountValueWidth,px(20)) value.BackgroundColor3=FEATURE_OFF_COLOR value.BorderSizePixel=0 value.ClearTextOnFocus=false value.TextColor3=MENU_TEXT_SELECTED value.FontFace=MENU_FONT_FACE setResponsiveTextSize(value,13) value.TextTruncate=Enum.TextTruncate.AtEnd value.ClipsDescendants=true value.Parent=frame ensureCorner(value,px(5)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(value)
+					local track=New("Frame") track.Position=U2O(0,px(27)) track.Size=U2(1,0,0,px(5)) track.BackgroundColor3=FEATURE_OFF_COLOR track.BorderSizePixel=0 track.Active=true track.Parent=frame ensureCorner(track,px(3)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(track)
+					local fill=New("Frame") fill.BackgroundColor3=PINK fill.BorderSizePixel=0 fill.Parent=track ensureCorner(fill,px(3))
+					local knob=New("Frame") knob.AnchorPoint=V2(0.5,0.5) knob.Size=U2O(px(11),px(11)) knob.BackgroundColor3=MENU_TEXT_SELECTED knob.BorderSizePixel=0 knob.Parent=track ensureCorner(knob,px(6))
+					local function setValue(v,save) v=math.clamp(math.floor(tonumber(v) or minValue),minValue,maxValue) local adjusted=onCommit(v) if adjusted~=nil then v=math.clamp(math.floor(tonumber(adjusted) or v),minValue,maxValue) end value.Text=tostring(v) local a=maxValue==minValue and 0 or ((v-minValue)/(maxValue-minValue)) fill.Size=U2S(a,1) knob.Position=U2(a,0,0.5,0) if save then saveTradeChatOffers() end end
+					setValue(initialValue,false) value.FocusLost:Connect(function() setValue(value.Text,true) end)
+					track.InputBegan:Connect(function(input) if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then beginSliderDrag(input,function(x) local a=math.clamp((x-track.AbsolutePosition.X)/math.max(1,track.AbsoluteSize.X),0,1) setValue(minValue+math.floor(a*(maxValue-minValue)+0.5),true) end) end end)
+				end
+				for entryIndex, rawEntry in ipairs(entries) do
+					local entry=normalizeTradeChatEntry(rawEntry) entries[entryIndex]=entry
+					local function specificCount() local c=0 for _,v in pairs(entry.SpecificItems) do if v==true then c+=1 end end return c end
+					local function rarityUnits(except) local c=0 for _,r in ipairs(OUTGOING_BRAINROT_RARITY_OPTIONS) do if r~=except and entry.Targets[r]==true then c+=math.clamp(math.floor(tonumber(entry.Amounts[r]) or 1),1,6) end end return c end
+					local input=textBoxBase(entry.LookFor,"Trade Chat To Look For",y) input.FocusLost:Connect(function() entry.LookFor=input.Text saveTradeChatOffers() end) y+=px(31)
+					local rarityButton=labeledDropdown("Rarity Based Offer",y)
+					fitWholeDropdownNames(rarityButton,selectedTargetList(entry,OUTGOING_BRAINROT_RARITY_OPTIONS),"Select")
+					rarityButton.MouseButton1Click:Connect(function()
+						openManagedMultiDropdown(rarityButton,OUTGOING_BRAINROT_RARITY_OPTIONS,entry.Targets,tostring,"Select",function(option,selected) if selected then entry.Amounts[option]=math.clamp(math.floor(tonumber(entry.Amounts[option]) or 1),1,6) else entry.Amounts[option]=nil end saveTradeChatOffers() end,function() return rarityUnits(nil)+specificCount()<6 end,rebuildTradeChatOffers)
+					end)
+					y+=featureRowHeight
+					for _,rarity in ipairs(OUTGOING_BRAINROT_RARITY_OPTIONS) do
+						if entry.Targets[rarity]==true then
+							makeOfferSlider(rarity.." Amount",entry.Amounts[rarity] or 1,1,6,y,function(v) local maximum=math.max(1,6-specificCount()-rarityUnits(rarity)) entry.Amounts[rarity]=math.min(v,maximum) return entry.Amounts[rarity] end)
+							y+=amountControlsHeight+px(3)
+						end
+					end
+					local specificButton=labeledDropdown("Specific Brainrot/Item Offer",y)
+					local specificOptions=autoServerHopState.RefreshOwnedTradeableItemOptions()
+					local specificNames={} for _,id in ipairs(specificOptions) do if entry.SpecificItems[id]==true then specificNames[#specificNames+1]=autoServerHopState.OwnedTradeableItemOptionLabel(id) end end
+					fitWholeDropdownNames(specificButton,specificNames,"Select")
+					specificButton.MouseButton1Click:Connect(function()
+						openManagedMultiDropdown(specificButton,specificOptions,entry.SpecificItems,autoServerHopState.OwnedTradeableItemOptionLabel,"Select",function() saveTradeChatOffers() end,function() return rarityUnits(nil)+specificCount()<6 end,rebuildTradeChatOffers)
+					end)
+					y+=featureRowHeight
+					makeOfferSlider("Token Amount",entry.TokenAmount,0,1000000,y,function(v) entry.TokenAmount=v return v end) y+=amountControlsHeight+px(3)
+					checkboxRow("Offer All Tokens",y,function() return entry.OfferAllTokens==true end,function(v) entry.OfferAllTokens=v end) y+=featureRowHeight
+					local clear=buttonBase("Clear Custom Offer",y) clear.MouseButton1Click:Connect(function() entries[entryIndex]=blankTradeChatOffer() saveTradeChatOffers() task.defer(rebuildTradeChatOffers) end) y+=px(31)
+					if entryIndex>1 then local remove=buttonBase("Remove Custom Offer",y) remove.TextColor3=MUTED_TEXT_COLOR remove.MouseButton1Click:Connect(function() table.remove(entries,entryIndex) if #entries==0 then entries[1]=blankTradeChatOffer() end saveTradeChatOffers() task.defer(rebuildTradeChatOffers) end) y+=px(31) end
+					y+=px(12)
+				end
+				local add=buttonBase("Add Another Trade Chat Offer",y) add.MouseButton1Click:Connect(function() entries[#entries+1]=blankTradeChatOffer() saveTradeChatOffers() task.defer(rebuildTradeChatOffers) end) y+=px(35)
+				managerHeight=y secondaryContainer.Size=U2(1,0,0,managerHeight) task.defer(relayoutRows)
+			end
+			rebuildTradeChatOffers()
+		end
+		if isSpecificCriteriaManager and stateEntry then
+			secondaryContainer = New("Frame")
+			secondaryContainer.Name = "SpecificCriteriaManager"
+			secondaryContainer.Position = U2O(0, featureRowHeight)
+			secondaryContainer.Size = U2(1, 0, 0, 0)
+			secondaryContainer.BackgroundTransparency = 1
+			secondaryContainer.BorderSizePixel = 0
+			secondaryContainer.Visible = featureEnabled
+			secondaryContainer.ZIndex = 45013
+			secondaryContainer.Parent = featureRow
+			local entriesKey = definition.SpecificCriteriaStateKey
+			if type(stateEntry[entriesKey]) ~= "table" or #stateEntry[entriesKey] == 0 then
+				stateEntry[entriesKey] = {{Item = nil, Mutations = {}, Traits = {}}}
+			end
+			local managerHeight = px(1)
+			dynamicSecondaryHeight = function() return managerHeight end
+			local function saveSpecificCriteria()
+				local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
+				if type(saver) == "function" then task.defer(saver, true) end
+			end
+			local function isBrainrotName(name)
+				if name == nil then return false end
+				for _, brainrotName in ipairs(autoServerHopState.BoothBrainrotOptions()) do
+					if tostring(brainrotName) == tostring(name) then return true end
+				end
+				return false
+			end
+			local function selectedNames(selection, options)
+				local names = {}
+				if type(selection) == "table" then
+					for _, option in ipairs(options) do
+						if selection[option] == true then names[#names + 1] = tostring(option) end
+					end
+				end
+				return names
+			end
+			local rebuildSpecificCriteria
+			local function openCriteriaDropdown(button, options, multiSelection, onSingle)
+				if multiSelection then
+					openManagedMultiDropdown(
+						button,
+						options,
+						multiSelection,
+						tostring,
+						"Select",
+						function() saveSpecificCriteria() end,
+						nil,
+						function() task.defer(rebuildSpecificCriteria) end
+					)
+					return
+				end
+				if activePanelDropdown and activePanelDropdown.Button == button then
+					closeActivePanelDropdown()
+					return
+				end
+				closeActivePanelDropdown()
+				options = type(options) == "table" and options or {}
+				local searchHeight = px(29)
+				local contentHeight = searchHeight + px(6) + (#options + 1) * px(25)
+				local desiredHeight = math.min(contentHeight, math.max(px(25), window.AbsoluteSize.Y - button.AbsoluteSize.Y - px(12)))
+				ensureDropdownRoomBelow(button, desiredHeight)
+				local overlay = New("Frame")
+				overlay.Name = "DropdownOverlay"
+				overlay.Position = U2S(0, 0)
+				overlay.Size = U2S(1, 1)
+				overlay.BackgroundTransparency = 1
+				overlay.BorderSizePixel = 0
+				overlay.Active = false
+				overlay.ZIndex = 59998
+				overlay.Parent = screenGui
+				local popup = New("ScrollingFrame")
+				popup.Name = "PanelDropdown"
+				popup.BackgroundColor3 = PANEL_BACKGROUND
+				popup.BorderSizePixel = 0
+				popup.ClipsDescendants = true
+				popup.Active = true
+				popup.ScrollBarThickness = px(3)
+				popup.ScrollingDirection = Enum.ScrollingDirection.Y
+				popup.AutomaticCanvasSize = Enum.AutomaticSize.None
+				popup.CanvasSize = U2O(0, contentHeight)
+				popup.ZIndex = 60000
+				popup.Parent = overlay
+				ensureCorner(popup, px(7))
+				local stroke = New("UIStroke")
+				stroke.Color = LINE_COLOR
+				stroke.Thickness = LINE_THICKNESS
+				stroke.Transparency = LINE_TRANSPARENCY
+				stroke.Parent = popup
+				local function syncPosition()
+					if not popup.Parent or not button.Parent or not overlay.Parent then return end
+					local pos, size = button.AbsolutePosition, button.AbsoluteSize
+					local overlayPos = overlay.AbsolutePosition
+					local rootPos, rootSize = window.AbsolutePosition, window.AbsoluteSize
+					local edge = px(6)
+					local width = math.max(1, math.floor(size.X + 0.5))
+					local x = math.clamp(pos.X, rootPos.X + edge, math.max(rootPos.X + edge, rootPos.X + rootSize.X - width - edge))
+					local y = pos.Y + size.Y
+					local available = math.max(0, rootPos.Y + rootSize.Y - edge - y)
+					popup.Position = U2O(x - overlayPos.X, y - overlayPos.Y)
+					popup.Size = U2O(width, math.min(contentHeight, available))
+				end
+				local search = New("TextBox")
+				search.Name = "Search"
+				search.Position = U2O(px(4), px(4))
+				search.Size = U2(1, -px(8), 0, px(22))
+				search.BackgroundColor3 = FEATURE_OFF_COLOR
+				search.BorderSizePixel = 0
+				search.ClearTextOnFocus = false
+				search.PlaceholderText = "Search"
+				search.PlaceholderColor3 = MUTED_TEXT_COLOR
+				search.Text = ""
+				search.TextColor3 = MENU_TEXT_SELECTED
+				search.FontFace = MENU_FONT_FACE
+				setResponsiveTextSize(search, 13)
+				search.TextXAlignment = Enum.TextXAlignment.Left
+				search.TextTruncate = Enum.TextTruncate.AtEnd
+				search.ClipsDescendants = true
+				search.ZIndex = 60002
+				search.Parent = popup
+				ensureCorner(search, px(5))
+				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(search)
+				local optionRows = {}
+				local function addOption(option, label)
+					local row = New("TextButton")
+					row.Size = U2(1, -px(8), 0, px(23))
+					row.BackgroundColor3 = FEATURE_OFF_COLOR
+					row.BackgroundTransparency = 1
+					row.BorderSizePixel = 0
+					row.AutoButtonColor = false
+					row.Text = tostring(label)
+					row.TextColor3 = MUTED_TEXT_COLOR
+					row.FontFace = MENU_FONT_FACE
+					setResponsiveTextSize(row, 13)
+					row.TextTruncate = Enum.TextTruncate.AtEnd
+					row.ClipsDescendants = true
+					row.ZIndex = 60001
+					row.Parent = popup
+					ensureCorner(row, px(5))
+					optionRows[#optionRows + 1] = {Button=row, Option=option, Search=string.lower(tostring(label))}
+					row.MouseButton1Click:Connect(function()
+						if type(onSingle) == "function" then onSingle(option) end
+						saveSpecificCriteria()
+						closeActivePanelDropdown()
+						task.defer(rebuildSpecificCriteria)
+					end)
+				end
+				addOption(nil, "Select")
+				for _, option in ipairs(options) do addOption(option, tostring(option)) end
+				local function filter()
+					local query = string.lower(tostring(search.Text or ""))
+					local visible = 0
+					for _, data in ipairs(optionRows) do
+						local show = query == "" or string.find(data.Search, query, 1, true) ~= nil
+						data.Button.Visible = show
+						if show then
+							data.Button.Position = U2O(px(4), searchHeight + px(3) + visible * px(25))
+							visible += 1
+						end
+					end
+					contentHeight = searchHeight + px(6) + visible * px(25)
+					popup.CanvasSize = U2O(0, contentHeight)
+					syncPosition()
+				end
+				search:GetPropertyChangedSignal("Text"):Connect(filter)
+				local follow = RunService.RenderStepped:Connect(syncPosition)
+				activePanelDropdown = {Popup=popup, Button=button, Overlay=overlay, FollowConnection=follow}
+				attachDropdownOutsideClose(popup, button, overlay)
+				filter()
+				syncPosition()
+				task.defer(function() if search.Parent then pcall(search.CaptureFocus, search) end end)
+			end
+			rebuildSpecificCriteria = function()
+				for _, child in ipairs(secondaryContainer:GetChildren()) do child:Destroy() end
+				local entries = stateEntry[entriesKey]
+				if type(entries) ~= "table" then entries = {} stateEntry[entriesKey] = entries end
+				if #entries == 0 then entries[1] = {Item = nil, Mutations = {}, Traits = {}} end
+				if entries[#entries].Item ~= nil then
+					entries[#entries + 1] = {Item = nil, Mutations = {}, Traits = {}}
+				end
+				while #entries > 1 and entries[#entries].Item == nil and entries[#entries - 1].Item == nil do
+					table.remove(entries, #entries)
+				end
+				local function makeButton(text, yPos)
+					local b = New("TextButton")
+					b.Position = U2O(0, yPos)
+					b.Size = U2(1, 0, 0, px(25))
+					b.BackgroundColor3 = FEATURE_OFF_COLOR
+					b.BorderSizePixel = 0
+					b.AutoButtonColor = false
+					b.Text = text
+					b.TextTruncate = Enum.TextTruncate.AtEnd
+					b.ClipsDescendants = true
+					b.TextColor3 = MENU_TEXT_SELECTED
+					b.FontFace = MENU_FONT_FACE
+					setResponsiveTextSize(b, 13)
+					b.ZIndex = 45015
+					b.Parent = secondaryContainer
+					ensureCorner(b, px(5))
+					rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(b)
+					return b
+				end
+				local y = px(5)
+				local allItems
+				if definition and type(definition.SpecificCriteriaOptionsProvider) == "function" then
+					local ok, provided = pcall(definition.SpecificCriteriaOptionsProvider)
+					allItems = ok and type(provided) == "table" and provided or {}
+				else
+					allItems = autoServerHopState.AllDeletableItemOptions()
+				end
+				for entryIndex, entry in ipairs(entries) do
+					if type(entry) ~= "table" then entry = {Item = nil, Mutations = {}, Traits = {}} entries[entryIndex] = entry end
+					entry.Mutations = type(entry.Mutations) == "table" and entry.Mutations or {}
+					entry.Traits = type(entry.Traits) == "table" and entry.Traits or {}
+					local emptyChoiceText = (entryIndex > 1 and entry.Item == nil) and "Select Another" or "Select"
+					local itemButton = makeButton(entry.Item and tostring(entry.Item) or emptyChoiceText, y)
+					itemButton.MouseButton1Click:Connect(function()
+						openCriteriaDropdown(itemButton, allItems, nil, function(option)
+							entry.Item = option
+							if option == nil or not isBrainrotName(option) then
+								entry.Mutations = {}
+								entry.Traits = {}
+							end
+						end)
+					end)
+					y += px(31)
+					if entry.Item ~= nil and isBrainrotName(entry.Item) then
+						local mutationNames = selectedNames(entry.Mutations, autoServerHopState.BoothMutationOptions())
+						local mutationButton = makeButton(#mutationNames > 0 and ("Mutations: " .. table.concat(mutationNames, ", ")) or "Mutations: Select", y)
+						mutationButton.MouseButton1Click:Connect(function() openCriteriaDropdown(mutationButton, autoServerHopState.BoothMutationOptions(), entry.Mutations, nil) end)
+						y += px(31)
+						local traitNames = selectedNames(entry.Traits, autoServerHopState.BoothTraitOptions())
+						local traitButton = makeButton(#traitNames > 0 and ("Traits: " .. table.concat(traitNames, ", ")) or "Traits: Select", y)
+						traitButton.MouseButton1Click:Connect(function() openCriteriaDropdown(traitButton, autoServerHopState.BoothTraitOptions(), entry.Traits, nil) end)
+						y += px(31)
+					end
+					if entryIndex == 1 or entry.Item ~= nil then
+						local clearChoice = makeButton("Clear Choice", y)
+						clearChoice.TextColor3 = MENU_TEXT_SELECTED
+						clearChoice.MouseButton1Click:Connect(function()
+							entry.Item = nil
+							entry.Mutations = {}
+							entry.Traits = {}
+							saveSpecificCriteria()
+							task.defer(rebuildSpecificCriteria)
+						end)
+						y += px(31)
+					end
+					if entryIndex > 1 and entry.Item ~= nil then
+						local remove = makeButton("Remove", y)
+						remove.TextColor3 = MUTED_TEXT_COLOR
+						remove.MouseButton1Click:Connect(function()
+							table.remove(entries, entryIndex)
+							saveSpecificCriteria()
+							task.defer(rebuildSpecificCriteria)
+						end)
+						y += px(31)
+					end
+					y += px(6)
+				end
+				managerHeight = y
+				secondaryContainer.Size = U2(1, 0, 0, managerHeight)
+				task.defer(relayoutRows)
+			end
+			rebuildSpecificCriteria()
+		end
 		if isUtilityText and stateEntry then
 			secondaryContainer = New("Frame")
 			secondaryContainer.Name = "TextInputRow"
@@ -4261,7 +5800,6 @@ local function createEmptyCollapsiblePanel(
 			secondaryContainer.Visible = featureEnabled
 			secondaryContainer.ZIndex = 45013
 			secondaryContainer.Parent = featureRow
-
 			local inputBox = New("TextBox")
 			utilityTextBox = inputBox
 			inputBox.Name = "MessageInput"
@@ -4290,12 +5828,10 @@ local function createEmptyCollapsiblePanel(
 			inputBox.Parent = secondaryContainer
 			ensureCorner(inputBox, px(6))
 			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(inputBox)
-
 			local inputPadding = New("UIPadding")
 			inputPadding.PaddingLeft = UDim.new(0, px(9))
 			inputPadding.PaddingRight = UDim.new(0, px(9))
 			inputPadding.Parent = inputBox
-
 			local editingKey = definition.EditingKey
 				or (
 					definition.UtilityTextKey == "AutoChatMessage"
@@ -4308,34 +5844,27 @@ local function createEmptyCollapsiblePanel(
 						and "AutoChatMessageRevision"
 						or "AutoTradeMessageRevision"
 				)
-
-
-
 			featureLabel.TextColor3 = tostring(
 				stateEntry[definition.UtilityTextKey] or ""
 			) ~= ""
 				and MENU_TEXT_SELECTED
 				or MUTED_TEXT_COLOR
-
 			inputBox.Focused:Connect(function()
 				stateEntry[editingKey] = true
 				inputBox.TextColor3 = inputBox.Text ~= ""
 					and MENU_TEXT_SELECTED
 					or MUTED_TEXT_COLOR
-
 				featureLabel.TextColor3 = tostring(
 					stateEntry[definition.UtilityTextKey] or ""
 				) ~= ""
 					and MENU_TEXT_SELECTED
 					or MUTED_TEXT_COLOR
 			end)
-
 			inputBox:GetPropertyChangedSignal("Text"):Connect(function()
 				inputBox.TextColor3 = inputBox.Text ~= ""
 					and MENU_TEXT_SELECTED
 					or MUTED_TEXT_COLOR
 			end)
-
 			inputBox.FocusLost:Connect(function()
 				stateEntry[definition.UtilityTextKey] = inputBox.Text
 				stateEntry[editingKey] = false
@@ -4348,7 +5877,6 @@ local function createEmptyCollapsiblePanel(
 				featureLabel.TextColor3 = committedColor
 			end)
 		end
-
 		if (isUtilityDropdown or isUtilityMultiDropdown) and stateEntry then
 			local dropdownButton = New("TextButton")
 			utilityDropdownButton = dropdownButton
@@ -4362,12 +5890,11 @@ local function createEmptyCollapsiblePanel(
 			dropdownButton.FontFace = MENU_FONT_FACE
 			setResponsiveTextSize(dropdownButton, 14)
 			dropdownButton.TextColor3 = MENU_TEXT_SELECTED
-			dropdownButton.TextTruncate = Enum.TextTruncate.None
+			dropdownButton.TextTruncate = Enum.TextTruncate.AtEnd
 			dropdownButton.ZIndex = 45014
 			dropdownButton.Parent = featureRow
 			ensureCorner(dropdownButton, px(6))
 			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(dropdownButton)
-
 			local function utilitySelectionTable()
 				if not isUtilityMultiDropdown then return nil end
 				local key = definition.UtilityMultiDropdownKey
@@ -4376,7 +5903,6 @@ local function createEmptyCollapsiblePanel(
 				end
 				return stateEntry[key]
 			end
-
 			local function sanitizeUtilityMultiSelection()
 				local selected = utilitySelectionTable()
 				if not selected then return end
@@ -4394,7 +5920,6 @@ local function createEmptyCollapsiblePanel(
 					if not allowed[option] then selected[option] = nil end
 				end
 			end
-
 			local function syncUtilityDropdownText()
 				if isUtilityMultiDropdown then
 					sanitizeUtilityMultiSelection()
@@ -4444,7 +5969,6 @@ local function createEmptyCollapsiblePanel(
 			task.defer(syncUtilityDropdownText)
 			dropdownButton:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncUtilityDropdownText)
 			dropdownButton:GetPropertyChangedSignal("TextSize"):Connect(syncUtilityDropdownText)
-
 			dropdownButton.MouseButton1Click:Connect(function()
 				if activePanelDropdown and activePanelDropdown.Button == dropdownButton then
 					closeActivePanelDropdown()
@@ -4452,7 +5976,6 @@ local function createEmptyCollapsiblePanel(
 				end
 				closeActivePanelDropdown()
 				sanitizeUtilityMultiSelection()
-
 				local popupOptions = {}
 				local excluded = definition.ExcludeUtilityDropdownKey
 					and stateEntry[definition.ExcludeUtilityDropdownKey]
@@ -4462,7 +5985,6 @@ local function createEmptyCollapsiblePanel(
 						popupOptions[#popupOptions + 1] = option
 					end
 				end
-
 				local overlay = New("Frame")
 				overlay.Name = "DropdownOverlay"
 				overlay.Position = U2S(0, 0)
@@ -4472,7 +5994,6 @@ local function createEmptyCollapsiblePanel(
 				overlay.Active = false
 				overlay.ZIndex = 59998
 				overlay.Parent = screenGui
-
 				local blocker = New("Frame")
 				blocker.Name = "DropdownInputPassThrough"
 				blocker.Size = U2S(1, 1)
@@ -4481,15 +6002,11 @@ local function createEmptyCollapsiblePanel(
 				blocker.Active = false
 				blocker.ZIndex = 59999
 				blocker.Parent = overlay
-
 				local dropdownSearchHeight = px(29)
 				local popupContentHeight = dropdownSearchHeight + px(6) + (#popupOptions * px(25))
-
-
-
 				local desiredVisibleHeight = math.min(
 					popupContentHeight,
-					math.floor(window.AbsoluteSize.Y * 0.42)
+					math.max(px(25), window.AbsoluteSize.Y - dropdownButton.AbsoluteSize.Y - px(12))
 				)
 				if dropdownButton:IsDescendantOf(rightContent) then
 					local buttonBottom = dropdownButton.AbsolutePosition.Y
@@ -4514,7 +6031,6 @@ local function createEmptyCollapsiblePanel(
 						)
 					end
 				end
-
 				local popup = New("ScrollingFrame")
 				popup.Name = "PanelDropdown"
 				popup.BackgroundColor3 = PANEL_BACKGROUND
@@ -4528,13 +6044,11 @@ local function createEmptyCollapsiblePanel(
 				popup.ZIndex = 60000
 				popup.Parent = overlay
 				ensureCorner(popup, px(7))
-
 				local stroke = New("UIStroke")
 				stroke.Color = LINE_COLOR
 				stroke.Thickness = LINE_THICKNESS
 				stroke.Transparency = LINE_TRANSPARENCY
 				stroke.Parent = popup
-
 				local function syncPopupPosition()
 					if not popup.Parent or not dropdownButton.Parent or not window.Parent then return end
 					local buttonAbs = dropdownButton.AbsolutePosition
@@ -4563,9 +6077,8 @@ local function createEmptyCollapsiblePanel(
 				end
 				syncPopupPosition()
 				task.defer(syncPopupPosition)
-
 				local followConnection =
-					game:GetService("RunService").RenderStepped:Connect(syncPopupPosition)
+					RunService.RenderStepped:Connect(syncPopupPosition)
 				activePanelDropdown = {
 					Popup = popup,
 					Button = dropdownButton,
@@ -4573,7 +6086,6 @@ local function createEmptyCollapsiblePanel(
 					Overlay = overlay,
 					FollowConnection = followConnection,
 				}
-
 				local openedAt = os.clock()
 				local outsideConnection
 				outsideConnection = UserInputService.InputBegan:Connect(function(input)
@@ -4596,7 +6108,6 @@ local function createEmptyCollapsiblePanel(
 					end)
 				end)
 				activePanelDropdown.OutsideConnection = outsideConnection
-
 				local dropdownSearch = New("TextBox")
 				dropdownSearch.Name = "Search"
 				dropdownSearch.Position = U2O(px(4), px(4))
@@ -4611,6 +6122,8 @@ local function createEmptyCollapsiblePanel(
 				dropdownSearch.FontFace = MENU_FONT_FACE
 				setResponsiveTextSize(dropdownSearch, 13)
 				dropdownSearch.TextXAlignment = Enum.TextXAlignment.Left
+				dropdownSearch.TextTruncate = Enum.TextTruncate.AtEnd
+				dropdownSearch.ClipsDescendants = true
 				dropdownSearch.ZIndex = 60002
 				dropdownSearch.Parent = popup
 				ensureCorner(dropdownSearch, px(5))
@@ -4619,7 +6132,6 @@ local function createEmptyCollapsiblePanel(
 				dropdownSearchPadding.PaddingLeft = UDim.new(0, px(7))
 				dropdownSearchPadding.PaddingRight = UDim.new(0, px(7))
 				dropdownSearchPadding.Parent = dropdownSearch
-
 				local optionButtons = {}
 				local optionSearchLabels = {}
 				local function filterUtilityOptions()
@@ -4661,7 +6173,6 @@ local function createEmptyCollapsiblePanel(
 							or MUTED_TEXT_COLOR
 					end
 				end
-
 				for optionIndex, option in ipairs(popupOptions) do
 					local optionButton = New("TextButton")
 					optionButton.Name = tostring(option)
@@ -4674,6 +6185,8 @@ local function createEmptyCollapsiblePanel(
 					optionButton.BorderSizePixel = 0
 					optionButton.AutoButtonColor = false
 					optionButton.Text = definitionOptionLabel(option)
+					optionButton.TextTruncate = Enum.TextTruncate.AtEnd
+					optionButton.ClipsDescendants = true
 					optionSearchLabels[option] = string.lower(optionButton.Text)
 					optionButton.FontFace = MENU_FONT_FACE
 					setResponsiveTextSize(optionButton, 14)
@@ -4681,17 +6194,14 @@ local function createEmptyCollapsiblePanel(
 					optionButton.Parent = popup
 					optionButtons[option] = optionButton
 					ensureCorner(optionButton, px(5))
-
 					optionButton.MouseButton1Click:Connect(function()
 						if isUtilityMultiDropdown then
 							local selected = utilitySelectionTable()
 							selected[option] = selected[option] ~= true and true or nil
 							syncUtilityDropdownText()
 							refreshUtilityOptionVisuals()
-
 							return
 						end
-
 						stateEntry[definition.UtilityDropdownKey] = option
 						if definition.ClearsUtilityDropdownKey
 							and stateEntry[definition.ClearsUtilityDropdownKey] == option
@@ -4723,7 +6233,6 @@ local function createEmptyCollapsiblePanel(
 				end)
 			end)
 		end
-
 		if hasDropdown and not isUtilityDropdown and not isUtilityMultiDropdown then
 			stateEntry.Amounts = stateEntry.Amounts or {}
 			stateEntry.Targets = stateEntry.Targets or {}
@@ -4746,7 +6255,6 @@ local function createEmptyCollapsiblePanel(
 				secondaryContainer.ZIndex = 45013
 				secondaryContainer.Parent = featureRow
 				dropdownParent = secondaryContainer
-
 				secondaryLabel = New("TextLabel")
 				secondaryLabel.Name = isAutoSit
 					and "OpponentMustOwnLabel"
@@ -4773,7 +6281,6 @@ local function createEmptyCollapsiblePanel(
 				secondaryLabel.ZIndex = 45014
 				secondaryLabel.Parent = secondaryContainer
 			end
-
 			local dropdownButton = New("TextButton")
 			standardDropdownButton = dropdownButton
 			dropdownButton.Name = "Dropdown"
@@ -4790,7 +6297,7 @@ local function createEmptyCollapsiblePanel(
 			dropdownButton.TextColor3 = MENU_TEXT_SELECTED
 			dropdownButton.FontFace = MENU_FONT_FACE
 			setResponsiveTextSize(dropdownButton, 14)
-			dropdownButton.TextTruncate = Enum.TextTruncate.None
+			dropdownButton.TextTruncate = Enum.TextTruncate.AtEnd
 			dropdownButton.ZIndex = 45014
 			dropdownButton.Parent = dropdownParent
 			ensureCorner(dropdownButton, px(6))
@@ -4807,7 +6314,6 @@ local function createEmptyCollapsiblePanel(
 			task.defer(syncStandardDropdownText)
 			dropdownButton:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncStandardDropdownText)
 			dropdownButton:GetPropertyChangedSignal("TextSize"):Connect(syncStandardDropdownText)
-
 			amountContainer = New("Frame")
 			amountContainer.Name = "AmountControls"
 			local amountNestedIndent = 0
@@ -4821,11 +6327,10 @@ local function createEmptyCollapsiblePanel(
 			amountContainer.Visible = featureEnabled
 			amountContainer.ZIndex = 45013
 			amountContainer.Parent = featureRow
-
 			local function makeAmountControl(option)
 				local isToken = option == "Tokens"
 				local minAmount = isToken and isOfferSubrow and 0 or 1
-				local maxAmount = isToken and 100000
+				local maxAmount = isToken and 1000000
 					or ((isAutoSit or isAutoCancel) and 100 or 6)
 				local frame = New("Frame")
 				frame.Name = option .. "AmountControl"
@@ -4836,7 +6341,6 @@ local function createEmptyCollapsiblePanel(
 					and ((isOfferSubrow and isToken) or stateEntry.Targets[option] == true)
 				frame.ZIndex = 45013
 				frame.Parent = amountContainer
-
 				local label = New("TextLabel")
 				label.Name = "AmountLabel"
 				label.Position = U2O(0, 0)
@@ -4854,7 +6358,6 @@ local function createEmptyCollapsiblePanel(
 				label.TextXAlignment = Enum.TextXAlignment.Left
 				label.ZIndex = 45014
 				label.Parent = frame
-
 				local valueBox = New("TextBox")
 				valueBox.Name = "AmountValue"
 				valueBox.AnchorPoint = V2(1, 0)
@@ -4875,7 +6378,6 @@ local function createEmptyCollapsiblePanel(
 				valueBox.Parent = frame
 				ensureCorner(valueBox, px(5))
 				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(valueBox)
-
 				local sliderTrack = New("Frame")
 				sliderTrack.Name = "SliderTrack"
 				sliderTrack.Position = U2O(0, px(27))
@@ -4887,7 +6389,6 @@ local function createEmptyCollapsiblePanel(
 				sliderTrack.Parent = frame
 				ensureCorner(sliderTrack, px(3))
 				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(sliderTrack)
-
 				local sliderFill = New("Frame")
 				sliderFill.Name = "Fill"
 				sliderFill.BackgroundColor3 = PINK
@@ -4895,7 +6396,6 @@ local function createEmptyCollapsiblePanel(
 				sliderFill.ZIndex = 45015
 				sliderFill.Parent = sliderTrack
 				ensureCorner(sliderFill, px(3))
-
 				local sliderKnob = New("Frame")
 				sliderKnob.Name = "Knob"
 				sliderKnob.AnchorPoint = V2(0.5, 0.5)
@@ -4905,13 +6405,12 @@ local function createEmptyCollapsiblePanel(
 				sliderKnob.ZIndex = 45016
 				sliderKnob.Parent = sliderTrack
 				ensureCorner(sliderKnob, px(6))
-
 				local function currentValue()
 					if isToken then
 						return math.clamp(
 							math.floor(tonumber(stateEntry.Tokens) or minAmount),
 							minAmount,
-							100000
+							1000000
 						)
 					end
 					return math.clamp(
@@ -4920,7 +6419,6 @@ local function createEmptyCollapsiblePanel(
 						(isAutoSit or isAutoCancel) and 100 or 6
 					)
 				end
-
 				local function setAmount(amount, updateBox)
 					amount = math.clamp(
 						math.floor(tonumber(amount) or minAmount),
@@ -4964,10 +6462,8 @@ local function createEmptyCollapsiblePanel(
 					sliderFill.Size = U2S(alpha, 1)
 					sliderKnob.Position = U2(alpha, 0, 0.5, 0)
 				end
-
 				setAmount(currentValue(), true)
 				valueBox.FocusLost:Connect(function() setAmount(valueBox.Text, true) end)
-
 				local function updateSlider(pointX)
 					local width = math.max(1, sliderTrack.AbsoluteSize.X)
 					local alpha = math.clamp((pointX - sliderTrack.AbsolutePosition.X) / width, 0, 1)
@@ -4983,12 +6479,70 @@ local function createEmptyCollapsiblePanel(
 						beginSliderDrag(input, updateSlider)
 					end
 				end)
-
-				local control = {Frame = frame, Option = option, SetAmount = setAmount, ValueBox = valueBox}
+				local controlHeight = amountControlsHeight
+				if isAutoSit and not isToken then
+					local utility = autoServerHopState.Utility
+					local function makeInlineFilter(labelText, stateKey, yOffset, optionsProvider)
+						if type(utility[stateKey]) ~= "table" then utility[stateKey] = {} end
+						local filterLabel = New("TextLabel")
+						filterLabel.Position = U2O(0, yOffset)
+						filterLabel.Size = U2(1, -(dropdownWidth + componentLabelGap), 0, px(24))
+						filterLabel.BackgroundTransparency = 1
+						filterLabel.BorderSizePixel = 0
+						filterLabel.Text = labelText
+						filterLabel.TextColor3 = MUTED_TEXT_COLOR
+						filterLabel.FontFace = MENU_FONT_FACE
+						setResponsiveTextSize(filterLabel, 14)
+						filterLabel.TextXAlignment = Enum.TextXAlignment.Left
+						filterLabel.TextYAlignment = Enum.TextYAlignment.Center
+						filterLabel.ZIndex = 45014
+						filterLabel.Parent = frame
+						local filterButton = New("TextButton")
+						filterButton.AnchorPoint = V2(1, 0)
+						filterButton.Position = U2(1, 0, 0, yOffset)
+						filterButton.Size = U2O(dropdownWidth, px(24))
+						filterButton.BackgroundColor3 = FEATURE_OFF_COLOR
+						filterButton.BorderSizePixel = 0
+						filterButton.AutoButtonColor = false
+						filterButton.TextTruncate = Enum.TextTruncate.AtEnd
+						filterButton.ClipsDescendants = true
+						filterButton.FontFace = MENU_FONT_FACE
+						setResponsiveTextSize(filterButton, 14)
+						filterButton.ZIndex = 45015
+						filterButton.Parent = frame
+						ensureCorner(filterButton, px(6))
+						rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(filterButton)
+						local function options()
+							local ok, provided = pcall(optionsProvider)
+							return ok and type(provided) == "table" and provided or {}
+						end
+						local function refreshText()
+							local names = {}
+							for _, choice in ipairs(options()) do
+								if utility[stateKey][choice] == true then names[#names + 1] = tostring(choice) end
+							end
+							fitWholeDropdownNames(filterButton, names, "Select")
+						end
+						refreshText()
+						filterButton.MouseButton1Click:Connect(function()
+							openManagedMultiDropdown(
+								filterButton, options(), utility[stateKey], tostring, "Select",
+								function()
+									refreshText()
+									local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
+									if type(saver) == "function" then task.defer(saver, true) end
+								end
+							)
+						end)
+					end
+					makeInlineFilter("Mutations", "AutoSit" .. option .. "Mutations", amountControlsHeight + px(4), function() return autoServerHopState.BoothMutationOptions() end)
+					makeInlineFilter("Traits", "AutoSit" .. option .. "Traits", amountControlsHeight + secondaryControlHeight + px(4), function() return autoServerHopState.BoothTraitOptions() end)
+					controlHeight = amountControlsHeight + (secondaryControlHeight * 2) + px(4)
+				end
+				local control = {Frame = frame, Option = option, SetAmount = setAmount, ValueBox = valueBox, Height = controlHeight}
 				amountControls[#amountControls + 1] = control
 				return control
 			end
-
 			local controlsByOption = {}
 			if not isDropdownOnly then
 				for _, option in ipairs(definition.Options) do
@@ -4999,17 +6553,12 @@ local function createEmptyCollapsiblePanel(
 					controlsByOption.Tokens.Frame.Visible = featureEnabled
 				end
 			end
-
 			dropdownButton.MouseButton1Click:Connect(function()
 				if activePanelDropdown and activePanelDropdown.Button == dropdownButton then
 					closeActivePanelDropdown()
 					return
 				end
 				closeActivePanelDropdown()
-
-
-
-
 				local overlay = New("Frame")
 				overlay.Name = "DropdownOverlay"
 				overlay.AnchorPoint = V2(0, 0)
@@ -5021,10 +6570,6 @@ local function createEmptyCollapsiblePanel(
 				overlay.Active = false
 				overlay.ZIndex = 59998
 				overlay.Parent = screenGui
-
-
-
-
 				local blocker = New("Frame")
 				blocker.Name = "DropdownInputPassThrough"
 				blocker.AnchorPoint = V2(0, 0)
@@ -5035,7 +6580,6 @@ local function createEmptyCollapsiblePanel(
 				blocker.Active = false
 				blocker.ZIndex = 59999
 				blocker.Parent = overlay
-
 				local popupOptions = {}
 				if isAutoSit then popupOptions[#popupOptions + 1] = "Any" end
 				for _, option in ipairs(definition.Options) do
@@ -5043,13 +6587,9 @@ local function createEmptyCollapsiblePanel(
 				end
 				local dropdownSearchHeight = px(29)
 				local popupContentHeight = dropdownSearchHeight + px(6) + (#popupOptions * px(25))
-
-
-
-
 				local desiredVisibleHeight = math.min(
 					popupContentHeight,
-					math.floor(window.AbsoluteSize.Y * 0.42)
+					math.max(px(25), window.AbsoluteSize.Y - dropdownButton.AbsoluteSize.Y - px(12))
 				)
 				if dropdownButton:IsDescendantOf(rightContent) then
 					local buttonBottom = dropdownButton.AbsolutePosition.Y
@@ -5073,7 +6613,6 @@ local function createEmptyCollapsiblePanel(
 						)
 					end
 				end
-
 				local popup = New("ScrollingFrame")
 				popup.Name = "PanelDropdown"
 				popup.AnchorPoint = V2(0, 0)
@@ -5087,9 +6626,7 @@ local function createEmptyCollapsiblePanel(
 				popup.CanvasSize = U2O(0, popupContentHeight)
 				popup.AutomaticCanvasSize = Enum.AutomaticSize.None
 				popup.ZIndex = 60000
-
 				popup.Parent = overlay
-
 				local function syncPopupPosition()
 					if not popup.Parent
 						or not overlay.Parent
@@ -5098,21 +6635,15 @@ local function createEmptyCollapsiblePanel(
 					then
 						return
 					end
-
 					local buttonAbs = dropdownButton.AbsolutePosition
 					local buttonSize = dropdownButton.AbsoluteSize
 					local overlayAbs = overlay.AbsolutePosition
 					local windowAbs = window.AbsolutePosition
 					local windowSize = window.AbsoluteSize
 					local edgeInset = px(6)
-
-
-
 					local localX = buttonAbs.X - overlayAbs.X
 					local localY = buttonAbs.Y - overlayAbs.Y + buttonSize.Y
 					local popupWidth = math.floor(buttonSize.X + 0.5)
-
-
 					local minAbsX = windowAbs.X + edgeInset
 					local maxAbsX = windowAbs.X + windowSize.X - popupWidth - edgeInset
 					local popupAbsX = math.clamp(
@@ -5121,19 +6652,14 @@ local function createEmptyCollapsiblePanel(
 						math.max(minAbsX, maxAbsX)
 					)
 					localX = popupAbsX - overlayAbs.X
-
-
-
 					local popupAbsY = buttonAbs.Y + buttonSize.Y
 					local maxBottom = windowAbs.Y + windowSize.Y - edgeInset
 					local availableBelow = math.max(0, maxBottom - popupAbsY)
 					local visibleHeight = math.min(popupContentHeight, availableBelow)
-
 					popup.Position = U2O(localX, localY)
 					popup.Size = U2O(popupWidth, visibleHeight)
 					popup.CanvasSize = U2O(0, popupContentHeight)
 				end
-
 				syncPopupPosition()
 				task.defer(syncPopupPosition)
 				ensureCorner(popup, px(7))
@@ -5142,7 +6668,7 @@ local function createEmptyCollapsiblePanel(
 				stroke.Thickness = LINE_THICKNESS
 				stroke.Transparency = LINE_TRANSPARENCY
 				stroke.Parent = popup
-				local followConnection = game:GetService("RunService").RenderStepped:Connect(syncPopupPosition)
+				local followConnection = RunService.RenderStepped:Connect(syncPopupPosition)
 				activePanelDropdown = {
 					Popup = popup,
 					Button = dropdownButton,
@@ -5150,7 +6676,6 @@ local function createEmptyCollapsiblePanel(
 					Overlay = overlay,
 					FollowConnection = followConnection,
 				}
-
 				local openedAt = os.clock()
 				local outsideConnection
 				outsideConnection = UserInputService.InputBegan:Connect(
@@ -5165,20 +6690,15 @@ local function createEmptyCollapsiblePanel(
 						then
 							return
 						end
-
-
 						if os.clock() - openedAt < 0.05 then
 							return
 						end
-
 						local point = input.Position
 						if pointInsideGui(popup, point)
 							or pointInsideGui(dropdownButton, point)
 						then
 							return
 						end
-
-
 						task.defer(function()
 							if activePanelDropdown
 								and activePanelDropdown.Popup == popup
@@ -5189,7 +6709,6 @@ local function createEmptyCollapsiblePanel(
 					end
 				)
 				activePanelDropdown.OutsideConnection = outsideConnection
-
 				local dropdownSearch = New("TextBox")
 				dropdownSearch.Name = "Search"
 				dropdownSearch.Position = U2O(px(4), px(4))
@@ -5204,6 +6723,8 @@ local function createEmptyCollapsiblePanel(
 				dropdownSearch.FontFace = MENU_FONT_FACE
 				setResponsiveTextSize(dropdownSearch, 13)
 				dropdownSearch.TextXAlignment = Enum.TextXAlignment.Left
+				dropdownSearch.TextTruncate = Enum.TextTruncate.AtEnd
+				dropdownSearch.ClipsDescendants = true
 				dropdownSearch.ZIndex = 60002
 				dropdownSearch.Parent = popup
 				ensureCorner(dropdownSearch, px(5))
@@ -5212,7 +6733,6 @@ local function createEmptyCollapsiblePanel(
 				dropdownSearchPadding.PaddingLeft = UDim.new(0, px(7))
 				dropdownSearchPadding.PaddingRight = UDim.new(0, px(7))
 				dropdownSearchPadding.Parent = dropdownSearch
-
 				local optionButtons = {}
 				local optionSearchLabels = {}
 				local function filterStandardOptions()
@@ -5254,7 +6774,6 @@ local function createEmptyCollapsiblePanel(
 						optionButton.TextColor3 = selected and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR
 					end
 				end
-
 				for optionIndex, option in ipairs(popupOptions) do
 					local optionButton = New("TextButton")
 					optionButton.Name = option
@@ -5271,6 +6790,8 @@ local function createEmptyCollapsiblePanel(
 					optionButton.BorderSizePixel = 0
 					optionButton.AutoButtonColor = false
 					optionButton.Text = option
+					optionButton.TextTruncate = Enum.TextTruncate.AtEnd
+					optionButton.ClipsDescendants = true
 					optionSearchLabels[option] = string.lower(tostring(option))
 					optionButton.TextColor3 = selected and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR
 					optionButton.FontFace = MENU_FONT_FACE
@@ -5293,7 +6814,6 @@ local function createEmptyCollapsiblePanel(
 							relayoutRows()
 							return
 						end
-
 						local nowSelected = stateEntry.Targets[option] ~= true
 						if nowSelected
 							and not isAutoSit
@@ -5307,7 +6827,7 @@ local function createEmptyCollapsiblePanel(
 						stateEntry.Targets[option] = nowSelected or nil
 						if nowSelected and not isDropdownOnly then
 							if option == "Tokens" then
-								stateEntry.Tokens = math.clamp(math.floor(tonumber(stateEntry.Tokens) or 1), 1, 100000)
+								stateEntry.Tokens = math.clamp(math.floor(tonumber(stateEntry.Tokens) or 1), 1, 1000000)
 							else
 								local upper = (isAutoSit or isAutoCancel) and 100 or 6
 								stateEntry.Amounts[option] = math.clamp(
@@ -5339,6 +6859,7 @@ local function createEmptyCollapsiblePanel(
 								)
 							end
 						end
+						refreshUtilityChildVisibility()
 						relayoutRows()
 					end)
 				end
@@ -5351,8 +6872,6 @@ local function createEmptyCollapsiblePanel(
 				end)
 			end)
 		end
-
-
 		if (isServerHop or isUtilitySlider)
 			and stateEntry
 			and (definition.SliderKey or definition.ServerHopSliderKey or definition.UtilitySliderKey)
@@ -5369,7 +6888,6 @@ local function createEmptyCollapsiblePanel(
 			amountContainer.Visible = featureEnabled
 			amountContainer.ZIndex = 45013
 			amountContainer.Parent = featureRow
-
 			local sliderFrame = New("Frame")
 			sliderFrame.Name = "Slider"
 			sliderFrame.Size = U2(1, 0, 0, amountControlsHeight)
@@ -5377,7 +6895,6 @@ local function createEmptyCollapsiblePanel(
 			sliderFrame.Visible = featureEnabled
 			sliderFrame.ZIndex = 45013
 			sliderFrame.Parent = amountContainer
-
 			local valueBox = New("TextBox")
 			valueBox.Name = "Minutes"
 			valueBox.AnchorPoint = V2(1, 0)
@@ -5396,7 +6913,6 @@ local function createEmptyCollapsiblePanel(
 			valueBox.Parent = sliderFrame
 			ensureCorner(valueBox, px(5))
 			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(valueBox)
-
 			local unitLabel = New("TextLabel")
 			unitLabel.BackgroundTransparency = 1
 			unitLabel.Size = U2(1, -amountValueWidth - componentLabelGap, 0, px(15))
@@ -5408,7 +6924,6 @@ local function createEmptyCollapsiblePanel(
 			unitLabel.TextXAlignment = Enum.TextXAlignment.Left
 			unitLabel.ZIndex = 45014
 			unitLabel.Parent = sliderFrame
-
 			local sliderTrack = New("Frame")
 			sliderTrack.Name = "SliderTrack"
 			sliderTrack.Position = U2O(0, px(27))
@@ -5420,14 +6935,12 @@ local function createEmptyCollapsiblePanel(
 			sliderTrack.Parent = sliderFrame
 			ensureCorner(sliderTrack, px(3))
 			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(sliderTrack)
-
 			local sliderFill = New("Frame")
 			sliderFill.BackgroundColor3 = PINK
 			sliderFill.BorderSizePixel = 0
 			sliderFill.ZIndex = 45015
 			sliderFill.Parent = sliderTrack
 			ensureCorner(sliderFill, px(3))
-
 			local sliderKnob = New("Frame")
 			sliderKnob.AnchorPoint = V2(0.5, 0.5)
 			sliderKnob.Size = U2O(px(11), px(11))
@@ -5436,12 +6949,22 @@ local function createEmptyCollapsiblePanel(
 			sliderKnob.ZIndex = 45016
 			sliderKnob.Parent = sliderTrack
 			ensureCorner(sliderKnob, px(6))
-
 			local minValue = definition.MinValue or 1
-			local maxValue = definition.MaxValue or 60
+			local defaultMaxValue = definition.MaxValue or 60
 			local stepValue = tonumber(definition.Step) or 1
 			local decimals = math.max(0, math.floor(tonumber(definition.Decimals) or 0))
+			local function resolvedMaxValue()
+				local maxValue = defaultMaxValue
+				if type(definition.MaxValueProvider) == "function" then
+					local ok, provided = pcall(definition.MaxValueProvider)
+					if ok and tonumber(provided) ~= nil then
+						maxValue = tonumber(provided)
+					end
+				end
+				return math.max(minValue, maxValue)
+			end
 			local function normalizeSliderValue(value)
+				local maxValue = resolvedMaxValue()
 				value = math.clamp(tonumber(value) or minValue, minValue, maxValue)
 				if stepValue > 0 then
 					value = minValue + math.floor(((value - minValue) / stepValue) + 0.5) * stepValue
@@ -5459,14 +6982,13 @@ local function createEmptyCollapsiblePanel(
 				value = normalizeSliderValue(value)
 				stateEntry[resolvedSliderKey] = value
 				if updateText then valueBox.Text = sliderValueText(value) end
-
 				local sliderTextColor = value > 0
 					and MENU_TEXT_SELECTED
 					or MUTED_TEXT_COLOR
 				featureLabel.TextColor3 = sliderTextColor
 				unitLabel.TextColor3 = MUTED_TEXT_COLOR
 				valueBox.TextColor3 = sliderTextColor
-
+				local maxValue = resolvedMaxValue()
 				local alpha = maxValue == minValue and 0 or ((value - minValue) / (maxValue - minValue))
 				sliderFill.Size = U2S(alpha, 1)
 				sliderKnob.Position = U2(alpha, 0, 0.5, 0)
@@ -5475,10 +6997,10 @@ local function createEmptyCollapsiblePanel(
 			valueBox.FocusLost:Connect(function()
 				setValue(valueBox.Text, true)
 			end)
-
 			local function updateSlider(pointX)
 				local width = math.max(1, sliderTrack.AbsoluteSize.X)
 				local alpha = math.clamp((pointX - sliderTrack.AbsolutePosition.X) / width, 0, 1)
+				local maxValue = resolvedMaxValue()
 				setValue(minValue + alpha * (maxValue - minValue), true)
 			end
 			sliderTrack.InputBegan:Connect(function(input)
@@ -5488,7 +7010,6 @@ local function createEmptyCollapsiblePanel(
 					beginSliderDrag(input, updateSlider)
 				end
 			end)
-
 			amountControls[#amountControls + 1] = {
 				Frame = sliderFrame,
 				Option = resolvedSliderKey,
@@ -5496,12 +7017,10 @@ local function createEmptyCollapsiblePanel(
 				ValueBox = valueBox,
 			}
 		end
-
 		if isAutoAccept and stateEntry then
 			local acceptKey = definition.AcceptKey
 			local isToken = acceptKey == "Tokens"
-			local maxAmount = isToken and 100000 or 6
-
+			local maxAmount = isToken and 1000000 or 6
 			amountContainer = New("Frame")
 			amountContainer.Name = "AmountControls"
 			local amountNestedIndent = 0
@@ -5511,7 +7030,6 @@ local function createEmptyCollapsiblePanel(
 			amountContainer.BorderSizePixel = 0
 			amountContainer.ZIndex = 45013
 			amountContainer.Parent = featureRow
-
 			local amountFrame = New("Frame")
 			amountFrame.Name = acceptKey .. "AmountControl"
 			amountFrame.Size = U2(1, 0, 0, amountControlsHeight)
@@ -5520,7 +7038,6 @@ local function createEmptyCollapsiblePanel(
 			amountFrame.Visible = featureEnabled
 			amountFrame.ZIndex = 45013
 			amountFrame.Parent = amountContainer
-
 			local amountLabel = New("TextLabel")
 			amountLabel.Name = "AmountLabel"
 			amountLabel.Position = U2O(0, 0)
@@ -5534,7 +7051,6 @@ local function createEmptyCollapsiblePanel(
 			amountLabel.TextXAlignment = Enum.TextXAlignment.Left
 			amountLabel.ZIndex = 45014
 			amountLabel.Parent = amountFrame
-
 			local amountValue = New("TextBox")
 			amountValue.Name = "AmountValue"
 			amountValue.AnchorPoint = V2(1, 0)
@@ -5553,7 +7069,6 @@ local function createEmptyCollapsiblePanel(
 			amountValue.Parent = amountFrame
 			ensureCorner(amountValue, px(5))
 			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(amountValue)
-
 			local sliderTrack = New("Frame")
 			sliderTrack.Name = "SliderTrack"
 			sliderTrack.Position = U2O(0, px(27))
@@ -5565,7 +7080,6 @@ local function createEmptyCollapsiblePanel(
 			sliderTrack.Parent = amountFrame
 			ensureCorner(sliderTrack, px(3))
 			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(sliderTrack)
-
 			local sliderFill = New("Frame")
 			sliderFill.Name = "Fill"
 			sliderFill.BackgroundColor3 = PINK
@@ -5573,7 +7087,6 @@ local function createEmptyCollapsiblePanel(
 			sliderFill.ZIndex = 45015
 			sliderFill.Parent = sliderTrack
 			ensureCorner(sliderFill, px(3))
-
 			local sliderKnob = New("Frame")
 			sliderKnob.Name = "Knob"
 			sliderKnob.AnchorPoint = V2(0.5, 0.5)
@@ -5583,33 +7096,25 @@ local function createEmptyCollapsiblePanel(
 			sliderKnob.ZIndex = 45016
 			sliderKnob.Parent = sliderTrack
 			ensureCorner(sliderKnob, px(6))
-
-
-
 			local amountDropdown = nil
-
 			local function setAcceptAmount(value, updateText)
 				value = math.clamp(math.floor(tonumber(value) or 1), 1, maxAmount)
 				stateEntry.Amount = value
 				if updateText then amountValue.Text = tostring(value) end
 				if amountDropdown then amountDropdown.Text = tostring(value) end
-
 				local sliderTextColor = value > 0
 					and MENU_TEXT_SELECTED
 					or MUTED_TEXT_COLOR
 				amountLabel.TextColor3 = sliderTextColor
 				amountValue.TextColor3 = sliderTextColor
-
 				local alpha = maxAmount == 1 and 0 or ((value - 1) / (maxAmount - 1))
 				sliderFill.Size = U2S(alpha, 1)
 				sliderKnob.Position = U2(alpha, 0, 0.5, 0)
 			end
-
 			setAcceptAmount(stateEntry.Amount, true)
 			amountValue.FocusLost:Connect(function()
 				setAcceptAmount(amountValue.Text, true)
 			end)
-
 			local function updateSlider(pointX)
 				local width = math.max(1, sliderTrack.AbsoluteSize.X)
 				local alpha = math.clamp((pointX - sliderTrack.AbsolutePosition.X) / width, 0, 1)
@@ -5622,7 +7127,6 @@ local function createEmptyCollapsiblePanel(
 					beginSliderDrag(input, updateSlider)
 				end
 			end)
-
 			amountControls[#amountControls + 1] = {
 				Frame = amountFrame,
 				Option = acceptKey,
@@ -5630,7 +7134,132 @@ local function createEmptyCollapsiblePanel(
 				ValueBox = amountValue,
 			}
 		end
-
+		if isAutoCancelRarity and stateEntry then
+			local criterionKey = definition.AutoCancelRarityKey
+			local isTokenCriterion = criterionKey == "Tokens"
+			local maxAmount = isTokenCriterion and 1000000 or 100
+			stateEntry.Amounts = type(stateEntry.Amounts) == "table" and stateEntry.Amounts or {}
+			amountContainer = New("Frame")
+			amountContainer.Name = "AmountControls"
+			amountContainer.Position = U2O(0, featureRowHeight)
+			amountContainer.Size = U2(1, 0, 0, featureEnabled and amountControlsHeight or 0)
+			amountContainer.BackgroundTransparency = 1
+			amountContainer.ZIndex = 45013
+			amountContainer.Parent = featureRow
+			local frame = New("Frame")
+			frame.Size = U2(1, 0, 0, amountControlsHeight)
+			frame.BackgroundTransparency = 1
+			frame.Visible = featureEnabled
+			frame.Parent = amountContainer
+			local label = New("TextLabel")
+			label.Size = U2(1, -amountValueWidth - px(10), 0, px(15))
+			label.BackgroundTransparency = 1
+			label.Text = isTokenCriterion and "Token Amount" or (criterionKey .. " Amount")
+			label.TextColor3 = MENU_TEXT_SELECTED
+			label.FontFace = MENU_FONT_FACE
+			setResponsiveTextSize(label, 14)
+			label.TextXAlignment = Enum.TextXAlignment.Left
+			label.Parent = frame
+			local value = New("TextBox")
+			value.AnchorPoint = V2(1, 0)
+			value.Position = U2(1, 0, 0, 0)
+			value.Size = U2O(amountValueWidth, px(20))
+			value.BackgroundColor3 = FEATURE_OFF_COLOR
+			value.BorderSizePixel = 0
+			value.ClearTextOnFocus = false
+			value.TextColor3 = MENU_TEXT_SELECTED
+			value.FontFace = MENU_FONT_FACE
+			setResponsiveTextSize(value, 14)
+			value.TextTruncate = Enum.TextTruncate.AtEnd
+			value.ClipsDescendants = true
+			value.Parent = frame
+			ensureCorner(value, px(5))
+			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(value)
+			local track = New("Frame")
+			track.Position = U2O(0, px(27))
+			track.Size = U2(1, 0, 0, px(5))
+			track.BackgroundColor3 = FEATURE_OFF_COLOR
+			track.BorderSizePixel = 0
+			track.Active = true
+			track.Parent = frame
+			ensureCorner(track, px(3))
+			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(track)
+			local fill = New("Frame") fill.BackgroundColor3 = PINK fill.BorderSizePixel = 0 fill.Parent = track ensureCorner(fill, px(3))
+			local knob = New("Frame") knob.AnchorPoint = V2(0.5,0.5) knob.Size = U2O(px(11),px(11)) knob.BackgroundColor3 = MENU_TEXT_SELECTED knob.BorderSizePixel = 0 knob.Parent = track ensureCorner(knob,px(6))
+			local function setAmount(v, update)
+				v = math.clamp(math.floor(tonumber(v) or 1), 1, maxAmount)
+				if isTokenCriterion then stateEntry.Tokens = v else stateEntry.Amounts[criterionKey] = v end
+				if update then value.Text = tostring(v) end
+				local alpha = maxAmount == 1 and 0 or ((v - 1) / (maxAmount - 1))
+				fill.Size = U2S(alpha,1) knob.Position = U2(alpha,0,0.5,0)
+			end
+			setAmount(isTokenCriterion and stateEntry.Tokens or stateEntry.Amounts[criterionKey], true)
+			value.FocusLost:Connect(function() setAmount(value.Text, true) end)
+			track.InputBegan:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					beginSliderDrag(input, function(x)
+						local alpha = math.clamp((x-track.AbsolutePosition.X)/math.max(1,track.AbsoluteSize.X),0,1)
+						setAmount(1 + math.floor(alpha*(maxAmount-1)+0.5), true)
+					end)
+				end
+			end)
+			local controlHeight = amountControlsHeight
+			if not isTokenCriterion then
+				local utility = autoServerHopState.Utility
+				local function makeInlineFilter(labelText, stateKey, yOffset, optionsProvider)
+					if type(utility[stateKey]) ~= "table" then utility[stateKey] = {} end
+					local filterLabel = New("TextLabel")
+					filterLabel.Position = U2O(0, yOffset)
+					filterLabel.Size = U2(1, -(dropdownWidth + componentLabelGap), 0, px(24))
+					filterLabel.BackgroundTransparency = 1
+					filterLabel.BorderSizePixel = 0
+					filterLabel.Text = labelText
+					filterLabel.TextColor3 = MUTED_TEXT_COLOR
+					filterLabel.FontFace = MENU_FONT_FACE
+					setResponsiveTextSize(filterLabel, 14)
+					filterLabel.TextXAlignment = Enum.TextXAlignment.Left
+					filterLabel.TextYAlignment = Enum.TextYAlignment.Center
+					filterLabel.Parent = frame
+					local filterButton = New("TextButton")
+					filterButton.AnchorPoint = V2(1, 0)
+					filterButton.Position = U2(1, 0, 0, yOffset)
+					filterButton.Size = U2O(dropdownWidth, px(24))
+					filterButton.BackgroundColor3 = FEATURE_OFF_COLOR
+					filterButton.BorderSizePixel = 0
+					filterButton.AutoButtonColor = false
+					filterButton.TextTruncate = Enum.TextTruncate.AtEnd
+					filterButton.ClipsDescendants = true
+					filterButton.FontFace = MENU_FONT_FACE
+					setResponsiveTextSize(filterButton, 14)
+					filterButton.Parent = frame
+					ensureCorner(filterButton, px(6))
+					rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(filterButton)
+					local function options()
+						local ok, provided = pcall(optionsProvider)
+						return ok and type(provided) == "table" and provided or {}
+					end
+					local function refreshText()
+						local names = {}
+						for _, choice in ipairs(options()) do
+							if utility[stateKey][choice] == true then names[#names + 1] = tostring(choice) end
+						end
+						fitWholeDropdownNames(filterButton, names, "Select")
+					end
+					refreshText()
+					filterButton.MouseButton1Click:Connect(function()
+						openManagedMultiDropdown(filterButton, options(), utility[stateKey], tostring, "Select", function()
+							refreshText()
+							local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
+							if type(saver) == "function" then task.defer(saver, true) end
+						end)
+					end)
+				end
+				makeInlineFilter("Mutations", "AutoCancel" .. criterionKey .. "Mutations", amountControlsHeight + px(4), function() return autoServerHopState.BoothMutationOptions() end)
+				makeInlineFilter("Traits", "AutoCancel" .. criterionKey .. "Traits", amountControlsHeight + secondaryControlHeight + px(4), function() return autoServerHopState.BoothTraitOptions() end)
+				controlHeight = amountControlsHeight + (secondaryControlHeight * 2) + px(4)
+			end
+			amountControls[#amountControls+1] = {Frame=frame, Option=criterionKey, SetAmount=setAmount, ValueBox=value, Height=controlHeight}
+		end
 		toggleTrack.MouseButton1Click:Connect(function()
 			if isDropdownOnly
 				or isServerHopSliderOnly
@@ -5641,14 +7270,13 @@ local function createEmptyCollapsiblePanel(
 			then
 				return
 			end
-
 			if definition and definition.MomentaryAction then
 				if definition.MomentaryAction == "ManualServerHop" then
 					autoServerHopState.RuntimeManualServerHopRequested = true
 					autoServerHopState.RuntimeServerHopPending = true
 				elseif definition.MomentaryAction == "ManualKickMinigame" then
 					pcall(function()
-						local RS = game:GetService("ReplicatedStorage")
+						local RS = ReplicatedStorage
 						local Replicator = require(
 							RS:WaitForChild("Client")
 								:WaitForChild("Modules")
@@ -5658,7 +7286,7 @@ local function createEmptyCollapsiblePanel(
 						local phase = active and active:TryIndex({"phase"})
 						local gameId = active and active:TryIndex({"session", "gameId"})
 						if phase ~= nil or gameId ~= nil then
-							game:GetService("Players").LocalPlayer:Kick("Manual Minigame Kick")
+							Players.LocalPlayer:Kick("Manual Minigame Kick")
 						end
 					end)
 				end
@@ -5674,17 +7302,22 @@ local function createEmptyCollapsiblePanel(
 			else
 				featureEnabled = not featureEnabled
 			end
+			if isUtilityToggle and definition.UtilityToggleKey == "SimpleAutofarmEnabled" then
+				local setter = rawget(_G, "__TUFFHUB_SET_SIMPLE_AUTOFARM")
+				if type(setter) == "function" then pcall(setter, featureEnabled) end
+				featureEnabled = stateEntry and stateEntry.SimpleAutofarmEnabled == true or false
+				setToggleVisual(toggleTrack, toggleKnob, featureLabel, featureEnabled)
+				refreshUtilityChildVisibility()
+				relayoutRows()
+				return
+			end
 			if isUtilityToggle then
 				if stateEntry then
 					if definition.UtilityToggleKey == "PauseScript" and featureEnabled then
-
-
 						autoServerHopState.RuntimeServerHopPending = false
 						autoServerHopState.RuntimeScriptUserHopRequested = false
 					end
 					if utilityExclusiveGroup then
-
-
 						local desiredSelected =
 							utilityExclusiveRequired
 								and true
@@ -5709,12 +7342,21 @@ local function createEmptyCollapsiblePanel(
 					else
 						stateEntry[definition.UtilityToggleKey] = featureEnabled
 					end
+					local toggledUtilityKey = definition.UtilityToggleKey
+					if toggledUtilityKey == "AutoEquipModeHold"
+						or toggledUtilityKey == "AutoEquipModeMount"
+						or toggledUtilityKey == "AutoEquipModeHoldMount"
+					then
+						stateEntry.AutoEquipBestBrainrot =
+							stateEntry.AutoEquipModeHold == true
+							or stateEntry.AutoEquipModeMount == true
+							or stateEntry.AutoEquipModeHoldMount == true
+					end
 					if utilityExclusiveGroup then
 						if activePanelDropdown then closeActivePanelDropdown() end
 						refreshUtilityChildVisibility()
 					end
 				end
-
 				if not utilityExclusiveGroup then
 					local registry = autoServerHopState.RuntimeUtilityToggleRows
 					local mirroredRows = type(registry) == "table"
@@ -5733,7 +7375,6 @@ local function createEmptyCollapsiblePanel(
 					refreshUtilityChildVisibility()
 				end
 				relayoutRows()
-
 				if definition.UtilityToggleKey == "UndoAllSettings" and featureEnabled then
 					task.defer(function()
 						local reset = rawget(_G, "__TUFFHUB_RESET_ALL_SETTINGS_STATE")
@@ -5759,10 +7400,17 @@ local function createEmptyCollapsiblePanel(
 					end
 					relayoutRows()
 				end
+			elseif isAutoCancelRarity then
+				if stateEntry then
+					stateEntry.Targets = type(stateEntry.Targets) == "table" and stateEntry.Targets or {}
+					stateEntry.Targets[definition.AutoCancelRarityKey] = featureEnabled and true or nil
+				end
+				refreshUtilityChildVisibility()
 			elseif isAutoCancel then
 				if stateEntry then stateEntry.Enabled = featureEnabled end
-			elseif hasDropdown or isAutoAccept or isAutoSit then
+			elseif isAutoOfferSourceManager or hasDropdown or isAutoAccept or isAutoSit then
 				if stateEntry then stateEntry.Enabled = featureEnabled end
+				refreshUtilityChildVisibility()
 			elseif definition and minigameAutoplayState then
 				minigameAutoplayState[definition.Id] = featureEnabled
 				if activePanelDropdown then closeActivePanelDropdown() end
@@ -5793,8 +7441,9 @@ local function createEmptyCollapsiblePanel(
 				end
 				relayoutRows()
 			end
-			if isAutoAccept and amountControls[1] then
+			if (isAutoAccept or isAutoCancelRarity) and amountControls[1] then
 				amountControls[1].Frame.Visible = featureEnabled
+				if amountContainer then amountContainer.Visible = featureEnabled end
 				relayoutRows()
 			end
 			if isServerHop and definition.SliderKey and amountControls[1] then
@@ -5802,7 +7451,7 @@ local function createEmptyCollapsiblePanel(
 				if amountContainer then amountContainer.Visible = featureEnabled end
 				relayoutRows()
 			end
-			if (isAutoSit or isOfferSubrow or isAutoCancel or isCustomReplyManager)
+			if (isAutoSit or isOfferSubrow or isAutoCancel or isCustomReplyManager or isTradeChatOfferManager or isSpecificCriteriaManager or isAutoOfferSourceManager)
 				and secondaryContainer
 			then
 				secondaryContainer.Visible = featureEnabled
@@ -5824,31 +7473,47 @@ local function createEmptyCollapsiblePanel(
 				Position = featureEnabled and U2(0, toggleWidth - toggleHeight + knobInset, 0, knobInset) or U2O(knobInset, knobInset)
 			}):Play()
 		end)
-
 		local function refreshFeatureRowFromState()
+			if isSimpleAutofarmWarning then
+				featureRow.Visible = os.clock() < (tonumber(autoServerHopState.RuntimeSimpleAutofarmWarningUntil) or 0)
+				featureLabel.TextColor3 = RGB(255, 74, 74)
+				return
+			elseif isActionButton then
+				featureRow.Visible = true
+				return
+			end
 			if isDropdownOnly then
 				featureEnabled = true
 			elseif isUtilityToggle then
 				featureEnabled = stateEntry and stateEntry[definition.UtilityToggleKey] == true or false
-			elseif isUtilityText or isUtilitySlider or isUtilityDropdown or isUtilityMultiDropdown then
+			elseif isUtilityText or isUtilitySlider or isUtilityDropdown or isUtilityMultiDropdown or isSpecificCriteriaManager then
 				featureEnabled = stateEntry and utilityParentsEnabled(stateEntry, utilityParents) or false
 			elseif isAutoCancel then
 				featureEnabled = isAutoCancelFilterOnly or (stateEntry and stateEntry.Enabled == true or false)
 			elseif isServerHopSliderOnly then
-				featureEnabled = autoServerHopState and autoServerHopState.Enabled == true or false
+				featureEnabled = definition.ServerHopSliderAlwaysVisible == true
+					or (autoServerHopState and autoServerHopState.Enabled == true or false)
 			elseif isServerHop then
 				featureEnabled = stateEntry and stateEntry[definition.ServerHopKey] == true or false
+			elseif isAutoOfferSourceManager then
+				featureEnabled = stateEntry and stateEntry.Enabled == true or false
+			elseif isAutoCancelRarity then
+				featureEnabled = stateEntry and type(stateEntry.Targets) == "table"
+					and stateEntry.Targets[definition.AutoCancelRarityKey] == true or false
 			elseif hasDropdown or isAutoAccept or isAutoSit then
 				featureEnabled = stateEntry and stateEntry.Enabled == true or false
 			else
 				featureEnabled = definition and minigameAutoplayState and minigameAutoplayState[definition.Id] == true or false
 			end
-
 			local utilityVisible = not isUtilityChild
 				or utilityParentsEnabled(autoServerHopState.Utility, utilityParents)
 			local visibilityVisible = type(visibilityUtilityParents) ~= "table"
 				or utilityParentsEnabled(autoServerHopState.Utility, visibilityUtilityParents)
-			featureRow.Visible = (not isServerHopChild or autoServerHopState.Enabled == true)
+			featureRow.Visible = (
+				not isServerHopChild
+				or definition.ServerHopSliderAlwaysVisible == true
+				or autoServerHopState.Enabled == true
+			)
 				and utilityVisible
 				and visibilityVisible
 				and (
@@ -5859,11 +7524,32 @@ local function createEmptyCollapsiblePanel(
 					)
 				)
 				and (
+					visibilityAutoOfferSource == nil
+					or (type(autoOfferState) == "table" and type(autoOfferState[visibilityAutoOfferSource]) == "table" and autoOfferState[visibilityAutoOfferSource].Enabled == true)
+				)
+				and (
+					visibilityAcceptKey == nil
+					or (type(autoAcceptState) == "table" and type(autoAcceptState[visibilityAcceptKey]) == "table" and autoAcceptState[visibilityAcceptKey].Enabled == true)
+				)
+				and (
+					visibilityAutoCancelTarget == nil
+					or (type(autoCancelState) == "table" and type(autoCancelState.Targets) == "table" and autoCancelState.Targets[visibilityAutoCancelTarget] == true)
+				)
+				and (
+					visibilitySitKey == nil
+					or (type(autoSitState) == "table" and type(autoSitState[visibilitySitKey]) == "table" and autoSitState[visibilitySitKey].Enabled == true)
+				)
+				and (
+					visibilityAutoSitTarget == nil
+					or (type(autoSitState) == "table" and type(autoSitState.OneOfTwo) == "table"
+						and type(autoSitState.OneOfTwo.Targets) == "table"
+						and autoSitState.OneOfTwo.Targets[visibilityAutoSitTarget] == true)
+				)
+				and (
 					(definition and definition.BoothSlotIndex) == nil
 					or definition.BoothSlotIndex
 						<= (tonumber(autoServerHopState.RuntimeBoothMaxSlots) or 3)
 				)
-
 			setToggleVisual(toggleTrack, toggleKnob, featureLabel, featureEnabled)
 			if secondaryContainer then
 				secondaryContainer.Visible = (isDropdownOnly or featureEnabled) and featureRow.Visible
@@ -5877,7 +7563,6 @@ local function createEmptyCollapsiblePanel(
 			if standardDropdownButton and stateEntry then
 				updateDropdownText(standardDropdownButton, stateEntry, isAutoSit and "Any" or definition.Placeholder, definition.Options)
 			end
-
 			if isUtilitySlider or isServerHopSliderOnly or (isServerHop and definition.SliderKey) then
 				for _, control in ipairs(amountControls) do
 					if control.SetAmount then
@@ -5889,6 +7574,13 @@ local function createEmptyCollapsiblePanel(
 				for _, control in ipairs(amountControls) do
 					control.Frame.Visible = featureEnabled
 					if control.SetAmount then control.SetAmount(stateEntry and stateEntry.Amount, true) end
+				end
+			elseif isAutoCancelRarity then
+				for _, control in ipairs(amountControls) do
+					control.Frame.Visible = featureEnabled
+					if control.SetAmount then
+						control.SetAmount(control.Option == "Tokens" and stateEntry.Tokens or (stateEntry.Amounts and stateEntry.Amounts[control.Option]), true)
+					end
 				end
 			elseif hasDropdown and stateEntry then
 				for _, control in ipairs(amountControls) do
@@ -5903,7 +7595,6 @@ local function createEmptyCollapsiblePanel(
 				end
 			end
 		end
-
 		local function syncPrimaryRowLayout(baseHeight)
 			baseHeight = math.max(0, tonumber(baseHeight) or featureRowHeight)
 			local labelHeight = wrappedFeatureLabelHeight()
@@ -5920,7 +7611,6 @@ local function createEmptyCollapsiblePanel(
 				labelHeight
 			)
 			toggleTrack.Position = U2(1, 0, 0, baseHeight * 0.5)
-
 			if utilityDropdownButton then
 				utilityDropdownButton.Position = U2(
 					1,
@@ -5929,7 +7619,6 @@ local function createEmptyCollapsiblePanel(
 					baseHeight * 0.5
 				)
 			end
-
 			if standardDropdownButton
 				and standardDropdownButton.Parent == featureRow
 			then
@@ -5940,7 +7629,6 @@ local function createEmptyCollapsiblePanel(
 					baseHeight * 0.5
 				)
 			end
-
 			if secondaryContainer and not isAutoCancelFilterOnly then
 				secondaryContainer.Position = U2O(
 					secondaryContainer.Position.X.Offset,
@@ -5948,7 +7636,6 @@ local function createEmptyCollapsiblePanel(
 				)
 			end
 		end
-
 		featureRows[#featureRows + 1] = {
 			Row = featureRow,
 			IndentLevel = 0,
@@ -5967,6 +7654,11 @@ local function createEmptyCollapsiblePanel(
 			UtilityParentKey = isUtilityChild and definition.UtilityParentKey or nil,
 			UtilityParentKeys = isUtilityChild and utilityParents or nil,
 			VisibilityUtilityParentKeys = visibilityUtilityParents,
+			VisibilityAutoOfferSource = visibilityAutoOfferSource,
+			VisibilityAcceptKey = visibilityAcceptKey,
+			VisibilityAutoCancelTarget = visibilityAutoCancelTarget,
+			VisibilitySitKey = visibilitySitKey,
+			VisibilityAutoSitTarget = visibilityAutoSitTarget,
 			MinigameParentId = definition and definition.MinigameParentId or nil,
 			BoothSlotIndex = definition and definition.BoothSlotIndex or nil,
 			UtilityToggleKey = isUtilityToggle and definition.UtilityToggleKey or nil,
@@ -6039,6 +7731,7 @@ local function createEmptyCollapsiblePanel(
 		Expanded = initialPanelExpanded,
 		ExpandedHeight = PANEL_HEADER_HEIGHT + LINE_THICKNESS + featureTopPadding + featureBottomPadding
 			+ (#featureRows * featureRowHeight) + (math.max(0, #featureRows - 1) * featureRowGap),
+		Title = panelTitle,
 		SearchText = string.lower(searchTerms),
 		FeatureRows = featureRows,
 		RelayoutRows = relayoutRows,
@@ -6112,6 +7805,18 @@ if IS_MINIGAME_PLACE then
 	)
 	createEmptyCollapsiblePanel(
 		mainItem,
+		23,
+		2,
+		1,
+		"Simple Autofarm",
+		{
+			{Label = "Autofarm Tokens And Brainrots", UtilityToggleKey = "SimpleAutofarmEnabled"},
+			{SimpleAutofarmWarning = true},
+			{Label = "Reset Autofarm Settings To Default", ActionButton = true, Action = "ResetSimpleAutofarm"},
+		}
+	)
+	createEmptyCollapsiblePanel(
+		mainItem,
 		1,
 		1,
 		1,
@@ -6120,7 +7825,6 @@ if IS_MINIGAME_PLACE then
 			{Label = "Auto Play", UtilityToggleKey = "AutoPlayMaster"},
 			{Label = "Connect 4", Id = "ConnectFour", VisibilityUtilityParentKey = "AutoPlayMaster"},
 			{Label = "Move Delay", UtilitySliderKey = "MoveDelayConnectFour", MinigameParentId = "ConnectFour", VisibilityUtilityParentKey = "AutoPlayMaster", MinValue = 0, MaxValue = 5, Step = 0.05, Decimals = 2, UnitLabel = "Seconds"},
-			{Label = "Popcorn", Id = "PopcornBurst", VisibilityUtilityParentKey = "AutoPlayMaster"},
 			{Label = "Football Draft", Id = "FootballDraft", VisibilityUtilityParentKey = "AutoPlayMaster"},
 			{Label = "Move Delay", UtilitySliderKey = "MoveDelayFootballDraft", MinigameParentId = "FootballDraft", VisibilityUtilityParentKey = "AutoPlayMaster", MinValue = 0, MaxValue = 5, Step = 0.05, Decimals = 2, UnitLabel = "Seconds"},
 			{Label = "Candy Bomb", Id = "CandyBomb", VisibilityUtilityParentKey = "AutoPlayMaster"},
@@ -6131,46 +7835,33 @@ if IS_MINIGAME_PLACE then
 			{Label = "Move Delay", UtilitySliderKey = "MoveDelayNumberGuess", MinigameParentId = "NumberGuess", VisibilityUtilityParentKey = "AutoPlayMaster", MinValue = 0, MaxValue = 5, Step = 0.05, Decimals = 2, UnitLabel = "Seconds"},
 			{Label = "Knockout", Id = "Knockout", VisibilityUtilityParentKey = "AutoPlayMaster"},
 			{Label = "Move Delay", UtilitySliderKey = "MoveDelayKnockout", MinigameParentId = "Knockout", VisibilityUtilityParentKey = "AutoPlayMaster", MinValue = 0, MaxValue = 5, Step = 0.05, Decimals = 2, UnitLabel = "Seconds"},
+			{Label = "Popcorn", Id = "PopcornBurst", VisibilityUtilityParentKey = "AutoPlayMaster"},
 		}
 	)
-	createEmptyCollapsiblePanel(
-		mainItem,
-		2,
-		1,
-		2,
-		"Auto Offer",
-		{
+	do
+		local autoOfferFeatures = {
 			{Label = "Auto Offer", UtilityToggleKey = "AutoOfferMaster"},
-			{Label = "Common", Source = "Common", Options = BRAINROT_RARITY_OPTIONS, OfferSubrow = true, VisibilityUtilityParentKey = "AutoOfferMaster"},
-			{Label = "Uncommon", Source = "Uncommon", Options = BRAINROT_RARITY_OPTIONS, OfferSubrow = true, VisibilityUtilityParentKey = "AutoOfferMaster"},
-			{Label = "Rare", Source = "Rare", Options = BRAINROT_RARITY_OPTIONS, OfferSubrow = true, VisibilityUtilityParentKey = "AutoOfferMaster"},
-			{Label = "Epic", Source = "Epic", Options = BRAINROT_RARITY_OPTIONS, OfferSubrow = true, VisibilityUtilityParentKey = "AutoOfferMaster"},
-			{Label = "Legendary", Source = "Legendary", Options = BRAINROT_RARITY_OPTIONS, OfferSubrow = true, VisibilityUtilityParentKey = "AutoOfferMaster"},
-			{Label = "Mythical", Source = "Mythical", Options = BRAINROT_RARITY_OPTIONS, OfferSubrow = true, VisibilityUtilityParentKey = "AutoOfferMaster"},
-			{Label = "Cosmic", Source = "Cosmic", Options = BRAINROT_RARITY_OPTIONS, OfferSubrow = true, VisibilityUtilityParentKey = "AutoOfferMaster"},
-			{Label = "Secret", Source = "Secret", Options = BRAINROT_RARITY_OPTIONS, OfferSubrow = true, VisibilityUtilityParentKey = "AutoOfferMaster"},
-			{Label = "Celestial", Source = "Celestial", Options = BRAINROT_RARITY_OPTIONS, OfferSubrow = true, VisibilityUtilityParentKey = "AutoOfferMaster"},
-			{Label = "Divine", Source = "Divine", Options = BRAINROT_RARITY_OPTIONS, OfferSubrow = true, VisibilityUtilityParentKey = "AutoOfferMaster"},
-			{Label = "Infinity", Source = "Infinity", Options = BRAINROT_RARITY_OPTIONS, OfferSubrow = true, VisibilityUtilityParentKey = "AutoOfferMaster"},
-			{Label = "Meta", Source = "Meta", Options = BRAINROT_RARITY_OPTIONS, OfferSubrow = true, VisibilityUtilityParentKey = "AutoOfferMaster"},
-			{Label = "Paradox", Source = "Paradox", Options = BRAINROT_RARITY_OPTIONS, OfferSubrow = true, VisibilityUtilityParentKey = "AutoOfferMaster"},
-			{Label = "Eternal", Source = "Eternal", Options = BRAINROT_RARITY_OPTIONS, OfferSubrow = true, VisibilityUtilityParentKey = "AutoOfferMaster"},
-			{Label = "Tokens", UtilityToggleKey = "AutoOfferTokensEnabled", UtilityParentKey = "AutoOfferMaster"},
-			{Label = "Match Tokens With Tokens", UtilityToggleKey = "AutoOfferMatchTokensWithTokens", UtilityParentKeys = {"AutoOfferMaster", "AutoOfferTokensEnabled"}},
-			{Label = "Token Add Ratio", UtilitySliderKey = "AutoOfferTokenAddRatio", UtilityParentKeys = {"AutoOfferMaster", "AutoOfferTokensEnabled", "AutoOfferMatchTokensWithTokens"}, MinValue = 1, MaxValue = 10, UnitLabel = "Multiplier"},
-			{Label = "Lowest Tokens To Match", UtilitySliderKey = "AutoOfferLowestTokensToMatch", UtilityParentKeys = {"AutoOfferMaster", "AutoOfferTokensEnabled", "AutoOfferMatchTokensWithTokens"}, MinValue = 1, MaxValue = 100000, UnitLabel = "Tokens"},
-			{Label = "Match Tokens With Brainrots", UtilityToggleKey = "AutoOfferMatchTokensWithBrainrots", UtilityParentKeys = {"AutoOfferMaster", "AutoOfferTokensEnabled"}},
-			{Label = "Token Amount", UtilitySliderKey = "AutoOfferTokenAmount", UtilityParentKeys = {"AutoOfferMaster", "AutoOfferTokensEnabled", "AutoOfferMatchTokensWithBrainrots"}, MinValue = 0, MaxValue = 100000, UnitLabel = "Tokens"},
-			{Label = "Offer", UtilityDropdownKey = "AutoOfferTokenRarity", UtilityParentKeys = {"AutoOfferMaster", "AutoOfferTokensEnabled", "AutoOfferMatchTokensWithBrainrots"}, Placeholder = "Select", Options = BRAINROT_RARITY_OPTIONS},
 		}
-	)
-	createEmptyCollapsiblePanel(
-		mainItem,
-		3,
-		2,
-		2,
-		"Auto Sit",
-		{
+		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+			autoOfferFeatures[#autoOfferFeatures + 1] = {
+				Label = rarity,
+				Source = rarity,
+				AutoOfferSourceManager = true,
+				VisibilityUtilityParentKey = "AutoOfferMaster",
+			}
+		end
+		autoOfferFeatures[#autoOfferFeatures + 1] = {Label = "Token Offer", UtilityToggleKey = "AutoOfferTokensEnabled"}
+		autoOfferFeatures[#autoOfferFeatures + 1] = {Label = "Match Tokens With Tokens", UtilityToggleKey = "AutoOfferMatchTokensWithTokens", UtilityParentKey = "AutoOfferTokensEnabled"}
+		autoOfferFeatures[#autoOfferFeatures + 1] = {Label = "Token Add Ratio", UtilitySliderKey = "AutoOfferTokenAddRatio", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithTokens"}, MinValue = 1, MaxValue = 10, UnitLabel = "Multiplier"}
+		autoOfferFeatures[#autoOfferFeatures + 1] = {Label = "Lowest Tokens To Match", UtilitySliderKey = "AutoOfferLowestTokensToMatch", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithTokens"}, MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"}
+		autoOfferFeatures[#autoOfferFeatures + 1] = {Label = "Match Tokens With Brainrots", UtilityToggleKey = "AutoOfferMatchTokensWithBrainrots", UtilityParentKey = "AutoOfferTokensEnabled"}
+		autoOfferFeatures[#autoOfferFeatures + 1] = {Label = "Token Amount", UtilitySliderKey = "AutoOfferTokenAmount", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithBrainrots"}, MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"}
+		autoOfferFeatures[#autoOfferFeatures + 1] = {Label = "Offer", UtilityDropdownKey = "AutoOfferTokenRarity", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithBrainrots"}, Placeholder = "Select", Options = OUTGOING_BRAINROT_RARITY_OPTIONS}
+		autoOfferFeatures[#autoOfferFeatures + 1] = {Label = "Trade Chat Offer", UtilityToggleKey = "AutoOfferBasedOnTradeChat", TradeChatOfferManager = true}
+		createEmptyCollapsiblePanel(mainItem, 2, 1, 2, "Auto Offer", autoOfferFeatures)
+	end
+	do
+		local autoSitFeatures = {
 			{Label = "Auto Sit At Empty Tables", SitKey = "EmptyTables"},
 			{
 				Label = "Auto Sit At 1/2 Tables",
@@ -6178,105 +7869,55 @@ if IS_MINIGAME_PLACE then
 				Source = "OneOfTwo",
 				Options = RARITY_OPTIONS,
 				Placeholder = "Any",
+				DropdownLabel = "Brainrots To Check For",
 			},
 		}
-	)
-	createEmptyCollapsiblePanel(
-		mainItem,
-		4,
-		2,
-		1,
-		"Auto Accept",
-		{
+		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "AutoSitSpecificItems", VisibilitySitKey = "OneOfTwo", SpecificCriteriaOptionsProvider = function() return autoServerHopState.BoothBrainrotOptions() end}
+		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Opponent Must Own All Selected Brainrots", UtilityToggleKey = "AutoSitMustOwnAllSelected", VisibilitySitKey = "OneOfTwo"}
+		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Opponent Must Own One Of Selected Brainrots", UtilityToggleKey = "AutoSitMustOwnOneSelected", VisibilitySitKey = "OneOfTwo"}
+		createEmptyCollapsiblePanel(mainItem, 3, 2, 2, "Auto Sit", autoSitFeatures)
+	end
+	do
+		local autoAcceptFeatures = {
 			{Label = "Auto Accept", UtilityToggleKey = "AutoAcceptMaster"},
-			{Label = "Common", AcceptKey = "Common", VisibilityUtilityParentKey = "AutoAcceptMaster"},
-			{Label = "Uncommon", AcceptKey = "Uncommon", VisibilityUtilityParentKey = "AutoAcceptMaster"},
-			{Label = "Rare", AcceptKey = "Rare", VisibilityUtilityParentKey = "AutoAcceptMaster"},
-			{Label = "Epic", AcceptKey = "Epic", VisibilityUtilityParentKey = "AutoAcceptMaster"},
-			{Label = "Legendary", AcceptKey = "Legendary", VisibilityUtilityParentKey = "AutoAcceptMaster"},
-			{Label = "Mythical", AcceptKey = "Mythical", VisibilityUtilityParentKey = "AutoAcceptMaster"},
-			{Label = "Cosmic", AcceptKey = "Cosmic", VisibilityUtilityParentKey = "AutoAcceptMaster"},
-			{Label = "Secret", AcceptKey = "Secret", VisibilityUtilityParentKey = "AutoAcceptMaster"},
-			{Label = "Celestial", AcceptKey = "Celestial", VisibilityUtilityParentKey = "AutoAcceptMaster"},
-			{Label = "Divine", AcceptKey = "Divine", VisibilityUtilityParentKey = "AutoAcceptMaster"},
-			{Label = "Infinity", AcceptKey = "Infinity", VisibilityUtilityParentKey = "AutoAcceptMaster"},
-			{Label = "Meta", AcceptKey = "Meta", VisibilityUtilityParentKey = "AutoAcceptMaster"},
-			{Label = "Paradox", AcceptKey = "Paradox", VisibilityUtilityParentKey = "AutoAcceptMaster"},
-			{Label = "Eternal", AcceptKey = "Eternal", VisibilityUtilityParentKey = "AutoAcceptMaster"},
-			{Label = "Tokens", AcceptKey = "Tokens", VisibilityUtilityParentKey = "AutoAcceptMaster"},
 		}
-	)
-	createEmptyCollapsiblePanel(
-		mainItem,
-		5,
-		1,
-		3,
-		"Auto Cancel",
-		{
+		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+			autoAcceptFeatures[#autoAcceptFeatures + 1] = {Label = rarity, AcceptKey = rarity, VisibilityUtilityParentKey = "AutoAcceptMaster"}
+			autoAcceptFeatures[#autoAcceptFeatures + 1] = {
+				Label = "Mutations", UtilityMultiDropdownKey = "AutoAccept" .. rarity .. "Mutations",
+				UtilityParentKey = "AutoAcceptMaster", VisibilityAcceptKey = rarity, Placeholder = "Select",
+				OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end,
+			}
+			autoAcceptFeatures[#autoAcceptFeatures + 1] = {
+				Label = "Traits", UtilityMultiDropdownKey = "AutoAccept" .. rarity .. "Traits",
+				UtilityParentKey = "AutoAcceptMaster", VisibilityAcceptKey = rarity, Placeholder = "Select",
+				OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end,
+			}
+		end
+		autoAcceptFeatures[#autoAcceptFeatures + 1] = {Label = "Tokens", AcceptKey = "Tokens", VisibilityUtilityParentKey = "AutoAcceptMaster"}
+		autoAcceptFeatures[#autoAcceptFeatures + 1] = {Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "AutoAcceptSpecificItems", UtilityParentKey = "AutoAcceptMaster"}
+		autoAcceptFeatures[#autoAcceptFeatures + 1] = {Label = "Opponent Must Own All Selected Brainrots", UtilityToggleKey = "AutoAcceptMustHaveAll", UtilityParentKey = "AutoAcceptMaster"}
+		autoAcceptFeatures[#autoAcceptFeatures + 1] = {Label = "Opponent Must Own One Of Selected Brainrots", UtilityToggleKey = "AutoAcceptMustHaveOne", UtilityParentKey = "AutoAcceptMaster"}
+		createEmptyCollapsiblePanel(mainItem, 4, 2, 1, "Auto Accept", autoAcceptFeatures)
+	end
+	do
+		local autoCancelFeatures = {
 			{Label = "Auto Cancel", UtilityToggleKey = "AutoCancelMaster"},
-			{
-				Label = "Check Opponents Brainrots",
-				UtilityToggleKey = "AutoCancelCheckOpponentsBrainrots",
-				UtilityParentKey = "AutoCancelMaster",
-			},
-			{
-				Label = "Cancel If Player Does Not Own",
-				AutoCancel = true,
-				AutoCancelFilterOnly = true,
-				Options = RARITY_OPTIONS,
-				Placeholder = "Select",
-				VisibilityUtilityParentKeys = {
-					"AutoCancelMaster",
-					"AutoCancelCheckOpponentsBrainrots",
-				},
-			},
-			{
-				Label = "Time Before Auto Cancel",
-				UtilitySliderKey = "AutoCancelBrainrotConditionDelay",
-				UtilityParentKeys = {
-					"AutoCancelMaster",
-					"AutoCancelCheckOpponentsBrainrots",
-				},
-				MinValue = 0,
-				MaxValue = 30,
-				Step = 0.25,
-				Decimals = 2,
-				UnitLabel = "Seconds",
-			},
-			{
-				Label = "Cancel If Trade Lasts Longer Than",
-				UtilityToggleKey = "AutoCancelTradeTimeoutEnabled",
-				UtilityParentKey = "AutoCancelMaster",
-			},
-			{
-				Label = "",
-				UtilitySliderKey = "AutoCancelTradeTimeout",
-				UtilityParentKeys = {
-					"AutoCancelMaster",
-					"AutoCancelTradeTimeoutEnabled",
-				},
-				MinValue = 1,
-				MaxValue = 60,
-				UnitLabel = "Seconds",
-			},
-			{
-				Label = "Cancel If Value Not Offered After",
-				UtilityToggleKey = "AutoCancelNoValueTimeoutEnabled",
-				UtilityParentKey = "AutoCancelMaster",
-			},
-			{
-				Label = "",
-				UtilitySliderKey = "AutoCancelNoValueTimeout",
-				UtilityParentKeys = {
-					"AutoCancelMaster",
-					"AutoCancelNoValueTimeoutEnabled",
-				},
-				MinValue = 1,
-				MaxValue = 30,
-				UnitLabel = "Seconds",
-			},
+			{Label = "Check Opponents Brainrots", UtilityToggleKey = "AutoCancelCheckOpponentsBrainrots", UtilityParentKey = "AutoCancelMaster"},
 		}
-	)
+		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+			autoCancelFeatures[#autoCancelFeatures + 1] = {Label = rarity, AutoCancelRarityKey = rarity, VisibilityUtilityParentKeys = {"AutoCancelMaster", "AutoCancelCheckOpponentsBrainrots"}}
+		end
+		autoCancelFeatures[#autoCancelFeatures + 1] = {Label = "Tokens", AutoCancelRarityKey = "Tokens", VisibilityUtilityParentKeys = {"AutoCancelMaster", "AutoCancelCheckOpponentsBrainrots"}}
+		autoCancelFeatures[#autoCancelFeatures + 1] = {Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "AutoCancelSpecificItems", UtilityParentKeys = {"AutoCancelMaster", "AutoCancelCheckOpponentsBrainrots"}}
+		autoCancelFeatures[#autoCancelFeatures + 1] = {Label = "Cancel If Player Does Not Own All Selected", UtilityToggleKey = "AutoCancelPlayerMustOwnAllSelected", UtilityParentKeys = {"AutoCancelMaster", "AutoCancelCheckOpponentsBrainrots"}, UtilityExclusiveGroup = "AutoCancelOwnershipMode", UtilityExclusiveRequired = true}
+		autoCancelFeatures[#autoCancelFeatures + 1] = {Label = "Cancel If Player Does Not Own At Least One Selected", UtilityToggleKey = "AutoCancelPlayerMustOwnAtLeastOneSelected", UtilityParentKeys = {"AutoCancelMaster", "AutoCancelCheckOpponentsBrainrots"}, UtilityExclusiveGroup = "AutoCancelOwnershipMode", UtilityExclusiveRequired = true}
+		autoCancelFeatures[#autoCancelFeatures + 1] = {Label = "Cancel Trade After", UtilityToggleKey = "AutoCancelTradeTimeoutEnabled", UtilityParentKey = "AutoCancelMaster"}
+		autoCancelFeatures[#autoCancelFeatures + 1] = {Label = "", UtilitySliderKey = "AutoCancelTradeTimeout", UtilityParentKeys = {"AutoCancelMaster", "AutoCancelTradeTimeoutEnabled"}, MinValue = 1, MaxValue = 60, UnitLabel = "Seconds"}
+		autoCancelFeatures[#autoCancelFeatures + 1] = {Label = "Cancel If Value Not Offered After", UtilityToggleKey = "AutoCancelNoValueTimeoutEnabled", UtilityParentKey = "AutoCancelMaster"}
+		autoCancelFeatures[#autoCancelFeatures + 1] = {Label = "", UtilitySliderKey = "AutoCancelNoValueTimeout", UtilityParentKeys = {"AutoCancelMaster", "AutoCancelNoValueTimeoutEnabled"}, MinValue = 1, MaxValue = 30, UnitLabel = "Seconds"}
+		createEmptyCollapsiblePanel(mainItem, 5, 1, 3, "Auto Cancel", autoCancelFeatures)
+	end
 	createEmptyCollapsiblePanel(
 		mainItem,
 		6,
@@ -6286,14 +7927,14 @@ if IS_MINIGAME_PLACE then
 		{
 			{Label = "Auto Server Hop", ServerHopKey = "Enabled"},
 			{
-				Label = "Time In Server",
+				Label = "Time In Server Until Hop",
 				ServerHopKey = "ServerTimeEnabled",
 				SliderKey = "ServerTime",
 				MinValue = 1,
 				MaxValue = 60,
 			},
 			{
-				Label = "Time Since Last Game",
+				Label = "Time Since Last Game Until Hop",
 				ServerHopKey = "TimeSinceLastGameEnabled",
 				SliderKey = "TimeSinceLastGame",
 				MinValue = 1,
@@ -6301,6 +7942,16 @@ if IS_MINIGAME_PLACE then
 			},
 			{Label = "Time Added After Winning Wager", ServerHopSliderKey = "WinWagerTimeAdded", MinValue = 0, MaxValue = 60, UnitLabel = "Minutes"},
 			{Label = "Time Added After Booth Purchase", ServerHopSliderKey = "BoothPurchaseTimeAdded", MinValue = 1, MaxValue = 60, UnitLabel = "Minutes"},
+		}
+	)
+	createEmptyCollapsiblePanel(
+		mainItem,
+		22,
+		1,
+		4,
+		"Blacklist Servers",
+		{
+			{Label = "How long to blacklist joined servers", ServerHopSliderKey = "ServerBlacklistMinutes", ServerHopSliderAlwaysVisible = true, MinValue = 1, MaxValue = 60, UnitLabel = "Minutes"},
 		}
 	)
 	createEmptyCollapsiblePanel(
@@ -6314,12 +7965,12 @@ if IS_MINIGAME_PLACE then
 			{Label = "Server Hop If You Played Everyone In Server With These Brainrots", UtilityToggleKey = "CheckServerHopPlayedEveryoneServer"},
 			{Label = "Server Hop If Nobody In Minigames Area Has These Brainrots", UtilityToggleKey = "CheckServerHopNobodyMinigamesArea"},
 			{Label = "Server Hop If You Played Everyone In Minigames Area With These Brainrots", UtilityToggleKey = "CheckServerHopPlayedEveryoneMinigamesArea"},
-			{
-				Label = "Brainrots To Check For",
-				UtilityMultiDropdownKey = "CheckServerBrainrotRarities",
-				Placeholder = "Select",
-				Options = BRAINROT_RARITY_OPTIONS,
-			},
+			{Label = "Rarities To Check For", UtilityMultiDropdownKey = "CheckServerBrainrotRarities", Placeholder = "None", Options = BRAINROT_RARITY_OPTIONS},
+			{Label = "Must Have One Of These Mutations", UtilityMultiDropdownKey = "CheckServerMutations", Placeholder = "None", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Must Have One Of These Traits", UtilityMultiDropdownKey = "CheckServerTraits", Placeholder = "None", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Specific Brainrots / Items To Check For", UtilityMultiDropdownKey = "CheckServerSpecificItems", Placeholder = "None", OptionsProvider = function() return autoServerHopState.AllDeletableItemOptions() end},
+			{Label = "Opponent Must Own All Of These Brainrots", UtilityToggleKey = "CheckServerMustOwnAll", UtilityExclusiveGroup = "CheckServerOwnershipMode"},
+			{Label = "Opponent Must Own One Of These Brainrots", UtilityToggleKey = "CheckServerMustOwnOne", UtilityExclusiveGroup = "CheckServerOwnershipMode"},
 		}
 	)
 	createEmptyCollapsiblePanel(
@@ -6401,7 +8052,7 @@ if IS_MINIGAME_PLACE then
 				UnitLabel = "Seconds",
 			},
 			{
-				Label = "Send Message If Value Not Offered",
+				Label = "Send Separate Message If Value Not Offered",
 				UtilityToggleKey = "AutoTradeSendIfValueNotOffered",
 				UtilityParentKey = "AutoTradeChat",
 			},
@@ -6424,7 +8075,7 @@ if IS_MINIGAME_PLACE then
 				UnitLabel = "Seconds",
 			},
 			{
-				Label = "Add Custom Message",
+				Label = "Add Trade Chat Reply",
 				UtilityToggleKey = "AutoTradeCustomRepliesEnabled",
 				UtilityParentKey = "AutoTradeChat",
 				CustomReplyManager = true,
@@ -6463,6 +8114,8 @@ if IS_MINIGAME_PLACE then
 				MaxValue = 100,
 				UnitLabel = "Inventory",
 			},
+			{Label = "Avoid Deleting These Traits", UtilityMultiDropdownKey = "AvoidDeletingTraits", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Avoid Deleting These Mutations", UtilityMultiDropdownKey = "AvoidDeletingMutations", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
 			{
 				Label = "Never Delete",
 				UtilityToggleKey = "NeverDeleteEnabled",
@@ -6474,55 +8127,27 @@ if IS_MINIGAME_PLACE then
 				UtilityParentKeys = {"AutoDeleteWorstInventory", "NeverDeleteEnabled"},
 				Placeholder = "Select",
 				OptionsProvider = function()
-					return autoServerHopState.AllDeletableItemOptions()
+					return autoServerHopState.OwnedInventoryItemNameOptions()
 				end,
 			},
 		}
 	)
-
 	createEmptyCollapsiblePanel(
-		mainItem,
-		10,
-		1,
-		6,
-		"Auto Equip",
+		mainItem, 10, 1, 6, "Auto Equip",
 		{
-			{Label = "Auto Equip", UtilityToggleKey = "AutoEquipBestBrainrot"},
-			{
-				Label = "Best Brainrot",
-				UtilityToggleKey = "EquipBestBrainrot",
-				UtilityParentKey = "AutoEquipBestBrainrot",
-				UtilityExclusiveGroup = "EquipPriority",
-			},
-			{
-				Label = "Best Mountable Brainrot",
-				UtilityToggleKey = "EquipBestMountableBrainrot",
-				UtilityParentKey = "AutoEquipBestBrainrot",
-				UtilityExclusiveGroup = "EquipPriority",
-			},
-			{
-				Label = "Specific Brainrot",
-				UtilityToggleKey = "EquipSpecificBrainrot",
-				UtilityParentKey = "AutoEquipBestBrainrot",
-			},
-			{
-				Label = "Brainrot",
-				UtilityDropdownKey = "SpecificBrainrotId",
-				UtilityParentKeys = {"AutoEquipBestBrainrot", "EquipSpecificBrainrot"},
-				Placeholder = "None",
-				OptionsProvider = function()
-					return autoServerHopState.RefreshOwnedBrainrotOptions()
-				end,
-				OptionLabelProvider = function(id)
-					return autoServerHopState.OwnedBrainrotOptionLabel(id)
-				end,
-				ClearIfMissing = true,
-			},
-			{
-				Label = "Mount Brainrot If Possible",
-				UtilityToggleKey = "MountBrainrotIfPossible",
-				UtilityParentKey = "AutoEquipBestBrainrot",
-			},
+			{Label = "Auto Equip (Hold)", UtilityToggleKey = "AutoEquipModeHold", UtilityExclusiveGroup = "AutoEquipMode"},
+			{Label = "Equip Best Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
+			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
+			{Label = "Brainrot To Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Auto Equip (Mount)", UtilityToggleKey = "AutoEquipModeMount", UtilityExclusiveGroup = "AutoEquipMode"},
+			{Label = "Equip Best Mountable Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
+			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
+			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedMountableBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Auto Equip (Hold + Mount)", UtilityToggleKey = "AutoEquipModeHoldMount", UtilityExclusiveGroup = "AutoEquipMode"},
+			{Label = "Equip Best Brainrot + Mountable Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
+			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
+			{Label = "Brainrot To Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedMountableBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
 		}
 	)
 	createEmptyCollapsiblePanel(
@@ -6532,15 +8157,14 @@ if IS_MINIGAME_PLACE then
 		6,
 		"Auto Opening Offer",
 		{
-			{Label = "Autoshow Best Brainrots", UtilityToggleKey = "AutoshowBestBrainrots"},
-			{Label = "Autoshow All Tokens", UtilityToggleKey = "AutoshowAllTokens"},
-			{Label = "Custom Opening Offer", UtilityToggleKey = "CustomOpeningOffer"},
+			{Label = "Autoshow Best Brainrots", UtilityToggleKey = "AutoshowBestBrainrots", UtilityExclusiveGroup = "OpeningOfferBrainrotMode"},
+			{Label = "Custom Opening Offer", UtilityToggleKey = "CustomOpeningOffer", UtilityExclusiveGroup = "OpeningOfferBrainrotMode"},
 			{
 				Label = "Brainrot 1",
 				UtilityDropdownKey = "OpeningOfferBrainrot1",
 				UtilityParentKey = "CustomOpeningOffer",
 				Placeholder = "None",
-				OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end,
+				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			},
@@ -6549,7 +8173,7 @@ if IS_MINIGAME_PLACE then
 				UtilityDropdownKey = "OpeningOfferBrainrot2",
 				UtilityParentKey = "CustomOpeningOffer",
 				Placeholder = "None",
-				OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end,
+				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			},
@@ -6558,7 +8182,7 @@ if IS_MINIGAME_PLACE then
 				UtilityDropdownKey = "OpeningOfferBrainrot3",
 				UtilityParentKey = "CustomOpeningOffer",
 				Placeholder = "None",
-				OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end,
+				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			},
@@ -6567,7 +8191,7 @@ if IS_MINIGAME_PLACE then
 				UtilityDropdownKey = "OpeningOfferBrainrot4",
 				UtilityParentKey = "CustomOpeningOffer",
 				Placeholder = "None",
-				OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end,
+				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			},
@@ -6576,7 +8200,7 @@ if IS_MINIGAME_PLACE then
 				UtilityDropdownKey = "OpeningOfferBrainrot5",
 				UtilityParentKey = "CustomOpeningOffer",
 				Placeholder = "None",
-				OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end,
+				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			},
@@ -6585,10 +8209,13 @@ if IS_MINIGAME_PLACE then
 				UtilityDropdownKey = "OpeningOfferBrainrot6",
 				UtilityParentKey = "CustomOpeningOffer",
 				Placeholder = "None",
-				OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end,
+				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			},
+			{Label = "Autoshow All Tokens", UtilityToggleKey = "AutoshowAllTokens", UtilityExclusiveGroup = "OpeningOfferTokenMode"},
+			{Label = "Custom Opening Tokens", UtilityToggleKey = "CustomOpeningTokens", UtilityExclusiveGroup = "OpeningOfferTokenMode"},
+			{Label = "Custom Token Amount", UtilitySliderKey = "OpeningOfferTokenAmount", UtilityParentKey = "CustomOpeningTokens", MinValue = 0, MaxValue = 1000000, MaxValueProvider = function() return autoServerHopState.CurrentTradeTokenBalance() end, UnitLabel = "Tokens"},
 		}
 	)
 	createEmptyCollapsiblePanel(
@@ -6643,7 +8270,7 @@ if IS_MINIGAME_PLACE then
 				MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds",
 			},
 			{
-				Label = "Match Opponent",
+				Label = "Match Opponent Before Time",
 				UtilityToggleKey = "MatchOpponentGame",
 				UtilityParentKey = "AutoChooseGame",
 			},
@@ -6662,8 +8289,11 @@ if IS_MINIGAME_PLACE then
 				ClearsUtilityMultiDropdownKey = "FallbackRoundChoices",
 				Options = {"1", "3", "5"},
 			},
+			{Label = "Round 1 Time Before Choice", UtilitySliderKey = "AutoChooseRoundsRound1Delay", UtilityParentKey = "AutoChooseRounds", MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds"},
+			{Label = "Round 2 Time Before Choice", UtilitySliderKey = "AutoChooseRoundsRound2Delay", UtilityParentKey = "AutoChooseRounds", MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds"},
+			{Label = "Round 3 Time Before Choice", UtilitySliderKey = "AutoChooseRoundsRound3Delay", UtilityParentKey = "AutoChooseRounds", MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds"},
 			{
-				Label = "Match Opponent",
+				Label = "Match Opponent Before Time",
 				UtilityToggleKey = "MatchOpponentRounds",
 				UtilityParentKey = "AutoChooseRounds",
 			},
@@ -6687,10 +8317,10 @@ if IS_MINIGAME_PLACE then
 		}
 	)
 	createEmptyCollapsiblePanel(
-		mainItem,
-		15,
+		settingsItem,
+		3,
+		1,
 		2,
-		8,
 		"Logging",
 		{
 			{Label = "Print Wins/Losses To Terminal", UtilityToggleKey = "PrintWinsLossesToTerminal"},
@@ -6725,16 +8355,6 @@ if IS_MINIGAME_PLACE then
 				Label = "Avoid Specific Brainrots",
 				UtilityMultiDropdownKey = "AutoBoothAvoidBrainrots",
 				UtilityParentKey = "AutoBooth",
-				Placeholder = "Select",
-				OptionsProvider = function()
-					return autoServerHopState.BoothBrainrotOptions()
-				end,
-			},
-			{Label = "List Specific Brainrots Only", UtilityToggleKey = "AutoBoothSpecificOnly", UtilityParentKey = "AutoBooth"},
-			{
-				Label = "Specific Brainrots",
-				UtilityMultiDropdownKey = "AutoBoothSpecificBrainrots",
-				UtilityParentKeys = {"AutoBooth", "AutoBoothSpecificOnly"},
 				Placeholder = "Select",
 				OptionsProvider = function()
 					return autoServerHopState.BoothBrainrotOptions()
@@ -6783,12 +8403,10 @@ if IS_MINIGAME_PLACE then
 				UnitLabel = "Seconds",
 			},
 		}
-
 		for index = 1, 14 do
 			local prefix = "AutoBoothListing" .. tostring(index)
 			local listingParents = {"AutoBooth", prefix .. "Enabled"}
 			local modeGroup = prefix .. "SelectionMode"
-
 			autoBoothFeatures[#autoBoothFeatures + 1] = {
 				Label = "Listing " .. tostring(index),
 				UtilityToggleKey = prefix .. "Enabled",
@@ -6881,7 +8499,6 @@ if IS_MINIGAME_PLACE then
 				BoothSlotIndex = index,
 			}
 		end
-
 		createEmptyCollapsiblePanel(
 			mainItem,
 			16,
@@ -6892,33 +8509,61 @@ if IS_MINIGAME_PLACE then
 		)
 	end
 	createEmptyCollapsiblePanel(
-		mainItem,
-		17,
-		2,
-		9,
-		"Fallback Offer",
+		mainItem, 17, 2, 9, "Fallback Offer",
 		{
 			{Label = "Fall Back Offers", UtilityToggleKey = "FallbackOffers"},
-			{Label = "Fallback To Next Lower Rarity Brainrot", UtilityToggleKey = "FallbackToNextLowerRarityBrainrot", UtilityParentKey = "FallbackOffers"},
-			{Label = "Next Lower Rarity Brainrots", UtilitySliderKey = "FallbackNextLowerRarityAmount", UtilityParentKeys = {"FallbackOffers", "FallbackToNextLowerRarityBrainrot"}, MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
+			{Label = "Fallback To Next Lower Rarity Brainrot", UtilityToggleKey = "FallbackToNextLowerRarityBrainrot", UtilityParentKey = "FallbackOffers", UtilityExclusiveGroup = "FallbackBrainrotMode"},
+			{Label = "Amount Of Brainrots To Offer", UtilitySliderKey = "FallbackNextLowerRarityAmount", UtilityParentKeys = {"FallbackOffers", "FallbackToNextLowerRarityBrainrot"}, MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
+			{Label = "Avoid Brainrots With These Mutations", UtilityToggleKey = "FallbackAvoidMutationsEnabled", UtilityParentKeys = {"FallbackOffers", "FallbackToNextLowerRarityBrainrot"}},
+			{Label = "Mutations To Avoid", UtilityMultiDropdownKey = "FallbackAvoidMutations", UtilityParentKeys = {"FallbackOffers", "FallbackToNextLowerRarityBrainrot", "FallbackAvoidMutationsEnabled"}, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Avoid Brainrots With These Traits", UtilityToggleKey = "FallbackAvoidTraitsEnabled", UtilityParentKeys = {"FallbackOffers", "FallbackToNextLowerRarityBrainrot"}},
+			{Label = "Traits To Avoid", UtilityMultiDropdownKey = "FallbackAvoidTraits", UtilityParentKeys = {"FallbackOffers", "FallbackToNextLowerRarityBrainrot", "FallbackAvoidTraitsEnabled"}, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Fallback To Specific Brainrot / Item", UtilityToggleKey = "FallbackToSpecificBrainrotItem", UtilityParentKey = "FallbackOffers", UtilityExclusiveGroup = "FallbackBrainrotMode"},
+			{Label = "Common", UtilityDropdownKey = "FallbackSpecificCommonItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Uncommon", UtilityDropdownKey = "FallbackSpecificUncommonItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Rare", UtilityDropdownKey = "FallbackSpecificRareItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Epic", UtilityDropdownKey = "FallbackSpecificEpicItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Legendary", UtilityDropdownKey = "FallbackSpecificLegendaryItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Mythical", UtilityDropdownKey = "FallbackSpecificMythicalItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Cosmic", UtilityDropdownKey = "FallbackSpecificCosmicItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Secret", UtilityDropdownKey = "FallbackSpecificSecretItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Celestial", UtilityDropdownKey = "FallbackSpecificCelestialItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Divine", UtilityDropdownKey = "FallbackSpecificDivineItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Infinity", UtilityDropdownKey = "FallbackSpecificInfinityItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Meta", UtilityDropdownKey = "FallbackSpecificMetaItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Paradox", UtilityDropdownKey = "FallbackSpecificParadoxItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Eternal", UtilityDropdownKey = "FallbackSpecificEternalItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
 			{Label = "Fallback To Tokens", UtilityToggleKey = "FallbackToTokens", UtilityParentKey = "FallbackOffers"},
-			{Label = "Common", UtilitySliderKey = "FallbackTokensCommon", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 100000, UnitLabel = "Tokens"},
-			{Label = "Uncommon", UtilitySliderKey = "FallbackTokensUncommon", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 100000, UnitLabel = "Tokens"},
-			{Label = "Rare", UtilitySliderKey = "FallbackTokensRare", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 100000, UnitLabel = "Tokens"},
-			{Label = "Epic", UtilitySliderKey = "FallbackTokensEpic", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 100000, UnitLabel = "Tokens"},
-			{Label = "Legendary", UtilitySliderKey = "FallbackTokensLegendary", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 100000, UnitLabel = "Tokens"},
-			{Label = "Mythical", UtilitySliderKey = "FallbackTokensMythical", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 100000, UnitLabel = "Tokens"},
-			{Label = "Cosmic", UtilitySliderKey = "FallbackTokensCosmic", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 100000, UnitLabel = "Tokens"},
-			{Label = "Secret", UtilitySliderKey = "FallbackTokensSecret", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 100000, UnitLabel = "Tokens"},
-			{Label = "Celestial", UtilitySliderKey = "FallbackTokensCelestial", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 100000, UnitLabel = "Tokens"},
-			{Label = "Divine", UtilitySliderKey = "FallbackTokensDivine", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 100000, UnitLabel = "Tokens"},
-			{Label = "Infinity", UtilitySliderKey = "FallbackTokensInfinity", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 100000, UnitLabel = "Tokens"},
-			{Label = "Meta", UtilitySliderKey = "FallbackTokensMeta", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 100000, UnitLabel = "Tokens"},
-			{Label = "Paradox", UtilitySliderKey = "FallbackTokensParadox", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 100000, UnitLabel = "Tokens"},
-			{Label = "Eternal", UtilitySliderKey = "FallbackTokensEternal", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 100000, UnitLabel = "Tokens"},
+			{Label = "Common", UtilitySliderKey = "FallbackTokensCommon", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackCommonOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
+			{Label = "Uncommon", UtilitySliderKey = "FallbackTokensUncommon", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackUncommonOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
+			{Label = "Rare", UtilitySliderKey = "FallbackTokensRare", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackRareOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
+			{Label = "Epic", UtilitySliderKey = "FallbackTokensEpic", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackEpicOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
+			{Label = "Legendary", UtilitySliderKey = "FallbackTokensLegendary", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackLegendaryOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
+			{Label = "Mythical", UtilitySliderKey = "FallbackTokensMythical", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackMythicalOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
+			{Label = "Cosmic", UtilitySliderKey = "FallbackTokensCosmic", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackCosmicOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
+			{Label = "Secret", UtilitySliderKey = "FallbackTokensSecret", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackSecretOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
+			{Label = "Celestial", UtilitySliderKey = "FallbackTokensCelestial", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackCelestialOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
+			{Label = "Divine", UtilitySliderKey = "FallbackTokensDivine", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackDivineOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
+			{Label = "Infinity", UtilitySliderKey = "FallbackTokensInfinity", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackInfinityOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
+			{Label = "Meta", UtilitySliderKey = "FallbackTokensMeta", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackMetaOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
+			{Label = "Paradox", UtilitySliderKey = "FallbackTokensParadox", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackParadoxOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
+			{Label = "Eternal", UtilitySliderKey = "FallbackTokensEternal", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackEternalOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
 		}
 	)
-
 	createEmptyCollapsiblePanel(
 		mainItem,
 		19,
@@ -6932,27 +8577,17 @@ if IS_MINIGAME_PLACE then
 			{Label = "After This Many Canceled Trades", UtilitySliderKey = "PermanentBlacklistAfterCanceledTrades", UtilityParentKey = "PermanentBlacklistPlayersAfterCanceledTrade", MinValue = 1, MaxValue = 10, UnitLabel = "Trades"},
 		}
 	)
-
 	createEmptyCollapsiblePanel(
-		mainItem,
-		21,
+		settingsItem,
+		4,
 		2,
-		10,
+		2,
 		"Manual",
 		{
-			{
-				Label = "Manual Server Hop",
-				UtilityToggleKey = "ManualServerHopAction",
-				MomentaryAction = "ManualServerHop",
-			},
-			{
-				Label = "Manual Kick During Minigame",
-				UtilityToggleKey = "ManualKickMinigameAction",
-				MomentaryAction = "ManualKickMinigame",
-			},
+			{Label = "Manual Server Hop", ActionButton = true, Action = "ManualServerHop"},
+			{Label = "Manual Kick During Minigame", ActionButton = true, Action = "ManualKickMinigame"},
 		}
 	)
-
 	createEmptyCollapsiblePanel(
 		settingsItem,
 		1,
@@ -6970,20 +8605,29 @@ if IS_MINIGAME_PLACE then
 		1,
 		"Undo Settings",
 		{
-			{Label = "Undo All Settings", UtilityToggleKey = "UndoAllSettings"},
+			{Label = "Undo All Settings", ActionButton = true, Action = "UndoAllSettings"},
 		}
 	)
 	createEmptyCollapsiblePanel(
 		settingsItem,
-		3,
+		6,
 		1,
-		2,
+		3,
 		"Auto Reconnect",
 		{
 			{Label = "Auto Reconnect", UtilityToggleKey = "AutoReconnect"},
 		}
 	)
-
+	createEmptyCollapsiblePanel(
+		settingsItem,
+		5,
+		2,
+		3,
+		"Detect Script Users",
+		{
+			{Label = "Leave If Script User Is In Server", ServerHopKey = "LeaveIfScriptUserInServer", ServerHopIndependent = true},
+		}
+	)
 else
 	createSixPanelsForTab(
 		homeItem
@@ -7133,13 +8777,11 @@ local function syncRightPanelGeometry(
 			maxPanelOrder = math.max(maxPanelOrder, tonumber(data.Order) or 0)
 		end
 	end
-
 	local function placePanel(data, layoutColumn)
 		data.LayoutWidth = cardWidth
 		if type(data.RelayoutRows) == "function" then
 			data.RelayoutRows(true)
 		end
-
 		local targetHeight = data.Expanded
 			and (data.ExpandedHeight or PANEL_EXPANDED_HEIGHT)
 			or PANEL_COLLAPSED_HEIGHT
@@ -7159,19 +8801,32 @@ local function syncRightPanelGeometry(
 			+ targetHeight
 			+ CONTENT_ROW_GAP
 	end
-
+	local speciallyPlaced = {}
+	if singleColumn and selectedMenuItem == mainItem then
+		local function placeMainPanelFirst(title)
+			for _, data in ipairs(activePanels) do
+				if data.Frame.Visible and data.Title == title then
+					placePanel(data, 1)
+					speciallyPlaced[data] = true
+					return
+				end
+			end
+		end
+		placeMainPanelFirst("Pause Minigames")
+		placeMainPanelFirst("Simple Autofarm")
+	end
 	for order = 1, maxPanelOrder do
 		for sourceColumn = 1, 2 do
 			for _, data in ipairs(activePanels) do
 				if data.Order == order
 					and data.Column == sourceColumn
-					and data.Frame.Visible then
+					and data.Frame.Visible
+					and not speciallyPlaced[data] then
 					placePanel(data, singleColumn and 1 or sourceColumn)
 				end
 			end
 		end
 	end
-
 	local panelContentBottom = singleColumn
 		and columnBottom[1]
 		or math.max(columnBottom[1], columnBottom[2])
@@ -7195,7 +8850,6 @@ local function syncRightPanelGeometry(
 			)
 		)
 end
-
 performSearch = function(resetScroll)
 	local query=string.lower(searchBox.Text:match("^%s*(.-)%s*$"))
 	for _,data in ipairs(allUnsupportedPanels) do
@@ -7277,6 +8931,81 @@ rawset(_G, "__TUFFHUB_REFRESH_ALL_SETTINGS_UI", function()
 	end
 	refreshUnsupportedPanels()
 end)
+if IS_MINIGAME_PLACE then
+	task.spawn(function()
+		local rarityIndex = {}
+		for index, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+			rarityIndex[rarity] = index
+		end
+		while screenGui.Parent do
+			if autoServerHopState.Utility.SimpleAutofarmEnabled == true then
+				local total, highest = autoServerHopState.SimpleAutofarmInventorySummary()
+				if (tonumber(total) or 0) <= 0 or not rarityIndex[highest] then
+					local toggle = rawget(_G, "__TUFFHUB_SET_SIMPLE_AUTOFARM")
+					if type(toggle) == "function" then pcall(toggle, false) end
+					local show = rawget(_G, "__TUFFHUB_SHOW_SIMPLE_AUTOFARM_WARNING")
+					if type(show) == "function" then
+						autoServerHopState.RuntimeSimpleAutofarmWarningUntil = os.clock() + 5
+						pcall(show)
+					end
+				else
+					-- The inventory query can yield during startup. Recheck the mode before
+					-- touching live settings so disabling Simple Autofarm always restores
+					-- the regular profile without a final Autofarm write racing afterward.
+					if autoServerHopState.Utility.SimpleAutofarmEnabled ~= true then
+						continue
+					end
+					-- Once Simple Autofarm reaches Meta, keep Meta as the progression floor.
+					-- This means Meta, Paradox, and Eternal remain valid targets even after
+					-- the inventory itself progresses to Paradox or Eternal.
+					local metaIndex = rarityIndex.Meta
+					local highestIndex = rarityIndex[highest]
+					local targetIndex = (metaIndex and highestIndex >= metaIndex)
+						and metaIndex
+						or highestIndex
+					local targetRarity = BRAINROT_RARITY_OPTIONS[targetIndex]
+					local changed = autoServerHopState.RuntimeSimpleAutofarmTargetRarity ~= targetRarity
+					autoServerHopState.RuntimeSimpleAutofarmTargetRarity = targetRarity
+					local startIndex = targetIndex
+					-- Match tiny token offers only when they are meaningful for the current
+					-- progression tier: Divine/lower = 10, Infinity/higher = 100.
+					autoServerHopState.Utility.AutoOfferLowestTokensToMatch =
+						highestIndex >= rarityIndex.Infinity and 100 or 10
+					for index, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+						local targeted = index >= startIndex
+						local accept = autoAcceptState[rarity]
+						if type(accept) == "table" then
+							accept.Enabled = targeted
+							accept.Amount = 1
+						end
+						autoCancelState.Targets[rarity] = targeted and true or nil
+						autoCancelState.Amounts[rarity] = 1
+						autoSitState.OneOfTwo.Targets[rarity] = targeted and true or nil
+						autoSitState.OneOfTwo.Amounts[rarity] = 1
+					end
+					if autoAcceptState.Tokens then autoAcceptState.Tokens.Enabled = false end
+					autoCancelState.Targets.Tokens = nil
+					autoSitState.OneOfTwo.Targets.Tokens = nil
+					local checkRarities = autoServerHopState.Utility.CheckServerBrainrotRarities
+					if type(checkRarities) ~= "table" then
+						checkRarities = {}
+						autoServerHopState.Utility.CheckServerBrainrotRarities = checkRarities
+					end
+					for index, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+						checkRarities[rarity] = index >= startIndex and true or nil
+					end
+					if changed then
+						autoServerHopState.RuntimePlayedMinigameUserIds = {}
+						autoServerHopState.RuntimeCheckServerHopRequested = false
+						local refresh = rawget(_G, "__TUFFHUB_REFRESH_ALL_SETTINGS_UI")
+						if type(refresh) == "function" then pcall(refresh) end
+					end
+				end
+			end
+			task.wait(0.75)
+		end
+	end)
+end
 rawset(_G, "__TUFFHUB_REFRESH_DYNAMIC_DROPDOWNS", function()
 	for _, data in ipairs(allUnsupportedPanels) do
 		for _, rowData in ipairs(data.FeatureRows or {}) do
@@ -7300,7 +9029,7 @@ if IS_MINIGAME_PLACE then
 				local refresh = rawget(_G, "__TUFFHUB_REFRESH_ALL_SETTINGS_UI")
 				if type(refresh) == "function" then pcall(refresh) end
 			end
-			task.wait(2)
+			task.wait(5)
 		end
 	end)
 end
@@ -7382,6 +9111,11 @@ controlHolder.BackgroundTransparency = 1
 controlHolder.BorderSizePixel = 0
 controlHolder.ZIndex = 55000
 controlHolder.Parent = rightContent
+
+-- Keep window-control construction in its own function scope. Luau has a hard
+-- 200-local/register limit per function; these controls are temporary setup
+-- values and do not need to remain top-level locals for the lifetime of the UI.
+;(function()
 local controlLayout = New("UIListLayout")
 controlLayout.FillDirection = Enum.FillDirection.Horizontal
 controlLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
@@ -7456,7 +9190,6 @@ local function createControlButton(
 	end)
 	return button,iconObjects
 end
-;(function()
 	local minimizeButton,
 		minimizeIconObjects = createControlButton(
 		"MinimizeButton",
@@ -7528,7 +9261,6 @@ end
 	restoreButton.Name = "MinimizedTHButton"
 	restoreButton.AnchorPoint = V2(0.5, 0)
 	restoreButton.Position = U2(0.5, 0, 0, px(10))
-
 	local function syncRestoreButtonSize()
 		local squarePixels = math.max(
 			1,
@@ -7538,7 +9270,6 @@ end
 	end
 	syncRestoreButtonSize()
 	camera:GetPropertyChangedSignal("ViewportSize"):Connect(syncRestoreButtonSize)
-
 	restoreButton.BackgroundColor3 = BLACK
 	restoreButton.BackgroundTransparency = 0
 	restoreButton.BorderSizePixel = 0
@@ -7547,8 +9278,10 @@ end
 	restoreButton.Visible = not panelOpen
 	restoreButton.ZIndex = 65000
 	restoreButton.Parent = screenGui
-	ensureCorner(restoreButton, px(9))
-
+	local restoreCorner = ensureCorner(restoreButton, px(9))
+	if restoreCorner then
+		restoreCorner.CornerRadius = UDim.new(0.22, 0)
+	end
 	local restoreStroke = New("UIStroke")
 	restoreStroke.Name = "GrayOutline"
 	restoreStroke.Color = RGB(92, 95, 102)
@@ -7557,9 +9290,6 @@ end
 	restoreStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 	restoreStroke.LineJoinMode = Enum.LineJoinMode.Round
 	restoreStroke.Parent = restoreButton
-
-
-
 	local restoreLogoHolder = New("Frame")
 	restoreLogoHolder.Name = "CompactTHHolder"
 	restoreLogoHolder.AnchorPoint = V2(0.5, 0.5)
@@ -7569,7 +9299,6 @@ end
 	restoreLogoHolder.BorderSizePixel = 0
 	restoreLogoHolder.ZIndex = 65001
 	restoreLogoHolder.Parent = restoreButton
-
 	local restoreT = New("TextLabel")
 	restoreT.Name = "CompactT"
 	restoreT.AnchorPoint = V2(0, 0.5)
@@ -7587,7 +9316,6 @@ end
 	restoreT.TextYAlignment = Enum.TextYAlignment.Center
 	restoreT.ZIndex = 65002
 	restoreT.Parent = restoreLogoHolder
-
 	local restoreH = New("TextLabel")
 	restoreH.Name = "CompactH"
 	restoreH.AnchorPoint = V2(0, 0.5)
@@ -7605,7 +9333,6 @@ end
 	restoreH.TextYAlignment = Enum.TextYAlignment.Center
 	restoreH.ZIndex = 65002
 	restoreH.Parent = restoreLogoHolder
-
 	local function syncRestoreLogoTextSize()
 		local textPixels = math.max(
 			1,
@@ -7613,9 +9340,6 @@ end
 		)
 		restoreT.TextSize = textPixels
 		restoreH.TextSize = textPixels
-
-
-
 		local tWidth = math.max(1, restoreT.TextBounds.X)
 		local hWidth = math.max(1, restoreH.TextBounds.X)
 		local strokeRoom = px(2)
@@ -7623,7 +9347,6 @@ end
 		local hBoxWidth = hWidth + strokeRoom
 		local totalWidth = tBoxWidth + hBoxWidth
 		local startX = roundPixel(-totalWidth * 0.5)
-
 		restoreT.Position = U2(0.5, startX, 0.5, 0)
 		restoreT.Size = U2O(tBoxWidth, restoreLogoHolder.AbsoluteSize.Y)
 		restoreH.Position = U2(0.5, startX + tBoxWidth, 0.5, 0)
@@ -7633,7 +9356,6 @@ end
 	restoreLogoHolder:GetPropertyChangedSignal(
 		"AbsoluteSize"
 	):Connect(syncRestoreLogoTextSize)
-
 	restoreButton.MouseEnter:Connect(function()
 		TweenService:Create(
 			restoreButton,
@@ -7641,7 +9363,6 @@ end
 			{BackgroundColor3 = CONTROL_HOVER_BACKGROUND}
 		):Play()
 	end)
-
 	restoreButton.MouseLeave:Connect(function()
 		TweenService:Create(
 			restoreButton,
@@ -7649,14 +9370,12 @@ end
 			{BackgroundColor3 = BLACK}
 		):Play()
 	end)
-
 	local iconDragging = false
 	local iconMoved = false
 	local iconStart
 	local iconStartPosition
 	local iconTouchInput
 	local ICON_DRAG_THRESHOLD = px(3)
-
 	local function beginIconDrag(input)
 		if not restoreButton.Visible then
 			return
@@ -7669,12 +9388,10 @@ end
 			and input
 			or nil
 	end
-
 	local function updateIconDrag(position)
 		if not iconDragging or not iconStart or not iconStartPosition then
 			return
 		end
-
 		local delta = position - iconStart
 		if not iconMoved
 			and (math.abs(delta.X) >= ICON_DRAG_THRESHOLD
@@ -7682,7 +9399,6 @@ end
 		then
 			iconMoved = true
 		end
-
 		if iconMoved then
 			restoreButton.Position = U2(
 				iconStartPosition.X.Scale,
@@ -7692,7 +9408,6 @@ end
 			)
 		end
 	end
-
 	local function finishIconDrag(input)
 		if not iconDragging then
 			return
@@ -7700,19 +9415,16 @@ end
 		if iconTouchInput and input ~= iconTouchInput then
 			return
 		end
-
 		local shouldRestore = not iconMoved
 		iconDragging = false
 		iconMoved = false
 		iconStart = nil
 		iconStartPosition = nil
 		iconTouchInput = nil
-
 		if shouldRestore then
 			setPanelOpen(true)
 		end
 	end
-
 	restoreButton.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1
 			or input.UserInputType == Enum.UserInputType.Touch
@@ -7720,12 +9432,10 @@ end
 			beginIconDrag(input)
 		end
 	end)
-
 	UserInputService.InputChanged:Connect(function(input)
 		if not iconDragging then
 			return
 		end
-
 		if input.UserInputType == Enum.UserInputType.MouseMovement
 			and iconTouchInput == nil
 		then
@@ -7736,7 +9446,6 @@ end
 			updateIconDrag(input.Position)
 		end
 	end)
-
 	UserInputService.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1
 			and iconTouchInput == nil
@@ -7749,7 +9458,6 @@ end
 		end
 	end)
 end)()
-
 minimizeButton.MouseButton1Click:Connect(function()
 	setPanelOpen(
 		false
@@ -7794,12 +9502,10 @@ UserInputService.InputBegan:Connect(
 		StartPosition = nil,
 		TouchInput = nil,
 	}
-
 	local function belongsToWindow(object)
 		return object == window
 			or (object and object:IsDescendantOf(window))
 	end
-
 	local function isActuallyVisible(object)
 		local current = object
 		while current and current ~= window do
@@ -7810,7 +9516,6 @@ UserInputService.InputBegan:Connect(
 		end
 		return current == window
 	end
-
 	local function isInsidePanel(object)
 		local current = object
 		while current and current ~= window do
@@ -7823,7 +9528,6 @@ UserInputService.InputBegan:Connect(
 		end
 		return false
 	end
-
 	local function objectBlocksDrag(object, point)
 		if object == window or not object:IsA("GuiObject") then
 			return false
@@ -7831,10 +9535,6 @@ UserInputService.InputBegan:Connect(
 		if isInsidePanel(object) then
 			return true
 		end
-
-
-
-
 		if object == selectedTabTitle and point then
 			local bounds = object.TextBounds
 			local position = object.AbsolutePosition
@@ -7848,7 +9548,6 @@ UserInputService.InputBegan:Connect(
 				and point.Y >= textTop
 				and point.Y <= textTop + textHeight
 		end
-
 		return object:IsA("GuiButton")
 			or object:IsA("TextBox")
 			or object:IsA("TextLabel")
@@ -7856,10 +9555,6 @@ UserInputService.InputBegan:Connect(
 			or object:IsA("ImageButton")
 			or object.BackgroundTransparency < 0.999
 	end
-
-
-
-
 	local function pointIsEmptyBlackBackground(point)
 		local hits
 		local hitQuerySucceeded = pcall(function()
@@ -7873,7 +9568,6 @@ UserInputService.InputBegan:Connect(
 			end
 			hits = root:GetGuiObjectsAtPosition(point.X, point.Y)
 		end)
-
 		if hitQuerySucceeded and type(hits) == "table" then
 			local foundWindow = false
 			for _, object in ipairs(hits) do
@@ -7886,8 +9580,6 @@ UserInputService.InputBegan:Connect(
 			end
 			return foundWindow
 		end
-
-
 		if not pointInsideGui(window, point) then
 			return false
 		end
@@ -7903,18 +9595,11 @@ UserInputService.InputBegan:Connect(
 		end
 		return true
 	end
-
 	local function touchStartsInScrollableContent(point)
 		if pointInsideGui(menuHolder, point) then
 			return true
 		end
-
 		if pointInsideGui(rightContent, point) then
-
-
-
-
-
 			local canvasY = point.Y
 				- rightContent.AbsolutePosition.Y
 				+ rightContent.CanvasPosition.Y
@@ -7922,10 +9607,8 @@ UserInputService.InputBegan:Connect(
 				return true
 			end
 		end
-
 		return false
 	end
-
 	local function beginDrag(input)
 		if not window.Visible
 			or not pointIsEmptyBlackBackground(input.Position)
@@ -7936,7 +9619,6 @@ UserInputService.InputBegan:Connect(
 		then
 			return
 		end
-
 		dragging = true
 		dragState.Start = input.Position
 		dragState.StartPosition = window.Position
@@ -7944,14 +9626,12 @@ UserInputService.InputBegan:Connect(
 			and input
 			or nil
 	end
-
 	local function endDrag()
 		dragging = false
 		dragState.Start = nil
 		dragState.StartPosition = nil
 		dragState.TouchInput = nil
 	end
-
 	local function updateDrag(position)
 		if not dragging
 			or not dragState.Start
@@ -7959,7 +9639,6 @@ UserInputService.InputBegan:Connect(
 		then
 			return
 		end
-
 		local delta = position - dragState.Start
 		window.Position = UDim2.new(
 			dragState.StartPosition.X.Scale,
@@ -7972,7 +9651,6 @@ UserInputService.InputBegan:Connect(
 			)
 		)
 	end
-
 	UserInputService.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1
 			or input.UserInputType == Enum.UserInputType.Touch
@@ -7980,12 +9658,10 @@ UserInputService.InputBegan:Connect(
 			beginDrag(input)
 		end
 	end)
-
 	UserInputService.InputChanged:Connect(function(input)
 		if not dragging then
 			return
 		end
-
 		if input.UserInputType == Enum.UserInputType.MouseMovement
 			and dragState.TouchInput == nil
 		then
@@ -7996,7 +9672,6 @@ UserInputService.InputBegan:Connect(
 			updateDrag(input.Position)
 		end
 	end)
-
 	UserInputService.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1
 			and dragState.TouchInput == nil
@@ -8009,18 +9684,8 @@ UserInputService.InputBegan:Connect(
 		end
 	end)
 end)()
-
-
-
-
-
-
-
-
 if IS_MINIGAME_PLACE then
 	task.spawn(function()
-
-
 		while screenGui.Parent do
 			local emptyEnabled = autoSitState
 				and autoSitState.EmptyTables
@@ -8037,13 +9702,11 @@ if IS_MINIGAME_PLACE then
 			task.wait(0.10)
 		end
 		if not screenGui.Parent then return end
-
-		local PlayersAS = game:GetService("Players")
-		local RSAS = game:GetService("ReplicatedStorage")
+		local PlayersAS = Players
+		local RSAS = ReplicatedStorage
 		local PathfindingServiceAS = game:GetService("PathfindingService")
-		local RunServiceAS = game:GetService("RunService")
+		local RunServiceAS = RunService
 		local LocalPlayerAS = PlayersAS.LocalPlayer
-
 		local function requireAS(moduleScript)
 			while screenGui.Parent do
 				local ok, result = pcall(require, moduleScript)
@@ -8051,14 +9714,12 @@ if IS_MINIGAME_PLACE then
 				task.wait(0.20)
 			end
 		end
-
 		local sharedAS = RSAS:WaitForChild("Shared")
 		local clientAS = RSAS:WaitForChild("Client")
 		local EconomyMathAS = requireAS(sharedAS:WaitForChild("utils"):WaitForChild("EconomyMath"))
 		local ReplicatorAS = requireAS(clientAS:WaitForChild("Modules"):WaitForChild("ReplicatorClient"))
 		local RemotesAS = requireAS(sharedAS:WaitForChild("Remotes"))
 		if not (EconomyMathAS and ReplicatorAS and RemotesAS) then return end
-
 		local MinigameLeaveQueueAS = RemotesAS.MinigameLeaveQueue
 		local activeMinigameAS
 		local activeNegotiationAS
@@ -8089,26 +9750,11 @@ if IS_MINIGAME_PLACE then
 			-20.79950523376465,
 			-85.21368408203125
 		)
-
 		local function refreshReplicatorsAS()
-
-
-
-			local okMinigame, freshMinigame = pcall(ReplicatorAS.get, "ActiveMinigame")
-			if okMinigame then activeMinigameAS = freshMinigame end
-			local okNegotiation, freshNegotiation = pcall(
-				ReplicatorAS.get,
-				"ActiveNegotiation"
-			)
-			if okNegotiation then activeNegotiationAS = freshNegotiation end
+			activeMinigameAS = safeRepGet(ReplicatorAS, "ActiveMinigame") or activeMinigameAS
+			activeNegotiationAS = safeRepGet(ReplicatorAS, "ActiveNegotiation") or activeNegotiationAS
 		end
-
-		local function tryIndexAS(root, path)
-			if not root then return nil end
-			local ok, value = pcall(function() return root:TryIndex(path) end)
-			return ok and value or nil
-		end
-
+		local tryIndexAS = safeTryIndex
 		local function minigameQueuedAS()
 			refreshReplicatorsAS()
 			local queued = tryIndexAS(activeMinigameAS, {"queued"})
@@ -8118,24 +9764,20 @@ if IS_MINIGAME_PLACE then
 			end)
 			return ok and direct == true
 		end
-
 		local function minigamePlayingAS()
 			refreshReplicatorsAS()
 			return tryIndexAS(activeMinigameAS, {"phase"}) ~= nil
 				or tryIndexAS(activeMinigameAS, {"session", "gameId"}) ~= nil
 		end
-
 		local function negotiationActiveAS()
 			refreshReplicatorsAS()
 			return tryIndexAS(activeNegotiationAS, {"guid"}) ~= nil
 		end
-
 		local function activeTableAS()
 			refreshReplicatorsAS()
 			local model = tryIndexAS(activeMinigameAS, {"session", "public", "tableModel"})
 			return typeof(model) == "Instance" and model:IsA("Model") and model or nil
 		end
-
 		local function tablesFolderAS()
 			if tablesFolderCacheAS and tablesFolderCacheAS.Parent then return tablesFolderCacheAS end
 			local gameObjects = workspace:FindFirstChild("GameObjects")
@@ -8158,7 +9800,6 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 		end
-
 		local function spawnMachinePositionAS()
 			if spawnMachineCacheAS and spawnMachineCacheAS.Parent then
 				return spawnMachineCacheAS.Position
@@ -8175,7 +9816,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return FALLBACK_SPAWN_MACHINE_POSITION_AS
 		end
-
 		local function characterPartsAS()
 			local character = LocalPlayerAS.Character
 			if not character then return nil end
@@ -8183,11 +9823,9 @@ if IS_MINIGAME_PLACE then
 				character:FindFirstChildOfClass("Humanoid"),
 				character:FindFirstChild("HumanoidRootPart")
 		end
-
 		local function customSeatWeldAS(root)
 			return root and root.Parent and root:FindFirstChild("CustomSeatWeld") or nil
 		end
-
 		local function tableFromCustomSeatWeldAS(root, folder)
 			local weld = customSeatWeldAS(root)
 			if not weld or not folder then return nil end
@@ -8200,7 +9838,6 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 		end
-
 		local function physicalCurrentTableAS()
 			local folder = tablesFolderAS()
 			local _, humanoid, root = characterPartsAS()
@@ -8212,7 +9849,6 @@ if IS_MINIGAME_PLACE then
 				return seat:FindFirstAncestor("Table")
 			end
 		end
-
 		local function tableSeatPromptAS(seat)
 			if not seat then return nil end
 			local prompt = seat:FindFirstChildOfClass("ProximityPrompt")
@@ -8220,7 +9856,6 @@ if IS_MINIGAME_PLACE then
 				return prompt
 			end
 		end
-
 		local function getPlayerAtSeatAS(seat)
 			if not seat or not seat.Parent then return nil end
 			local occupant = seat.Occupant
@@ -8245,14 +9880,12 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 		end
-
 		local function seatOccupiedByOtherAS(seat)
 			if not seat or not seat.Parent then return true end
 			local _, localHumanoid = characterPartsAS()
 			if seat.Occupant and seat.Occupant ~= localHumanoid then return true end
 			return getPlayerAtSeatAS(seat) ~= nil
 		end
-
 		local function replicatedTablePlayerCountAS(model)
 			if not model or not model.Parent then return nil end
 			local count = 0
@@ -8265,7 +9898,6 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 			if count > 0 then return math.min(count, 2) end
-
 			local billboard = model:FindFirstChild("StatusBillboard", true)
 			if billboard and billboard:IsA("BillboardGui") and billboard.Enabled then
 				local header = billboard:FindFirstChild("HeaderLabel", true)
@@ -8277,7 +9909,6 @@ if IS_MINIGAME_PLACE then
 					end
 				end
 			end
-
 			count = 0
 			for _, player in ipairs(PlayersAS:GetPlayers()) do
 				local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
@@ -8286,7 +9917,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return count > 0 and math.min(count, 2) or nil
 		end
-
 		local function waitingPartnerAtTableAS(model, knownPlayerCount)
 			if not model then return nil end
 			local folder = tablesFolderAS()
@@ -8307,7 +9937,6 @@ if IS_MINIGAME_PLACE then
 			end
 			if knownPlayerCount == 1 then return nil end
 		end
-
 		local function parseTokensAS(rawValue)
 			if type(rawValue) == "number" then return math.max(0, rawValue) end
 			local valueText = string.upper(tostring(rawValue or ""))
@@ -8321,7 +9950,6 @@ if IS_MINIGAME_PLACE then
 			local multipliers = {K=1e3, M=1e6, B=1e9, T=1e12, Q=1e15}
 			return math.max(0, value * (multipliers[suffix] or 1))
 		end
-
 		local function publicTokensAS(player)
 			local leaderstats = player and player:FindFirstChild("leaderstats")
 			local stat = leaderstats and leaderstats:FindFirstChild("Trade Tokens")
@@ -8341,17 +9969,14 @@ if IS_MINIGAME_PLACE then
 			end
 			return 0
 		end
-
 		local function publicBrainrotCategoryAS(tool, name)
 			local explicitRarity = tool:GetAttribute("Rarity")
 				or tool:GetAttribute("BrainrotRarity")
 			if explicitRarity == "Meta" then return "Meta" end
-
 			local rarity = type(explicitRarity) == "string" and explicitRarity or nil
 			if not rarity then
 				pcall(function() rarity = EconomyMathAS.GetBrainrotRarity(name) end)
 			end
-
 			local metaMarked = tool:GetAttribute("Meta") == true
 				or tool:GetAttribute("IsMeta") == true
 				or (
@@ -8360,28 +9985,6 @@ if IS_MINIGAME_PLACE then
 				)
 			return rarity == "Infinity" and metaMarked and "Meta" or rarity
 		end
-
-		local function publicRarityCountsAS(player)
-			local counts = {}
-			local function scan(container)
-				if not container then return end
-				for _, tool in ipairs(container:GetChildren()) do
-					if tool:IsA("Tool") then
-						local name = tool:GetAttribute("BrainrotName")
-						if type(name) == "string" and name ~= "" then
-							local rarity = publicBrainrotCategoryAS(tool, name)
-							if rarity then
-								counts[rarity] = (counts[rarity] or 0) + 1
-							end
-						end
-					end
-				end
-			end
-			scan(player:FindFirstChildOfClass("Backpack"))
-			scan(player.Character)
-			return counts
-		end
-
 		local function isBlacklistedAS(player)
 			if typeof(player) ~= "Instance" or not player:IsA("Player") then return false end
 			local userId = tostring(player.UserId)
@@ -8410,39 +10013,139 @@ if IS_MINIGAME_PLACE then
 			end
 			return false
 		end
-
+		local function toolMutationAS(tool)
+			if not tool then return nil end
+			local value = tool:GetAttribute("Mutation") or tool:GetAttribute("BrainrotMutation")
+			return type(value) == "string" and value or nil
+		end
+		local function toolTraitsAS(tool)
+			local result = {}
+			if not tool then return result end
+			for _, attributeName in ipairs({"Traits", "BrainrotTraits", "Trait"}) do
+				local value = tool:GetAttribute(attributeName)
+				if type(value) == "string" then
+					for trait in string.gmatch(value, "[^,|;]+") do
+						trait = string.gsub(trait, "^%s*(.-)%s*$", "%1")
+						if trait ~= "" then result[trait] = true end
+					end
+				end
+			end
+			return result
+		end
+		local function toolPassesSitFiltersAS(tool, rarity)
+			local utility = autoServerHopState.Utility
+			local mutations = utility["AutoSit" .. tostring(rarity) .. "Mutations"]
+			local traits = utility["AutoSit" .. tostring(rarity) .. "Traits"]
+			if type(mutations) == "table" and next(mutations) ~= nil then
+				local mutation = toolMutationAS(tool)
+				if not mutation or mutations[mutation] ~= true then return false end
+			end
+			if type(traits) == "table" and next(traits) ~= nil then
+				local present = toolTraitsAS(tool)
+				local matched = false
+				for trait in pairs(traits) do
+					if present[tostring(trait)] == true then matched = true break end
+				end
+				if not matched then return false end
+			end
+			return true
+		end
+		local function toolSpecificNameAS(tool)
+			if not tool or not tool:IsA("Tool") then return "" end
+			return tostring(
+				tool:GetAttribute("BrainrotName")
+					or tool:GetAttribute("ItemName")
+					or tool:GetAttribute("DisplayName")
+					or tool.Name
+					or ""
+			)
+		end
+		local function toolMatchesSpecificRuleAS(tool, rule)
+			if not tool or type(rule) ~= "table" or rule.Item == nil then return false end
+			local wanted = tostring(rule.Item)
+			if toolSpecificNameAS(tool) ~= wanted and tostring(tool.Name or "") ~= wanted then
+				return false
+			end
+			local mutations = type(rule.Mutations) == "table" and rule.Mutations or {}
+			if next(mutations) ~= nil then
+				local mutation = toolMutationAS(tool)
+				if not mutation or mutations[mutation] ~= true then return false end
+			end
+			local traits = type(rule.Traits) == "table" and rule.Traits or {}
+			if next(traits) ~= nil then
+				local present = toolTraitsAS(tool)
+				local matched = false
+				for trait in pairs(traits) do
+					if present[tostring(trait)] == true then matched = true break end
+				end
+				if not matched then return false end
+			end
+			return true
+		end
 		local function mustOwnMatchesAS(player)
 			local config = autoSitState and autoSitState.OneOfTwo
 			if not config or typeof(player) ~= "Instance" or not player:IsA("Player") then return false end
 			if isBlacklistedAS(player) then return false end
-			local counts
+			local tools = {}
+			local function scan(container)
+				if not container then return end
+				for _, child in ipairs(container:GetChildren()) do
+					if child:IsA("Tool") then tools[#tools + 1] = child end
+				end
+			end
+			scan(player:FindFirstChildOfClass("Backpack"))
+			scan(player.Character)
 			local selected = 0
+			local matched = 0
 			for _, rarity in ipairs(RARITY_OPTIONS) do
 				if config.Targets and config.Targets[rarity] then
 					selected += 1
+					local criterionMatched = false
 					if rarity == "Tokens" then
-						local required = math.clamp(math.floor(tonumber(config.Tokens) or 1), 1, 100000)
-						if publicTokensAS(player) >= required then return true end
+						local required = math.clamp(math.floor(tonumber(config.Tokens) or 1), 1, 1000000)
+						criterionMatched = publicTokensAS(player) >= required
 					else
-						counts = counts or publicRarityCountsAS(player)
-						local required = math.clamp(
-							math.floor(tonumber(config.Amounts and config.Amounts[rarity]) or 1),
-							1,
-							100
-						)
-						if (counts[rarity] or 0) >= required then return true end
+						local required = math.clamp(math.floor(tonumber(config.Amounts and config.Amounts[rarity]) or 1), 1, 100)
+						local count = 0
+						for _, tool in ipairs(tools) do
+							local name = tool:GetAttribute("BrainrotName")
+							if type(name) == "string" and name ~= ""
+								and publicBrainrotCategoryAS(tool, name) == rarity
+								and toolPassesSitFiltersAS(tool, rarity)
+							then
+								count += 1
+							end
+						end
+						criterionMatched = count >= required
+					end
+					if criterionMatched then matched += 1 end
+				end
+			end
+			local specificRules = autoServerHopState.Utility.AutoSitSpecificItems
+			if type(specificRules) == "table" then
+				for _, rule in ipairs(specificRules) do
+					if type(rule) == "table" and rule.Item ~= nil and tostring(rule.Item) ~= "" then
+						selected += 1
+						local criterionMatched = false
+						for _, tool in ipairs(tools) do
+							if toolMatchesSpecificRuleAS(tool, rule) then criterionMatched = true break end
+						end
+						if criterionMatched then matched += 1 end
 					end
 				end
 			end
-			return selected == 0
+			if selected == 0 then return true end
+			local utility = autoServerHopState.Utility
+			local matchAll = utility.AutoSitMustOwnAllSelected == true
+			local matchOne = utility.AutoSitMustOwnOneSelected == true
+			if not matchAll and not matchOne then return false end
+			return (matchAll and matched == selected) or (matchOne and matched > 0)
 		end
-
 		local function machineDistanceAS(model)
 			local center = model:GetPivot().Position
 			local machine = spawnMachinePositionAS()
 			return Vector3.new(center.X-machine.X, 0, center.Z-machine.Z).Magnitude
 		end
-
 		local function bestOpenSeatAS(model, playerCount)
 			local _, _, root = characterPartsAS()
 			local best
@@ -8471,12 +10174,22 @@ if IS_MINIGAME_PLACE then
 			end
 			return best
 		end
-
-		local function collectCandidatesAS(partnersOnly, excludedModel)
+		-- Auto Sit only needs the best candidate. Select it in one pass instead of
+		-- allocating/sorting full partner and empty-table arrays every scheduler tick.
+		local function betterPartnerAS(a, b)
+			if not b then return true end
+			if a.PromptReady ~= b.PromptReady then return a.PromptReady == true end
+			if a.MachineDistance ~= b.MachineDistance then return a.MachineDistance < b.MachineDistance end
+			return a.TravelDistance < b.TravelDistance
+		end
+		local function betterEmptyAS(a, b)
+			return not b or a.MachineDistance < b.MachineDistance
+				or (a.MachineDistance == b.MachineDistance and a.TravelDistance < b.TravelDistance)
+		end
+		local function collectBestCandidatesAS(partnersOnly, excludedModel)
 			local folder = tablesFolderAS()
-			if not folder then return {}, {} end
-			local partners, empties = {}, {}
-
+			if not folder then return nil, nil end
+			local bestPartner, bestEmpty
 			if partnersOnly then
 				local seen = {}
 				for _, player in ipairs(PlayersAS:GetPlayers()) do
@@ -8486,80 +10199,47 @@ if IS_MINIGAME_PLACE then
 						local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 						local model = root and tableFromCustomSeatWeldAS(root, folder)
 						local seatPart = humanoid and humanoid.SeatPart
-						if not model and seatPart and seatPart:IsDescendantOf(folder) then
-							model = seatPart:FindFirstAncestor("Table")
-						end
-						if model
-							and model ~= excludedModel
-							and model ~= blockedPreviousTableAS
-							and not seen[model]
-							and mustOwnMatchesAS(player)
-						then
+						if not model and seatPart and seatPart:IsDescendantOf(folder) then model = seatPart:FindFirstAncestor("Table") end
+						if model and model ~= excludedModel and model ~= blockedPreviousTableAS and not seen[model] and mustOwnMatchesAS(player) then
 							seen[model] = true
 							local candidate = bestOpenSeatAS(model, 1)
 							if candidate then
-								candidate.Partner = player
-								candidate.LockedAsPartner = true
-								partners[#partners+1] = candidate
+								candidate.Partner, candidate.LockedAsPartner = player, true
+								if betterPartnerAS(candidate, bestPartner) then bestPartner = candidate end
 							end
 						end
 					end
 				end
 			else
 				for _, model in ipairs(folder:GetChildren()) do
-					if model:IsA("Model")
-						and model.Name == "Table"
-						and model ~= excludedModel
-						and model ~= blockedPreviousTableAS
-					then
+					if model:IsA("Model") and model.Name == "Table" and model ~= excludedModel and model ~= blockedPreviousTableAS then
 						local count = replicatedTablePlayerCountAS(model)
 						if count == nil or count < 2 then
 							local partner = waitingPartnerAtTableAS(model, count)
 							local candidate = bestOpenSeatAS(model, count)
 							if candidate then
 								if typeof(partner) == "Instance" and partner:IsA("Player") and mustOwnMatchesAS(partner) then
-									candidate.Partner = partner
-									candidate.LockedAsPartner = true
-									partners[#partners+1] = candidate
-								elseif partner == nil and (count == nil or count == 0) then
-									empties[#empties+1] = candidate
+									candidate.Partner, candidate.LockedAsPartner = partner, true
+									if betterPartnerAS(candidate, bestPartner) then bestPartner = candidate end
+								elseif partner == nil and (count == nil or count == 0) and betterEmptyAS(candidate, bestEmpty) then
+									bestEmpty = candidate
 								end
 							end
 						end
 					end
 				end
 			end
-
-			table.sort(partners, function(a,b)
-				if a.PromptReady ~= b.PromptReady then return a.PromptReady == true end
-				if a.MachineDistance ~= b.MachineDistance then return a.MachineDistance < b.MachineDistance end
-				return a.TravelDistance < b.TravelDistance
-			end)
-			table.sort(empties, function(a,b)
-				if a.MachineDistance ~= b.MachineDistance then return a.MachineDistance < b.MachineDistance end
-				return a.TravelDistance < b.TravelDistance
-			end)
-			return partners, empties
+			return bestPartner, bestEmpty
 		end
-
 		local function bestTargetAS(excludedModel)
-			local partners, empties = collectCandidatesAS(false, excludedModel)
-
-
-
-			if autoSitState.OneOfTwo.Enabled == true and partners[1] then
-				return partners[1]
-			end
-			if autoSitState.EmptyTables.Enabled == true then
-				return empties[1]
-			end
+			local partner, empty = collectBestCandidatesAS(false, excludedModel)
+			if autoSitState.OneOfTwo.Enabled == true and partner then return partner end
+			if autoSitState.EmptyTables.Enabled == true then return empty end
 		end
-
 		local function bestPartnerAS(currentModel)
 			if autoSitState.OneOfTwo.Enabled ~= true then return nil end
-			return (select(1, collectCandidatesAS(true, currentModel)))[1]
+			return collectBestCandidatesAS(true, currentModel)
 		end
-
 		local function candidateStillAvailableAS(candidate, requirePartner)
 			if not candidate
 				or not candidate.Model
@@ -8571,17 +10251,14 @@ if IS_MINIGAME_PLACE then
 			then
 				return false, "target_closed"
 			end
-
 			if seatOccupiedByOtherAS(candidate.Seat) then
 				return false, "claimed"
 			end
-
 			local now = os.clock()
 			local count = replicatedTablePlayerCountAS(candidate.Model)
 			local partner = waitingPartnerAtTableAS(candidate.Model, count)
 			local concretePartner = typeof(partner) == "Instance"
 				and partner:IsA("Player")
-
 			if candidate.LockedAsPartner == true or requirePartner == true then
 				if concretePartner and mustOwnMatchesAS(partner) then
 					candidate.Partner = partner
@@ -8589,20 +10266,13 @@ if IS_MINIGAME_PLACE then
 					candidate._PartnerMissingSince = nil
 					return true
 				end
-
-
-
 				candidate._PartnerMissingSince = candidate._PartnerMissingSince or now
 				if now - candidate._PartnerMissingSince < PARTNER_CLOSE_CONFIRM_AS then
 					return true
 				end
 				return false, "partner_closed"
 			end
-
 			if concretePartner then
-
-
-
 				if autoSitState.OneOfTwo.Enabled == true
 					and mustOwnMatchesAS(partner)
 				then
@@ -8613,9 +10283,6 @@ if IS_MINIGAME_PLACE then
 				end
 				return false, "target_closed"
 			end
-
-
-
 			if count == 1 then
 				candidate._UnresolvedOneSince = candidate._UnresolvedOneSince or now
 				if now - candidate._UnresolvedOneSince < 0.30 then
@@ -8623,71 +10290,39 @@ if IS_MINIGAME_PLACE then
 				end
 				return false, "target_closed"
 			end
-
 			candidate._UnresolvedOneSince = nil
 			return count == nil or count == 0, (count and "target_closed" or nil)
 		end
-
+		-- Executor capabilities are static for the session; resolve the prompt helper once.
+		local firePromptExecutorAS
+		for _, environment in ipairs({_G, getgenv and getgenv() or nil, getrenv and getrenv() or nil}) do
+			if type(environment) == "table" and type(environment.fireproximityprompt) == "function" then
+				firePromptExecutorAS = environment.fireproximityprompt
+				break
+			end
+		end
 		local function firePromptAS(prompt)
 			if not prompt or not prompt.Parent or not prompt.Enabled then return false end
-
-			local firePrompt
-			local environments = {_G}
-			pcall(function()
-				if getgenv then environments[#environments + 1] = getgenv() end
-			end)
-			pcall(function()
-				if getrenv then environments[#environments + 1] = getrenv() end
-			end)
-			pcall(function()
-				if getfenv then environments[#environments + 1] = getfenv(0) end
-			end)
-			for _, environment in ipairs(environments) do
-				if type(environment) == "table" then
-					local ok, value = pcall(function()
-						return environment.fireproximityprompt
-					end)
-					if ok and type(value) == "function" then
-						firePrompt = value
-						break
-					end
-				end
-			end
-
-			if type(firePrompt) == "function" then
-				local ok = pcall(firePrompt, prompt, 1, true)
-				if ok then return true end
-			end
+			if firePromptExecutorAS and pcall(firePromptExecutorAS, prompt, 1, true) then return true end
 			return pcall(function()
 				prompt:InputHoldBegin()
 				task.wait(math.max(prompt.HoldDuration, 0.05))
 				prompt:InputHoldEnd()
 			end)
 		end
-
 		local function releaseCurrentSeatAS(expectedTable)
 			local _, humanoid, root = characterPartsAS()
 			local folder = tablesFolderAS()
 			if not humanoid or not root or not folder then return false end
-
-
-
-
-
-
 			if not minigameQueuedAS() then
 				return false
 			end
-
 			local fired = pcall(function()
 				MinigameLeaveQueueAS:FireServer()
 			end)
 			if not fired then return false end
-
 			local queueDeadline = os.clock() + 1.50
 			while minigameQueuedAS() and os.clock() < queueDeadline do
-
-
 				humanoid:Move(Vector3.zero, false)
 				pcall(function() humanoid:MoveTo(root.Position) end)
 				RunServiceAS.Heartbeat:Wait()
@@ -8695,9 +10330,6 @@ if IS_MINIGAME_PLACE then
 			if minigameQueuedAS() then
 				return false
 			end
-
-
-
 			local started = os.clock()
 			local nextLocalBreakAt = started + 0.45
 			while os.clock() - started < 1.50 do
@@ -8706,7 +10338,6 @@ if IS_MINIGAME_PLACE then
 				humanoid.AutoRotate = true
 				humanoid:Move(Vector3.zero, false)
 				pcall(function() humanoid:MoveTo(root.Position) end)
-
 				local seat = humanoid.SeatPart
 				local stillRobloxSeated = seat ~= nil and seat:IsDescendantOf(folder)
 				local weld = customSeatWeldAS(root)
@@ -8717,13 +10348,11 @@ if IS_MINIGAME_PLACE then
 					pcall(humanoid.ChangeState, humanoid, Enum.HumanoidStateType.Running)
 					return true
 				end
-
 				if stillRobloxSeated then
 					pcall(humanoid.ChangeState, humanoid, Enum.HumanoidStateType.GettingUp)
 				else
 					pcall(humanoid.ChangeState, humanoid, Enum.HumanoidStateType.Running)
 				end
-
 				if weld and os.clock() >= nextLocalBreakAt then
 					nextLocalBreakAt = os.clock() + 0.20
 					pcall(function()
@@ -8732,7 +10361,6 @@ if IS_MINIGAME_PLACE then
 				end
 				RunServiceAS.Heartbeat:Wait()
 			end
-
 			local seat = humanoid.SeatPart
 			local stillRobloxSeated = seat ~= nil and seat:IsDescendantOf(folder)
 			local weld = customSeatWeldAS(root)
@@ -8751,11 +10379,7 @@ if IS_MINIGAME_PLACE then
 			end
 			return false
 		end
-
 		local function clearOrphanedQueueAS()
-
-
-
 			if physicalCurrentTableAS() ~= nil or not minigameQueuedAS() then
 				return not minigameQueuedAS()
 			end
@@ -8769,25 +10393,19 @@ if IS_MINIGAME_PLACE then
 			end
 			return not minigameQueuedAS()
 		end
-
 		local function flatDistanceAS(a, b)
 			return Vector3.new(a.X - b.X, 0, a.Z - b.Z).Magnitude
 		end
-
 		local function tableApproachPointAS(candidate, root)
 			local seat = candidate and candidate.Seat
 			local model = candidate and candidate.Model
 			if not seat or not model or not root then return nil end
-
-
-
 			if candidate._ApproachSeat == seat
 				and typeof(candidate._ApproachPoint) == "Vector3"
 			then
 				local cached = candidate._ApproachPoint
 				return Vector3.new(cached.X, root.Position.Y, cached.Z)
 			end
-
 			local look = Vector3.new(
 				seat.CFrame.LookVector.X,
 				0,
@@ -8799,24 +10417,18 @@ if IS_MINIGAME_PLACE then
 				0,
 				center.Z - seat.Position.Z
 			)
-
-
-
-
 			if look.Magnitude < 0.01 then look = towardTable end
 			if towardTable.Magnitude > 0.01 and look:Dot(towardTable) < 0 then
 				look = -look
 			end
 			if look.Magnitude < 0.01 then return nil end
 			look = look.Unit
-
 			local point3 = seat.Position - look * TABLE_APPROACH_DISTANCE_AS
 			local point = Vector3.new(point3.X, root.Position.Y, point3.Z)
 			candidate._ApproachSeat = seat
 			candidate._ApproachPoint = point
 			return point
 		end
-
 		local function computePathAS(fromPosition, toPosition)
 			local path = PathfindingServiceAS:CreatePath({
 				AgentRadius = 2.35,
@@ -8833,11 +10445,9 @@ if IS_MINIGAME_PLACE then
 			if #waypoints == 0 then return nil, nil end
 			return path, waypoints
 		end
-
 		local function straightRouteClearAS(fromPosition, toPosition)
 			local _, _, root = characterPartsAS()
 			if not root then return false end
-
 			local flatDelta = Vector3.new(
 				toPosition.X - fromPosition.X,
 				0,
@@ -8846,17 +10456,13 @@ if IS_MINIGAME_PLACE then
 			local distance = flatDelta.Magnitude
 			if distance <= PATH_WAYPOINT_REACHED_AS then return true end
 			if math.abs(toPosition.Y - fromPosition.Y) > 2.5 then return false end
-
 			local rayParams = RaycastParams.new()
 			rayParams.FilterType = Enum.RaycastFilterType.Exclude
 			rayParams.FilterDescendantsInstances = {LocalPlayerAS.Character}
 			rayParams.IgnoreWater = true
-
 			local direction = flatDelta.Unit
 			local lateral = Vector3.new(-direction.Z, 0, direction.X)
 			local castVector = direction * distance
-
-
 			for _, sideOffset in ipairs({0, 0.80, -0.80}) do
 				local origin = fromPosition + lateral * sideOffset
 				local hit = workspace:Raycast(origin, castVector, rayParams)
@@ -8864,8 +10470,6 @@ if IS_MINIGAME_PLACE then
 					return false
 				end
 			end
-
-
 			local samples = math.max(1, math.ceil(distance / 6))
 			for index = 1, samples do
 				local alpha = index / samples
@@ -8881,7 +10485,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return true
 		end
-
 		local function buildShortestRouteAS(fromPosition, toPosition)
 			if straightRouteClearAS(fromPosition, toPosition) then
 				return nil, {
@@ -8893,29 +10496,22 @@ if IS_MINIGAME_PLACE then
 			end
 			return computePathAS(fromPosition, toPosition)
 		end
-
 		local function joinedTargetAS(candidate)
 			if not candidate or not candidate.Model or not candidate.Model.Parent then
 				return false
 			end
-
-
-
 			if physicalCurrentTableAS() == candidate.Model then
 				return true
 			end
-
 			local active = activeTableAS()
 			return active == candidate.Model
 				and (minigameQueuedAS() or minigamePlayingAS())
 		end
-
 		local function pausedAS()
 			return autoServerHopState.Utility.PauseScript == true
 				or autoServerHopState.Utility.PauseMinigameFeatures == true
 				or autoServerHopState.RuntimeServerHopPending == true
 		end
-
 		local function walkCommittedAS(candidate)
 			if pausedAS() then return false, "paused" end
 			local valid, invalidReason = candidateStillAvailableAS(
@@ -8923,16 +10519,12 @@ if IS_MINIGAME_PLACE then
 				candidate.LockedAsPartner == true
 			)
 			if not valid then return false, invalidReason or "invalid" end
-
 			local _, humanoid, root = characterPartsAS()
 			if not humanoid or not root then return false, "character" end
-
 			local destination = tableApproachPointAS(candidate, root)
 			if not destination then return false, "invalid" end
-
 			local originalAutoJump = humanoid.AutoJumpEnabled
 			humanoid.AutoJumpEnabled = false
-
 			local path
 			local waypoints
 			local waypointIndex = 1
@@ -8951,7 +10543,6 @@ if IS_MINIGAME_PLACE then
 			local jumpRearmAnchor
 			local nextPartnerScan = 0
 			local deadline = os.clock() + TABLE_MOVE_TIMEOUT_AS
-
 			local function cleanup(stopMovement)
 				if blockedConnection then
 					blockedConnection:Disconnect()
@@ -8965,7 +10556,6 @@ if IS_MINIGAME_PLACE then
 					end
 				end
 			end
-
 			local function forwardObstacleDetected(target)
 				if typeof(target) ~= "Vector3" or not root.Parent then return false end
 				local delta = Vector3.new(
@@ -8974,12 +10564,10 @@ if IS_MINIGAME_PLACE then
 					target.Z - root.Position.Z
 				)
 				if delta.Magnitude < 0.05 then return false end
-
 				local rayParams = RaycastParams.new()
 				rayParams.FilterType = Enum.RaycastFilterType.Exclude
 				rayParams.FilterDescendantsInstances = {LocalPlayerAS.Character}
 				rayParams.IgnoreWater = true
-
 				local direction = delta.Unit * math.min(3.75, delta.Magnitude)
 				local lateral = Vector3.new(-delta.Unit.Z, 0, delta.Unit.X)
 				for _, yOffset in ipairs({0, -1.25}) do
@@ -8989,8 +10577,6 @@ if IS_MINIGAME_PLACE then
 							+ lateral * sideOffset
 						local hit = workspace:Raycast(origin, direction, rayParams)
 						if hit and hit.Instance and hit.Instance.CanCollide == true then
-
-
 							if not (
 								candidate.Model
 								and hit.Instance:IsDescendantOf(candidate.Model)
@@ -9004,7 +10590,6 @@ if IS_MINIGAME_PLACE then
 				end
 				return false
 			end
-
 			local function issueTarget(target)
 				if activeTarget
 					and target
@@ -9017,7 +10602,6 @@ if IS_MINIGAME_PLACE then
 					humanoid:MoveTo(activeTarget)
 				end
 			end
-
 			local function requestNavigationJumpAS(target)
 				local okState, state = pcall(humanoid.GetState, humanoid)
 				if okState and (
@@ -9027,9 +10611,6 @@ if IS_MINIGAME_PLACE then
 				) then
 					return false
 				end
-
-
-
 				local changed = pcall(
 					humanoid.ChangeState,
 					humanoid,
@@ -9038,11 +10619,8 @@ if IS_MINIGAME_PLACE then
 				if not changed then
 					return false
 				end
-
 				jumpActive = true
 				jumpRearmAnchor = root.Position
-
-
 				if typeof(target) == "Vector3" then
 					activeTarget = target
 					humanoid:MoveTo(target)
@@ -9051,12 +10629,10 @@ if IS_MINIGAME_PLACE then
 				end
 				return true
 			end
-
 			local function sustainJumpMovementAS()
 				if not jumpActive or not activeTarget or not root.Parent or not humanoid.Parent then
 					return
 				end
-
 				local okState, state = pcall(humanoid.GetState, humanoid)
 				local airborne = okState and (
 					state == Enum.HumanoidStateType.Jumping
@@ -9065,7 +10641,6 @@ if IS_MINIGAME_PLACE then
 				if not airborne then
 					return
 				end
-
 				local delta = Vector3.new(
 					activeTarget.X - root.Position.X,
 					0,
@@ -9074,16 +10649,11 @@ if IS_MINIGAME_PLACE then
 				if delta.Magnitude <= 0.05 then
 					return
 				end
-
-
-
-
 				humanoid:Move(delta.Unit, false)
 				pcall(function()
 					humanoid:MoveTo(activeTarget)
 				end)
 			end
-
 			local function rebuildPath()
 				local newPath, newWaypoints = buildShortestRouteAS(
 					root.Position,
@@ -9093,18 +10663,15 @@ if IS_MINIGAME_PLACE then
 					repathCount += 1
 					return false
 				end
-
 				if blockedConnection then
 					blockedConnection:Disconnect()
 					blockedConnection = nil
 				end
-
 				path = newPath
 				waypoints = newWaypoints
 				waypointIndex = 1
 				pathBlocked = false
 				repathCount += 1
-
 				if path then
 					blockedConnection = path.Blocked:Connect(function(blockedIndex)
 						if blockedIndex >= waypointIndex then
@@ -9112,7 +10679,6 @@ if IS_MINIGAME_PLACE then
 						end
 					end)
 				end
-
 				local waypoint = waypoints[waypointIndex]
 				if waypoint.Action == Enum.PathWaypointAction.Jump
 					and not jumpRearmAnchor
@@ -9125,10 +10691,7 @@ if IS_MINIGAME_PLACE then
 				lastSampleDistance = flatDistanceAS(root.Position, waypoint.Position)
 				return true
 			end
-
 			if not rebuildPath() then
-
-
 				while repathCount <= PATH_REPATH_LIMIT_AS and os.clock() < deadline do
 					if pausedAS() then
 						cleanup(true)
@@ -9142,27 +10705,17 @@ if IS_MINIGAME_PLACE then
 					return false, "unreachable"
 				end
 			end
-
 			while screenGui.Parent and os.clock() < deadline do
 				if pausedAS() then
 					cleanup(true)
 					return false, "paused"
 				end
 				local now = os.clock()
-
-
-
 				sustainJumpMovementAS()
-
 				if joinedTargetAS(candidate) then
 					cleanup(false)
 					return true, "joined"
 				end
-
-
-
-
-
 				if candidate.Prompt
 					and candidate.Prompt.Parent
 					and candidate.Prompt.Enabled
@@ -9175,11 +10728,9 @@ if IS_MINIGAME_PLACE then
 						math.max(0, maxActivation - 0.35)
 					)
 					local seatDistance = (root.Position - candidate.Seat.Position).Magnitude
-
 					if seatDistance <= captureDistance then
 						local captureDeadline = math.min(deadline, os.clock() + 0.65)
 						local lastCaptureAttempt = -math.huge
-
 						while screenGui.Parent and os.clock() < captureDeadline do
 							if pausedAS() then
 								cleanup(true)
@@ -9189,7 +10740,6 @@ if IS_MINIGAME_PLACE then
 								cleanup(false)
 								return true, "joined"
 							end
-
 							local captureValid, captureReason = candidateStillAvailableAS(
 								candidate,
 								candidate.LockedAsPartner == true
@@ -9198,7 +10748,6 @@ if IS_MINIGAME_PLACE then
 								cleanup(false)
 								return false, captureReason or "claimed"
 							end
-
 							local seatedHere = physicalCurrentTableAS() == candidate.Model
 							if seatedHere then
 								activeTarget = nil
@@ -9214,7 +10763,6 @@ if IS_MINIGAME_PLACE then
 									humanoid:MoveTo(liveCapturePoint)
 								end
 							end
-
 							local livePrompt = candidate.Prompt
 							local liveSeat = candidate.Seat
 							local liveDistance = liveSeat
@@ -9224,7 +10772,6 @@ if IS_MINIGAME_PLACE then
 							local liveMax = livePrompt
 								and tonumber(livePrompt.MaxActivationDistance)
 								or 10
-
 							if livePrompt
 								and livePrompt.Parent
 								and livePrompt.Enabled
@@ -9235,26 +10782,19 @@ if IS_MINIGAME_PLACE then
 								lastJoinAttemptAS = lastCaptureAttempt
 								firePromptAS(livePrompt)
 							end
-
 							RunServiceAS.Heartbeat:Wait()
 						end
-
 						if joinedTargetAS(candidate) then
 							cleanup(false)
 							return true, "joined"
 						end
-
 						if physicalCurrentTableAS() == candidate.Model then
 							cleanup(false)
 							return true, "joined"
 						end
-
-
-
 						rebuildPath()
 					end
 				end
-
 				local routeValid, routeReason = candidateStillAvailableAS(
 					candidate,
 					candidate.LockedAsPartner == true
@@ -9263,10 +10803,6 @@ if IS_MINIGAME_PLACE then
 					cleanup(false)
 					return false, routeReason or "invalid"
 				end
-
-
-
-
 				if candidate.LockedAsPartner ~= true
 					and autoSitState.OneOfTwo.Enabled == true
 					and now >= nextPartnerScan
@@ -9281,21 +10817,17 @@ if IS_MINIGAME_PLACE then
 						return false, "preempted", better
 					end
 				end
-
 				local waypoint = waypoints and waypoints[waypointIndex]
 				if not waypoint then
 					cleanup(false)
 					return false, "unreachable"
 				end
-
 				local distanceToWaypoint = flatDistanceAS(root.Position, waypoint.Position)
 				local distanceToDestination = flatDistanceAS(root.Position, destination)
-
 				if distanceToDestination <= PATH_WAYPOINT_REACHED_AS then
 					cleanup(false)
 					return true, "reached"
 				end
-
 				if distanceToWaypoint <= PATH_WAYPOINT_REACHED_AS then
 					waypointIndex += 1
 					waypoint = waypoints[waypointIndex]
@@ -9303,7 +10835,6 @@ if IS_MINIGAME_PLACE then
 						cleanup(false)
 						return true, "reached"
 					end
-
 					if waypoint.Action == Enum.PathWaypointAction.Jump
 						and not jumpRearmAnchor
 					then
@@ -9318,7 +10849,6 @@ if IS_MINIGAME_PLACE then
 					RunServiceAS.Heartbeat:Wait()
 					continue
 				end
-
 				if now >= nextProgressSample then
 					local moved = flatDistanceAS(root.Position, lastSamplePosition)
 					local currentDistance = flatDistanceAS(root.Position, waypoint.Position)
@@ -9326,7 +10856,6 @@ if IS_MINIGAME_PLACE then
 					local velocity = root.AssemblyLinearVelocity
 					local flatSpeed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
 					local wallAhead = forwardObstacleDetected(waypoint.Position)
-
 					if progress >= PATH_PROGRESS_GAIN_AS then
 						lastProgressAt = now
 						slowSince = nil
@@ -9336,28 +10865,20 @@ if IS_MINIGAME_PLACE then
 							or moved < PATH_PROGRESS_GAIN_AS
 						)
 					then
-
-
 						slowSince = now
 					else
-
 						slowSince = nil
 					end
-
 					if jumpRearmAnchor
 						and flatDistanceAS(root.Position, jumpRearmAnchor)
 							>= PATH_JUMP_REARM_DISTANCE_AS
 					then
 						jumpRearmAnchor = nil
 					end
-
 					lastSamplePosition = root.Position
 					lastSampleDistance = currentDistance
 					nextProgressSample = now + PATH_PROGRESS_SAMPLE_AS
 				end
-
-
-
 				if jumpObserveUntil > 0 and now >= jumpObserveUntil then
 					jumpObserveUntil = 0
 					local currentDistance = flatDistanceAS(root.Position, waypoint.Position)
@@ -9366,8 +10887,6 @@ if IS_MINIGAME_PLACE then
 							cleanup(false)
 							return false, "unreachable"
 						end
-
-
 						rebuildPath()
 					else
 						lastProgressAt = now
@@ -9375,7 +10894,6 @@ if IS_MINIGAME_PLACE then
 					jumpActive = false
 					slowSince = nil
 				end
-
 				if slowSince
 					and now - slowSince >= PATH_SLOW_DETECT_AS
 					and jumpObserveUntil <= 0
@@ -9398,10 +10916,6 @@ if IS_MINIGAME_PLACE then
 						cleanup(false)
 						return false, "unreachable"
 					end
-
-
-
-
 					if waypoint
 						and forwardObstacleDetected(waypoint.Position)
 						and not jumpRearmAnchor
@@ -9415,8 +10929,6 @@ if IS_MINIGAME_PLACE then
 				elseif now - lastProgressAt >= PATH_REPATH_STALL_AS
 					and jumpObserveUntil <= 0
 				then
-
-
 					lastProgressAt = now
 					if repathCount >= PATH_REPATH_LIMIT_AS then
 						cleanup(false)
@@ -9424,63 +10936,45 @@ if IS_MINIGAME_PLACE then
 					end
 					rebuildPath()
 				end
-
 				RunServiceAS.Heartbeat:Wait()
 			end
-
 			cleanup(false)
 			return joinedTargetAS(candidate), "timeout"
 		end
-
 		local function joinCandidateAS(candidate)
 			if pausedAS()
 				or routeBusyAS
-				or autoServerHopState.RuntimeBoothMutationBusy == true
 				or not candidate
 			then
 				return false
 			end
-
-
 			routeBusyAS = true
 			autoServerHopState.RuntimeAutoSitBusy = true
-
 			local joined = false
 			local target = candidate
-
 			local ok = pcall(function()
 				for _ = 1, 6 do
 					if pausedAS() or not target or minigamePlayingAS() or negotiationActiveAS() then
 						return
 					end
-
 					local reached, reason, replacement = walkCommittedAS(target)
-
 					if reason == "preempted" and replacement then
-
-
 						target = replacement
 						continue
 					end
-
 					if not reached then
 						if reason == "partner_closed"
 							or reason == "target_closed"
 							or reason == "claimed"
 						then
-
-
 							target = bestTargetAS(target.Model)
 							continue
 						end
-
-
 						if reason == "unreachable" or reason == "timeout" then
 							continue
 						end
 						return
 					end
-
 					local valid = candidateStillAvailableAS(
 						target,
 						target.LockedAsPartner == true
@@ -9489,10 +10983,6 @@ if IS_MINIGAME_PLACE then
 						target = bestTargetAS(target.Model)
 						continue
 					end
-
-
-
-
 					local promptDeadline = os.clock() + 1.25
 					while os.clock() < promptDeadline do
 						if pausedAS() then return end
@@ -9500,7 +10990,6 @@ if IS_MINIGAME_PLACE then
 							joined = true
 							break
 						end
-
 						if target.Prompt
 							and target.Prompt.Parent
 							and target.Prompt.Enabled
@@ -9511,20 +11000,14 @@ if IS_MINIGAME_PLACE then
 						end
 						RunServiceAS.Heartbeat:Wait()
 					end
-
 					if joinedTargetAS(target) then
 						joined = true
 					end
-
 					if joined then
 						lastObservedPhysicalTableAS = target.Model
 						if target.Model ~= blockedPreviousTableAS then
 							blockedPreviousTableAS = nil
 						end
-
-
-
-
 						local ackDeadline = os.clock() + 4.0
 						while screenGui.Parent
 							and not pausedAS()
@@ -9536,62 +11019,42 @@ if IS_MINIGAME_PLACE then
 						end
 						return
 					end
-
-
-
 				end
 			end)
-
 			routeBusyAS = false
 			autoServerHopState.RuntimeAutoSitBusy = false
 			return ok and joined
 		end
-
 		local function switchToPartnerAS(currentModel, candidate)
 			if pausedAS()
 				or routeBusyAS
-				or autoServerHopState.RuntimeBoothMutationBusy == true
 				or not currentModel
 				or not candidate
 				or currentModel == candidate.Model
 			then
 				return false
 			end
-
-
-
-
 			if not minigameQueuedAS() then
 				return false
 			end
-
 			local valid = candidateStillAvailableAS(candidate, true)
 			if not valid then return false end
-
 			routeBusyAS = true
 			autoServerHopState.RuntimeAutoSitBusy = true
 			local switched = false
-
 			local ok = pcall(function()
 				if pausedAS() then return end
 				blockedPreviousTableAS = currentModel
-
-
 				candidate.LockedAsPartner = true
 				if not candidateStillAvailableAS(candidate, true) then return end
 				if not releaseCurrentSeatAS(currentModel) then return end
-
 				local target = candidate
 				for _ = 1, 5 do
 					if pausedAS() then return end
 					if not candidateStillAvailableAS(target, true) then
-
-
-
 						target = bestTargetAS(currentModel)
 						if not target then return end
 					end
-
 					local reached, reason, replacement = walkCommittedAS(target)
 					if reason == "preempted" and replacement then
 						target = replacement
@@ -9605,11 +11068,8 @@ if IS_MINIGAME_PLACE then
 							target = bestTargetAS(currentModel)
 							continue
 						end
-
-
 						continue
 					end
-
 					local promptDeadline = os.clock() + 1.25
 					while os.clock() < promptDeadline do
 						if pausedAS() then return end
@@ -9627,7 +11087,6 @@ if IS_MINIGAME_PLACE then
 						end
 						RunServiceAS.Heartbeat:Wait()
 					end
-
 					if joinedTargetAS(target) then
 						switched = true
 					end
@@ -9636,7 +11095,6 @@ if IS_MINIGAME_PLACE then
 						if target.Model ~= blockedPreviousTableAS then
 							blockedPreviousTableAS = nil
 						end
-
 						local ackDeadline = os.clock() + 4.0
 						while screenGui.Parent
 							and not pausedAS()
@@ -9650,12 +11108,10 @@ if IS_MINIGAME_PLACE then
 					end
 				end
 			end)
-
 			routeBusyAS = false
 			autoServerHopState.RuntimeAutoSitBusy = false
 			return ok and switched
 		end
-
 		local function schedulerStepAS()
 			if autoServerHopState.Utility.PauseScript ~= true
 				and os.clock()
@@ -9667,7 +11123,6 @@ if IS_MINIGAME_PLACE then
 			if autoServerHopState.Utility.PauseScript == true
 			or autoServerHopState.Utility.PauseMinigameFeatures == true
 				or autoServerHopState.RuntimeServerHopPending == true
-				or autoServerHopState.RuntimeBoothMutationBusy == true
 			then
 				return
 			end
@@ -9679,20 +11134,14 @@ if IS_MINIGAME_PLACE then
 				and autoSitState.OneOfTwo.Enabled == true
 			if not emptyEnabled and not partnerEnabled then return end
 			if routeBusyAS or minigamePlayingAS() or negotiationActiveAS() then return end
-
 			local current = physicalCurrentTableAS()
 			local queued = minigameQueuedAS()
-
 			if current then
 				lastObservedPhysicalTableAS = current
 			elseif lastObservedPhysicalTableAS then
 				blockedPreviousTableAS = lastObservedPhysicalTableAS
 				lastObservedPhysicalTableAS = nil
 			end
-
-
-
-
 			if queued and not current then
 				local orphanedTable = activeTableAS()
 				if orphanedTable then
@@ -9704,7 +11153,6 @@ if IS_MINIGAME_PLACE then
 					return
 				end
 			end
-
 			if current or queued then
 				if current and queued then
 					local currentCount = replicatedTablePlayerCountAS(current)
@@ -9726,15 +11174,13 @@ if IS_MINIGAME_PLACE then
 				end
 				return
 			end
-
 			local target = bestTargetAS(nil)
 			if target then
 				joinCandidateAS(target)
 			end
 		end
-
 		while screenGui.Parent do
-			RunServiceAS.Heartbeat:Wait()
+			task.wait(0.05)
 			local utility = autoServerHopState.Utility
 			local emptyEnabled = autoSitState
 				and autoSitState.EmptyTables
@@ -9745,29 +11191,17 @@ if IS_MINIGAME_PLACE then
 			if utility.PauseScript == true
 				or utility.PauseMinigameFeatures == true
 				or autoServerHopState.RuntimeServerHopPending == true
-				or autoServerHopState.RuntimeBoothMutationBusy == true
 				or (not emptyEnabled and not partnerEnabled)
 			then
 				continue
 			end
 			local okStep = pcall(schedulerStepAS)
 			if not okStep then
-
 				task.wait(0.05)
 			end
 		end
 	end)
 end
-
-
-
-
-
-
-
-
-
-
 if IS_MINIGAME_PLACE then
 	task.spawn(function()
 		while screenGui.Parent
@@ -9780,14 +11214,12 @@ if IS_MINIGAME_PLACE then
 			task.wait(0.10)
 		end
 		if not screenGui.Parent then return end
-
-		local PlayersAC = game:GetService("Players")
-		local RSAC = game:GetService("ReplicatedStorage")
-		local RunServiceAC = game:GetService("RunService")
+		local PlayersAC = Players
+		local RSAC = ReplicatedStorage
+		local RunServiceAC = RunService
 		local LocalPlayerAC = PlayersAC.LocalPlayer
 		local SharedAC = RSAC:WaitForChild("Shared")
 		local ClientAC = RSAC:WaitForChild("Client")
-
 		local function requireAC(moduleScript)
 			while screenGui.Parent do
 				local ok, result = pcall(require, moduleScript)
@@ -9795,12 +11227,10 @@ if IS_MINIGAME_PLACE then
 				task.wait(0.25)
 			end
 		end
-
 		local EconomyMathAC = requireAC(SharedAC:WaitForChild("utils"):WaitForChild("EconomyMath"))
 		local ReplicatorAC = requireAC(ClientAC:WaitForChild("Modules"):WaitForChild("ReplicatorClient"))
 		local RemotesAC = requireAC(SharedAC:WaitForChild("Remotes"))
 		if not (EconomyMathAC and ReplicatorAC and RemotesAC) then return end
-
 		local DeclineAC = RemotesAC.NegotiationDecline
 		local LeaveQueueAC = RemotesAC.MinigameLeaveQueue
 		local ActiveNegotiationAC
@@ -9813,26 +11243,18 @@ if IS_MINIGAME_PLACE then
 		local noValueSinceAC
 		local brainrotMismatchSinceAC
 		local autoCancelWasActiveAC = false
-
 		local function refreshAC()
 			local negotiation, minigame
-			pcall(function() negotiation = ReplicatorAC.get("ActiveNegotiation") end)
-			pcall(function() minigame = ReplicatorAC.get("ActiveMinigame") end)
+			negotiation = safeRepGet(ReplicatorAC, "ActiveNegotiation")
+			minigame = safeRepGet(ReplicatorAC, "ActiveMinigame")
 			if negotiation ~= nil then ActiveNegotiationAC = negotiation end
 			if minigame ~= nil then ActiveMinigameAC = minigame end
 		end
-
-		local function tryAC(root, path)
-			if not root then return nil end
-			local ok, value = pcall(function() return root:TryIndex(path) end)
-			return ok and value or nil
-		end
-
+		local tryAC = safeTryIndex
 		local function guidAC()
 			refreshAC()
 			return tryAC(ActiveNegotiationAC, {"guid"})
 		end
-
 		local function queuedAC()
 			refreshAC()
 			local value = tryAC(ActiveMinigameAC, {"queued"})
@@ -9842,7 +11264,6 @@ if IS_MINIGAME_PLACE then
 			end)
 			return ok and direct == true
 		end
-
 		local function replicatedOpponentAC()
 			refreshAC()
 			local opponent = tryAC(ActiveNegotiationAC, {"player2", "player"})
@@ -9858,14 +11279,12 @@ if IS_MINIGAME_PLACE then
 				and opponent ~= LocalPlayerAC
 				and opponent or nil
 		end
-
 		local function tableFolderAC()
 			local gameObjects = workspace:FindFirstChild("GameObjects")
 			local placeSpecific = gameObjects and gameObjects:FindFirstChild("PlaceSpecific")
 			local tradePlaza = placeSpecific and placeSpecific:FindFirstChild("trade_plaza")
 			return tradePlaza and tradePlaza:FindFirstChild("MinigameTables")
 		end
-
 		local function physicalTableAC(player)
 			local folder = tableFolderAC()
 			local character = player and player.Character
@@ -9886,7 +11305,6 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 		end
-
 		local function physicalOpponentAC()
 			local myTable = physicalTableAC(LocalPlayerAC)
 			if not myTable then return nil end
@@ -9896,7 +11314,6 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 		end
-
 		local function isBlacklistedAC(player)
 			if typeof(player) ~= "Instance" or not player:IsA("Player") then return false end
 			local userId = tostring(player.UserId)
@@ -9911,21 +11328,18 @@ if IS_MINIGAME_PLACE then
 			end
 			return false
 		end
-
 		local function tempBlacklistAC(userId)
 			local record = autoServerHopState.RecordCanceledTrade
 			if type(record) == "function" then
 				record(userId)
 			end
 		end
-
 		local function categoryAC(tool)
 			if not tool or not tool:IsA("Tool") then return nil end
 			local name = tool:GetAttribute("BrainrotName")
 			if type(name) ~= "string" or name == "" then return nil end
 			local explicit = tool:GetAttribute("Rarity") or tool:GetAttribute("BrainrotRarity")
 			if explicit == "Meta" then return "Meta" end
-
 			local rarity = type(explicit) == "string" and explicit or nil
 			if not rarity then
 				pcall(function() rarity = EconomyMathAC.GetBrainrotRarity(name) end)
@@ -9935,7 +11349,75 @@ if IS_MINIGAME_PLACE then
 				or string.find(string.lower(name), "%f[%a]meta%f[%A]") ~= nil
 			return rarity == "Infinity" and metaMarked and "Meta" or rarity
 		end
-
+		local function toolMutationAC(tool)
+			if not tool then return nil end
+			local value = tool:GetAttribute("Mutation") or tool:GetAttribute("BrainrotMutation")
+			return type(value) == "string" and value or nil
+		end
+		local function toolTraitsAC(tool)
+			local result = {}
+			if not tool then return result end
+			for _, attributeName in ipairs({"Traits", "BrainrotTraits", "Trait"}) do
+				local value = tool:GetAttribute(attributeName)
+				if type(value) == "string" then
+					for trait in string.gmatch(value, "[^,|;]+") do
+						trait = string.gsub(trait, "^%s*(.-)%s*$", "%1")
+						if trait ~= "" then result[trait] = true end
+					end
+				end
+			end
+			return result
+		end
+		local function toolPassesCancelFiltersAC(tool, rarity)
+			local utility = autoServerHopState.Utility
+			local mutations = utility["AutoCancel" .. tostring(rarity) .. "Mutations"]
+			local traits = utility["AutoCancel" .. tostring(rarity) .. "Traits"]
+			if type(mutations) == "table" and next(mutations) ~= nil then
+				local mutation = toolMutationAC(tool)
+				if not mutation or mutations[mutation] ~= true then return false end
+			end
+			if type(traits) == "table" and next(traits) ~= nil then
+				local present = toolTraitsAC(tool)
+				local matched = false
+				for trait in pairs(traits) do
+					if present[tostring(trait)] == true then matched = true break end
+				end
+				if not matched then return false end
+			end
+			return true
+		end
+		local function toolSpecificNameAC(tool)
+			if not tool or not tool:IsA("Tool") then return "" end
+			return tostring(
+				tool:GetAttribute("BrainrotName")
+				or tool:GetAttribute("ItemName")
+				or tool:GetAttribute("DisplayName")
+				or tool.Name
+				or ""
+			)
+		end
+		local function toolMatchesSpecificRuleAC(tool, rule)
+			if not tool or type(rule) ~= "table" or rule.Item == nil then return false end
+			local wanted = tostring(rule.Item)
+			if toolSpecificNameAC(tool) ~= wanted and tostring(tool.Name or "") ~= wanted then
+				return false
+			end
+			local mutations = type(rule.Mutations) == "table" and rule.Mutations or {}
+			if next(mutations) ~= nil then
+				local mutation = toolMutationAC(tool)
+				if not mutation or mutations[mutation] ~= true then return false end
+			end
+			local traits = type(rule.Traits) == "table" and rule.Traits or {}
+			if next(traits) ~= nil then
+				local present = toolTraitsAC(tool)
+				local matched = false
+				for trait in pairs(traits) do
+					if present[tostring(trait)] == true then matched = true break end
+				end
+				if not matched then return false end
+			end
+			return true
+		end
 		local function selectedCriteriaAC()
 			local criteria = {}
 			for _, rarity in ipairs(RARITY_OPTIONS) do
@@ -9945,7 +11427,7 @@ if IS_MINIGAME_PLACE then
 						Amount = rarity == "Tokens"
 							and math.clamp(
 								math.floor(tonumber(autoCancelState.Tokens) or 1),
-								1, 100000
+								1, 1000000
 							)
 							or math.clamp(
 								math.floor(tonumber(autoCancelState.Amounts and autoCancelState.Amounts[rarity]) or 1),
@@ -9954,12 +11436,17 @@ if IS_MINIGAME_PLACE then
 					}
 				end
 			end
+			for _, rule in ipairs(type(autoServerHopState.Utility.AutoCancelSpecificItems) == "table" and autoServerHopState.Utility.AutoCancelSpecificItems or {}) do
+				if type(rule) == "table" and rule.Item ~= nil and tostring(rule.Item) ~= "" then
+					criteria[#criteria + 1] = {SpecificRule = rule}
+				end
+			end
 			return criteria
 		end
-
-		local function opponentMatchesAnyAC(player, criteria)
-			if not player or #criteria == 0 then return true end
+		local function opponentMatchCountAC(player, criteria)
+			if not player or #criteria == 0 then return #criteria, true end
 			local counts = {}
+			local offeredTools = {}
 			local seenTools = {}
 			local needsTokens = false
 			local function scan(container)
@@ -9967,37 +11454,40 @@ if IS_MINIGAME_PLACE then
 				for _, tool in ipairs(container:GetChildren()) do
 					if tool:IsA("Tool") and not seenTools[tool] then
 						seenTools[tool] = true
+						offeredTools[#offeredTools + 1] = tool
 						local rarity = categoryAC(tool)
-						if rarity then counts[rarity] = (counts[rarity] or 0) + 1 end
+						if rarity and toolPassesCancelFiltersAC(tool, rarity) then
+							counts[rarity] = (counts[rarity] or 0) + 1
+						end
 					end
 				end
 			end
 			scan(player:FindFirstChildOfClass("Backpack"))
 			scan(player.Character)
-
 			local opponentTokens
+			local matched = 0
 			for _, criterion in ipairs(criteria) do
-				if criterion.Rarity == "Tokens" then
+				if criterion.SpecificRule then
+					for _, tool in ipairs(offeredTools) do
+						if toolMatchesSpecificRuleAC(tool, criterion.SpecificRule) then
+							matched += 1
+							break
+						end
+					end
+				elseif criterion.Rarity == "Tokens" then
 					needsTokens = true
 					if opponentTokens == nil then
 						refreshAC()
-						opponentTokens = tonumber(
-							tryAC(ActiveNegotiationAC, {"player2", "tradeTokens"})
-						)
+						opponentTokens = tonumber(tryAC(ActiveNegotiationAC, {"player2", "tradeTokens"}))
 					end
-					if opponentTokens ~= nil and opponentTokens >= criterion.Amount then
-						return true
-					end
+					if opponentTokens ~= nil and opponentTokens >= criterion.Amount then matched += 1 end
 				elseif (counts[criterion.Rarity] or 0) >= criterion.Amount then
-					return true
+					matched += 1
 				end
 			end
-
-
-			if needsTokens and opponentTokens == nil then return nil end
-			return false
+			if needsTokens and opponentTokens == nil then return matched, false end
+			return matched, true
 		end
-
 		local function opponentHasValueAC()
 			refreshAC()
 			if math.max(0, math.floor(tonumber(
@@ -10005,7 +11495,6 @@ if IS_MINIGAME_PLACE then
 			) or 0)) > 0 then
 				return true
 			end
-
 			local slots = tryAC(ActiveNegotiationAC, {"player2", "slots"})
 			if type(slots) ~= "table" then return false end
 			for slotIndex = 1, 6 do
@@ -10018,7 +11507,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return false
 		end
-
 		local function declineAC(expectedGuid, opponentUserId)
 			if not DeclineAC or guidAC() ~= expectedGuid then return false end
 			local ok = pcall(function() DeclineAC:FireServer() end)
@@ -10031,7 +11519,6 @@ if IS_MINIGAME_PLACE then
 			if canceled then tempBlacklistAC(opponentUserId) end
 			return canceled
 		end
-
 		local function leaveQueueAC(opponentUserId)
 			if not LeaveQueueAC or not queuedAC() or os.clock() - lastQueueLeaveAtAC < 0.50 then
 				return false
@@ -10041,7 +11528,6 @@ if IS_MINIGAME_PLACE then
 			if ok then tempBlacklistAC(opponentUserId) end
 			return ok
 		end
-
 		local function requestDeclineAC(guid)
 			local opponent = replicatedOpponentAC() or physicalOpponentAC()
 			local opponentUserId = opponent and opponent.UserId or nil
@@ -10055,9 +11541,8 @@ if IS_MINIGAME_PLACE then
 				task.spawn(leaveQueueAC, opponentUserId)
 			end
 		end
-
 		while screenGui.Parent do
-			RunServiceAC.Heartbeat:Wait()
+			task.wait(0.05)
 			local utilityAC = autoServerHopState.Utility
 			local autoCancelActive =
 				utilityAC.PauseScript ~= true
@@ -10075,7 +11560,6 @@ if IS_MINIGAME_PLACE then
 				continue
 			end
 			autoCancelWasActiveAC = true
-
 			local now = os.clock()
 			local guid = guidAC()
 			if guid ~= trackedGuidAC then
@@ -10085,20 +11569,25 @@ if IS_MINIGAME_PLACE then
 				brainrotMismatchSinceAC = nil
 				lastDeclineGuidAC = nil
 			end
-
 			local shouldCancel = false
 			local currentOpponentAC = replicatedOpponentAC() or physicalOpponentAC()
 			if currentOpponentAC and isBlacklistedAC(currentOpponentAC) then
 				shouldCancel = true
 			end
-
 			if not shouldCancel and utilityAC.AutoCancelCheckOpponentsBrainrots == true then
 				local criteria = selectedCriteriaAC()
 				local opponent = currentOpponentAC
-				if #criteria > 0
-					and opponent
-					and opponentMatchesAnyAC(opponent, criteria) == false
-				then
+				local ownershipMismatch = false
+				if #criteria > 0 and opponent then
+					local matchedCount, resolved = opponentMatchCountAC(opponent, criteria)
+					if resolved then
+						local mustAll = utilityAC.AutoCancelPlayerMustOwnAllSelected == true
+						local mustOne = utilityAC.AutoCancelPlayerMustOwnAtLeastOneSelected == true
+						ownershipMismatch = (mustAll and matchedCount < #criteria)
+							or (mustOne and matchedCount == 0)
+					end
+				end
+				if ownershipMismatch then
 					brainrotMismatchSinceAC = brainrotMismatchSinceAC or now
 					local delayBeforeCancel = math.clamp(
 						tonumber(utilityAC.AutoCancelBrainrotConditionDelay) or 0,
@@ -10114,7 +11603,6 @@ if IS_MINIGAME_PLACE then
 			else
 				brainrotMismatchSinceAC = nil
 			end
-
 			if guid ~= nil and not shouldCancel then
 				if utilityAC.AutoCancelTradeTimeoutEnabled == true then
 					local limit = math.clamp(
@@ -10125,7 +11613,6 @@ if IS_MINIGAME_PLACE then
 						shouldCancel = true
 					end
 				end
-
 				if utilityAC.AutoCancelNoValueTimeoutEnabled == true and not shouldCancel then
 					if opponentHasValueAC() then
 						noValueSinceAC = nil
@@ -10143,7 +11630,6 @@ if IS_MINIGAME_PLACE then
 					noValueSinceAC = nil
 				end
 			end
-
 			if shouldCancel then
 				requestDeclineAC(guid)
 			elseif guid ~= lastDeclineGuidAC then
@@ -10152,14 +11638,6 @@ if IS_MINIGAME_PLACE then
 		end
 	end)
 end
-
-
-
-
-
-
-
-
 if IS_MINIGAME_PLACE then
 	task.spawn(function()
 		while screenGui.Parent
@@ -10169,9 +11647,8 @@ if IS_MINIGAME_PLACE then
 			task.wait(0.10)
 		end
 		if not screenGui.Parent then return end
-
-		local RSBL = game:GetService("ReplicatedStorage")
-		local PlayersBL = game:GetService("Players")
+		local RSBL = ReplicatedStorage
+		local PlayersBL = Players
 		local LocalPlayerBL = PlayersBL.LocalPlayer
 		local function requireBL(moduleScript)
 			while screenGui.Parent do
@@ -10184,7 +11661,6 @@ if IS_MINIGAME_PLACE then
 			RSBL:WaitForChild("Client"):WaitForChild("Modules"):WaitForChild("ReplicatorClient")
 		)
 		if not ReplicatorBL then return end
-
 		local trackedGuidBL
 		local negotiationOpponentUserIdBL
 		local lifecycleOpponentUserIdBL
@@ -10192,19 +11668,12 @@ if IS_MINIGAME_PLACE then
 		local sawSelectionBL = false
 		local sawPlayingBL = false
 		local blacklistTrackingActiveBL = false
-
 		local function getBL(name)
 			local object
-			pcall(function() object = ReplicatorBL.get(name) end)
+			object = safeRepGet(ReplicatorBL, name)
 			return object
 		end
-
-		local function tryBL(root, path)
-			if not root then return nil end
-			local ok, value = pcall(function() return root:TryIndex(path) end)
-			return ok and value or nil
-		end
-
+		local tryBL = safeTryIndex
 		local function opponentUserIdBL(negotiation, active)
 			local opponent = tryBL(negotiation, {"player2", "player"})
 			if not (typeof(opponent) == "Instance" and opponent:IsA("Player")) then
@@ -10217,24 +11686,18 @@ if IS_MINIGAME_PLACE then
 				return opponent.UserId
 			end
 		end
-
 		local function tempBlacklistBL(userId)
 			local record = autoServerHopState.RecordCanceledTrade
 			if type(record) == "function" then
 				record(userId)
 			end
 		end
-
 		local function minigameTransitionActiveBL()
 			local active = getBL("ActiveMinigame")
-
-
-
 			return tryBL(active, {"queued"}) == true
 				or tryBL(active, {"session", "gameId"}) ~= nil
 				or type(tryBL(active, {"voting"})) == "table"
 		end
-
 		while screenGui.Parent do
 			task.wait(0.05)
 			if autoServerHopState.Utility.PauseScript == true
@@ -10256,7 +11719,6 @@ if IS_MINIGAME_PLACE then
 				continue
 			end
 			blacklistTrackingActiveBL = true
-
 			local negotiation = getBL("ActiveNegotiation")
 			local active = getBL("ActiveMinigame")
 			local guid = tryBL(negotiation, {"guid"})
@@ -10265,7 +11727,6 @@ if IS_MINIGAME_PLACE then
 			local phase = tryBL(active, {"phase"})
 			local gameId = tryBL(active, {"session", "gameId"})
 			local voting = tryBL(active, {"voting"})
-
 			if guid ~= nil then
 				if trackedGuidBL ~= guid then
 					trackedGuidBL = guid
@@ -10277,9 +11738,6 @@ if IS_MINIGAME_PLACE then
 				local endedOpponentUserId = negotiationOpponentUserIdBL
 				trackedGuidBL = nil
 				negotiationOpponentUserIdBL = nil
-
-
-
 				task.delay(0.75, function()
 					if screenGui.Parent
 						and autoServerHopState.Utility.PauseScript ~= true
@@ -10294,7 +11752,6 @@ if IS_MINIGAME_PLACE then
 					end
 				end)
 			end
-
 			local lifecycle = guid ~= nil
 				or queued
 				or phase ~= nil
@@ -10312,8 +11769,6 @@ if IS_MINIGAME_PLACE then
 					sawPlayingBL = true
 				end
 			elseif wasLifecycleBL then
-
-
 				if sawSelectionBL and not sawPlayingBL then
 					tempBlacklistBL(lifecycleOpponentUserIdBL)
 				end
@@ -10325,24 +11780,11 @@ if IS_MINIGAME_PLACE then
 		end
 	end)
 end
-
-
-
-
-
-
-
-
-
-
-
-
 if IS_MINIGAME_PLACE then
 	task.spawn(function()
-		local PlayersSP = game:GetService("Players")
-		local HttpServiceSP = game:GetService("HttpService")
+		local PlayersSP = Players
+		local HttpServiceSP = HttpService
 		local LocalPlayerSP = PlayersSP.LocalPlayer
-
 		autoServerHopState.RuntimePresencePlayerSeenAt =
 			autoServerHopState.RuntimePresencePlayerSeenAt or {}
 		for _, player in ipairs(PlayersSP:GetPlayers()) do
@@ -10352,14 +11794,9 @@ if IS_MINIGAME_PLACE then
 				] = os.clock()
 			end
 		end
-
-
-
-
 		local oldStopSP = rawget(_G, "__TUFFHUB_PRESENCE_STOP")
 		if type(oldStopSP) == "function" then pcall(oldStopSP) end
 		rawset(_G, "__TUFFHUB_PRESENCE_STOP", nil)
-
 		local function hash32SP(value, seed)
 			local h = seed or 5381
 			value = tostring(value or "")
@@ -10368,14 +11805,15 @@ if IS_MINIGAME_PLACE then
 			end
 			return string.format("%08x", h)
 		end
-
 		local materialSP = "THP10|" .. tostring(game.PlaceId) .. "|" .. tostring(game.JobId) .. "|8f31c6"
 		local serverKeySP = hash32SP(materialSP, 5381) .. hash32SP(materialSP, 2166136261)
 		local roomSP = "thp10-" .. serverKeySP
+		local globalMaterialSP = "THP10G|" .. tostring(game.PlaceId) .. "|8f31c6"
+		local globalKeySP = hash32SP(globalMaterialSP, 5381) .. hash32SP(globalMaterialSP, 2166136261)
+		local globalRoomSP = "thp10g-" .. globalKeySP
 		local heartbeatEverySP = 0.75
 		local staleAfterMsSP = 8000
 		local reconnectEverySP = 0.75
-
 		local identityKeySP = "__TUFFHUB_PRESENCE_IDENTITY"
 		local identitySP = rawget(_G, identityKeySP)
 		if type(identitySP) ~= "table"
@@ -10405,17 +11843,21 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 		end
-
 		local startedMsSP = tonumber(identitySP.startedMs) or math.floor(workspace:GetServerTimeNow() * 1000)
 		local instanceIdSP = tostring(identitySP.instanceId or (tostring(startedMsSP) .. "-" .. tostring(math.random(100000000, 999999999))))
 		identitySP.startedMs = startedMsSP
 		identitySP.instanceId = instanceIdSP
-
 		local function enabledSP()
-			return screenGui.Parent
-				and autoServerHopState.Utility.PauseScript ~= true
+			-- Presence is published for every running TuffHub client, even when
+			-- this local user's leave toggle is off. Otherwise an enabled user
+			-- could not detect a script user who had their own toggle disabled.
+			return screenGui.Parent ~= nil
 		end
-
+		local function leaveEnabledSP()
+			return enabledSP()
+				and autoServerHopState.Utility.PauseScript ~= true
+				and autoServerHopState.LeaveIfScriptUserInServer == true
+		end
 		local function playerStillHereSP(userId)
 			userId = tonumber(userId)
 			if not userId then return false end
@@ -10424,7 +11866,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return false
 		end
-
 		local function markScriptUserSP(userId)
 			userId = tonumber(userId)
 			if not userId
@@ -10438,7 +11879,6 @@ if IS_MINIGAME_PLACE then
 			autoServerHopState.RuntimeScriptUserIds[tostring(userId)] = true
 			return true
 		end
-
 		local function encodeSeenSP()
 			local list = {}
 			for userId in pairs(identitySP.seenAtStart or {}) do
@@ -10448,46 +11888,17 @@ if IS_MINIGAME_PLACE then
 			return table.concat(list, ",")
 		end
 		local localSeenStringSP = encodeSeenSP()
-
 		local function parseSeenSP(value)
 			local set = {}
 			if type(value) ~= "string" then return set end
 			for id in string.gmatch(value, "%d+") do set[id] = true end
 			return set
 		end
-
-		local function shouldYieldSP(remoteUserId, remoteStartedMs, remoteInstanceId, remoteSeen)
-			remoteUserId = tonumber(remoteUserId)
-			remoteStartedMs = tonumber(remoteStartedMs)
-			remoteInstanceId = tostring(remoteInstanceId or "")
-			if not remoteUserId
-				or remoteUserId == tonumber(LocalPlayerSP.UserId)
-				or not remoteStartedMs
-				or remoteInstanceId == ""
-				or not playerStillHereSP(remoteUserId)
-			then
-				return false
-			end
-
-			local localSawRemote = identitySP.seenAtStart
-				and identitySP.seenAtStart[tostring(remoteUserId)] == true
-			local remoteSawLocal = type(remoteSeen) == "table"
-				and remoteSeen[tostring(LocalPlayerSP.UserId)] == true
-			if localSawRemote ~= remoteSawLocal then
-				return localSawRemote
-			end
-
-			if remoteStartedMs ~= startedMsSP then return remoteStartedMs < startedMsSP end
-			if remoteUserId ~= tonumber(LocalPlayerSP.UserId) then
-				return remoteUserId < tonumber(LocalPlayerSP.UserId)
-			end
-			return remoteInstanceId < instanceIdSP
-		end
-
 		local function heartbeatTableSP(extra)
 			local data = {
 				t = "thp10",
 				k = serverKeySP,
+				job = tostring(game.JobId),
 				uid = tonumber(LocalPlayerSP.UserId),
 				name = tostring(LocalPlayerSP.Name),
 				start = startedMsSP,
@@ -10500,23 +11911,22 @@ if IS_MINIGAME_PLACE then
 			end
 			return data
 		end
-
-		local function decodePresenceSP(message)
+		local function decodePresenceSP(message, expectedKey)
 			if type(message) ~= "string" or message == "" then return nil end
 			local decoded
 			local ok = pcall(function() decoded = HttpServiceSP:JSONDecode(message) end)
 			if not ok or type(decoded) ~= "table" then return nil end
-			if decoded.t ~= "thp10" or tostring(decoded.k or "") ~= serverKeySP then return nil end
+			if decoded.t ~= "thp10" or tostring(decoded.k or "") ~= tostring(expectedKey or serverKeySP) then return nil end
 			local remoteUserId = tonumber(decoded.uid)
 			local remoteStarted = tonumber(decoded.start)
 			local remoteId = decoded.iid and tostring(decoded.iid) or nil
+			local remoteJob = decoded.job and tostring(decoded.job) or nil
 			local remoteTs = tonumber(decoded.ts)
 			if not remoteUserId or not remoteStarted or not remoteId or not remoteTs then return nil end
 			local nowMs = math.floor(workspace:GetServerTimeNow() * 1000)
 			if remoteTs > nowMs + 5000 or nowMs - remoteTs > staleAfterMsSP then return nil end
-			return remoteUserId, remoteStarted, remoteId, parseSeenSP(decoded.seen)
+			return remoteUserId, remoteStarted, remoteId, parseSeenSP(decoded.seen), remoteJob
 		end
-
 		local envsSP = {}
 		local function addEnvSP(env)
 			if type(env) ~= "table" then return end
@@ -10529,7 +11939,6 @@ if IS_MINIGAME_PLACE then
 		pcall(function() if getgenv then addEnvSP(getgenv()) end end)
 		pcall(function() if getrenv then addEnvSP(getrenv()) end end)
 		pcall(function() if getfenv then addEnvSP(getfenv(0)) end end)
-
 		local connectorsSP = {}
 		local connectorSeenSP = {}
 		local inspectedSocketTablesSP = {}
@@ -10561,7 +11970,6 @@ if IS_MINIGAME_PLACE then
 			end
 		end
 		if #connectorsSP == 0 then return end
-
 		local function connectSocketSP(url)
 			for _, connector in ipairs(connectorsSP) do
 				local ok, socket = pcall(connector, url)
@@ -10569,7 +11977,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return nil
 		end
-
 		local function socketSendSP(socket, message)
 			if socket == nil or type(message) ~= "string" then return false end
 			local ok, sent = pcall(function()
@@ -10581,7 +11988,6 @@ if IS_MINIGAME_PLACE then
 			end)
 			return ok and sent == true
 		end
-
 		local function socketCloseSP(socket)
 			if socket == nil then return end
 			pcall(function()
@@ -10591,7 +11997,6 @@ if IS_MINIGAME_PLACE then
 				if type(method) == "function" then method(socket) end
 			end)
 		end
-
 		local function disconnectSignalSP(connection)
 			if connection == nil then return end
 			pcall(function()
@@ -10605,7 +12010,6 @@ if IS_MINIGAME_PLACE then
 				if type(method) == "function" then method(connection) end
 			end)
 		end
-
 		local function connectSignalSP(signal, callback)
 			if signal == nil then return nil end
 			local connection
@@ -10618,10 +12022,11 @@ if IS_MINIGAME_PLACE then
 			end)
 			return ok and connection or nil
 		end
-
 		local endpointsSP = {
-			{kind = "router", url = "wss://router.metapage.io/" .. roomSP},
-			{kind = "getlost", url = "wss://wss.getlost.ovh"},
+			{kind = "router", scope = "server", room = roomSP, key = serverKeySP, url = "wss://router.metapage.io/" .. roomSP},
+			{kind = "getlost", scope = "server", room = roomSP, key = serverKeySP, url = "wss://wss.getlost.ovh"},
+			{kind = "router", scope = "global", room = globalRoomSP, key = globalKeySP, url = "wss://router.metapage.io/" .. globalRoomSP},
+			{kind = "getlost", scope = "global", room = globalRoomSP, key = globalKeySP, url = "wss://wss.getlost.ovh"},
 		}
 		local channelsSP = {}
 		for index, endpoint in ipairs(endpointsSP) do
@@ -10636,12 +12041,10 @@ if IS_MINIGAME_PLACE then
 				generation = 0,
 			}
 		end
-
 		local playerAddedConnectionSP
 		local playerRemovingConnectionSP
 		local lastReplyAtSP = 0
 		local stoppedSP = false
-
 		local function cleanupChannelSP(channel, closeSocket)
 			if not channel then return end
 			channel.generation = (tonumber(channel.generation) or 0) + 1
@@ -10654,44 +12057,51 @@ if IS_MINIGAME_PLACE then
 			channel.closeConnection = nil
 			if closeSocket and oldSocket then socketCloseSP(oldSocket) end
 		end
-
 		local function cleanupAllChannelsSP(closeSockets)
 			for _, channel in ipairs(channelsSP) do
 				cleanupChannelSP(channel, closeSockets)
 			end
 		end
-
 		local function requestPresenceHopSP()
+			if not leaveEnabledSP() then return false end
 			autoServerHopState.RuntimeScriptUserHopRequested = true
 			local wake = autoServerHopState.RuntimePresenceHopWake
 			if type(wake) == "function" then
 				task.spawn(wake)
 			end
+			return true
 		end
-
 		local function armLeaveIfOlderSP(remoteUserId, remoteStarted, remoteId, remoteSeen)
-			if autoServerHopState.RuntimeScriptUserHopRequested == true then
-				requestPresenceHopSP()
-				return true
+			-- Local policy is intentionally unconditional: if this client has
+			-- LeaveIfScriptUserInServer enabled, detecting any other TuffHub
+			-- client in this JobId must make this client leave. A deterministic
+			-- age tie-break can strand an enabled user when the peer has its own
+			-- leave option disabled. Global presence filtering keeps both enabled
+			-- clients from repeatedly choosing a server that is already occupied.
+			if not leaveEnabledSP() then return false end
+			if tonumber(remoteUserId) == tonumber(LocalPlayerSP.UserId)
+				or not playerStillHereSP(remoteUserId)
+			then
+				return false
 			end
-			if shouldYieldSP(remoteUserId, remoteStarted, remoteId, remoteSeen) then
-				requestPresenceHopSP()
-				return true
-			end
-			return false
+			requestPresenceHopSP()
+			return true
 		end
-
 		local function channelHeartbeatPayloadSP(channel)
-			local extra
-			if channel and channel.endpoint.kind == "getlost" then
-				extra = {
-					roomId = roomSP,
-					from = "thp10-" .. tostring(LocalPlayerSP.UserId) .. "-" .. tostring(startedMsSP) .. "-" .. instanceIdSP,
-				}
+			local endpoint = channel and channel.endpoint or nil
+			local globalScope = endpoint and endpoint.scope == "global"
+			local extra = {
+				k = endpoint and endpoint.key or serverKeySP,
+				job = tostring(game.JobId),
+			}
+			if endpoint and endpoint.kind == "getlost" then
+				extra.roomId = endpoint.room or roomSP
+				extra.from = globalScope
+					and ("thp10g|" .. tostring(game.JobId) .. "|" .. tostring(LocalPlayerSP.UserId) .. "|" .. tostring(startedMsSP) .. "|" .. instanceIdSP)
+					or ("thp10-" .. tostring(LocalPlayerSP.UserId) .. "-" .. tostring(startedMsSP) .. "-" .. instanceIdSP)
 			end
 			return HttpServiceSP:JSONEncode(heartbeatTableSP(extra))
 		end
-
 		local function sendHeartbeatChannelSP(channel, force)
 			if not enabledSP() or not channel or not channel.socket then return false end
 			local now = os.clock()
@@ -10704,7 +12114,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return false
 		end
-
 		local function sendHeartbeatAllSP(force)
 			local sentAny = false
 			for _, channel in ipairs(channelsSP) do
@@ -10719,8 +12128,15 @@ if IS_MINIGAME_PLACE then
 			end
 			return sentAny
 		end
-
-		local function parseGetLostRosterSP(message)
+		local function markScriptUserServerSP(jobId)
+			jobId = tostring(jobId or "")
+			if jobId == "" or jobId == tostring(game.JobId) then return end
+			autoServerHopState.RuntimeScriptUserServerIds =
+				type(autoServerHopState.RuntimeScriptUserServerIds) == "table"
+					and autoServerHopState.RuntimeScriptUserServerIds or {}
+			autoServerHopState.RuntimeScriptUserServerIds[jobId] = os.clock() + 12
+		end
+		local function parseGetLostRosterSP(channel, message)
 			if type(message) ~= "string" or message == "" then return end
 			local decoded
 			local ok = pcall(function() decoded = HttpServiceSP:JSONDecode(message) end)
@@ -10731,51 +12147,53 @@ if IS_MINIGAME_PLACE then
 			then
 				return
 			end
+			local globalScope = channel and channel.endpoint and channel.endpoint.scope == "global"
 			for _, peer in ipairs(decoded.roster) do
 				if type(peer) == "string" then
-					local uid, start, iid = peer:match("^thp10%-(%d+)%-(%d+)%-(.+)$")
-					uid, start = tonumber(uid), tonumber(start)
-					if uid
-						and start
-						and iid
-						and uid ~= tonumber(LocalPlayerSP.UserId)
-						and playerStillHereSP(uid)
-					then
-						markScriptUserSP(uid)
-
-
-
-						if start < startedMsSP
-							or (start == startedMsSP and uid < tonumber(LocalPlayerSP.UserId))
-						then
-							requestPresenceHopSP()
-							return
+					if globalScope then
+						local job, uid, start, iid = peer:match("^thp10g|([^|]+)|(%d+)|(%d+)|(.+)$")
+						uid, start = tonumber(uid), tonumber(start)
+						if uid and start and iid and uid ~= tonumber(LocalPlayerSP.UserId) then
+							markScriptUserServerSP(job)
+							if tostring(job) == tostring(game.JobId) and playerStillHereSP(uid) then
+								markScriptUserSP(uid)
+								if requestPresenceHopSP() then return end
+							end
+						end
+					else
+						local uid, start, iid = peer:match("^thp10%-(%d+)%-(%d+)%-(.+)$")
+						uid, start = tonumber(uid), tonumber(start)
+						if uid and start and iid and uid ~= tonumber(LocalPlayerSP.UserId) and playerStillHereSP(uid) then
+							markScriptUserSP(uid)
+							if requestPresenceHopSP() then return end
 						end
 					end
 				end
 			end
 		end
-
 		local function handleMessageSP(channel, message)
 			if not enabledSP() then return end
-			if channel and channel.endpoint.kind == "getlost" then
-				parseGetLostRosterSP(message)
+			local endpoint = channel and channel.endpoint or nil
+			if endpoint and endpoint.kind == "getlost" then
+				parseGetLostRosterSP(channel, message)
+			end
+			local remoteUserId, remoteStarted, remoteId, remoteSeen, remoteJob =
+				decodePresenceSP(message, endpoint and endpoint.key or serverKeySP)
+			if not remoteUserId or remoteUserId == tonumber(LocalPlayerSP.UserId) then return end
+			if endpoint and endpoint.scope == "global" then
+				markScriptUserServerSP(remoteJob)
+				if tostring(remoteJob or "") ~= tostring(game.JobId) then return end
 			end
 			if autoServerHopState.RuntimeScriptUserHopRequested == true then return end
-			local remoteUserId, remoteStarted, remoteId, remoteSeen = decodePresenceSP(message)
-			if not remoteUserId then return end
+			if not playerStillHereSP(remoteUserId) then return end
 			markScriptUserSP(remoteUserId)
 			if armLeaveIfOlderSP(remoteUserId, remoteStarted, remoteId, remoteSeen) then return end
-
-
-
 			local now = os.clock()
 			if now - lastReplyAtSP >= 0.12 then
 				lastReplyAtSP = now
 				sendHeartbeatAllSP(true)
 			end
 		end
-
 		local function attachChannelSP(channel, socket, expectedGeneration)
 			if not channel or not socket then return false end
 			if stoppedSP
@@ -10786,11 +12204,12 @@ if IS_MINIGAME_PLACE then
 				socketCloseSP(socket)
 				return false
 			end
-
 			channel.socket = socket
 			channel.connecting = false
 			channel.lastSend = 0
-
+			if channel.endpoint and channel.endpoint.scope == "global" then
+				autoServerHopState.RuntimeGlobalPresenceConnectedAt = os.clock()
+			end
 			local onMessage
 			pcall(function() onMessage = socket.OnMessage end)
 			if onMessage == nil then pcall(function() onMessage = socket.onmessage end) end
@@ -10802,7 +12221,6 @@ if IS_MINIGAME_PLACE then
 				channel.nextAttempt = os.clock() + reconnectEverySP
 				return false
 			end
-
 			local onClose
 			pcall(function() onClose = socket.OnClose end)
 			if onClose == nil then pcall(function() onClose = socket.onclose end) end
@@ -10812,16 +12230,13 @@ if IS_MINIGAME_PLACE then
 					channel.nextAttempt = os.clock() + reconnectEverySP
 				end
 			end)
-
 			if channel.endpoint.kind == "getlost" then
-				local peerId = "thp10-"
-					.. tostring(LocalPlayerSP.UserId)
-					.. "-"
-					.. tostring(startedMsSP)
-					.. "-"
-					.. instanceIdSP
+				local globalScope = channel.endpoint.scope == "global"
+				local peerId = globalScope
+					and ("thp10g|" .. tostring(game.JobId) .. "|" .. tostring(LocalPlayerSP.UserId) .. "|" .. tostring(startedMsSP) .. "|" .. instanceIdSP)
+					or ("thp10-" .. tostring(LocalPlayerSP.UserId) .. "-" .. tostring(startedMsSP) .. "-" .. instanceIdSP)
 				local announced = socketSendSP(socket, HttpServiceSP:JSONEncode({
-					roomId = roomSP,
+					roomId = channel.endpoint.room or roomSP,
 					announce = true,
 					from = peerId,
 				}))
@@ -10831,7 +12246,6 @@ if IS_MINIGAME_PLACE then
 					return false
 				end
 			end
-
 			if not sendHeartbeatChannelSP(channel, true) then
 				cleanupChannelSP(channel, true)
 				channel.nextAttempt = os.clock() + reconnectEverySP
@@ -10839,7 +12253,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return true
 		end
-
 		local function tryConnectChannelSP(channel)
 			if not channel
 				or channel.connecting
@@ -10873,7 +12286,6 @@ if IS_MINIGAME_PLACE then
 				end
 			end)
 		end
-
 		playerAddedConnectionSP = PlayersSP.PlayerAdded:Connect(function(player)
 			if player ~= LocalPlayerSP then
 				autoServerHopState.RuntimePresencePlayerSeenAt =
@@ -10883,8 +12295,6 @@ if IS_MINIGAME_PLACE then
 				] = os.clock()
 			end
 			if player ~= LocalPlayerSP and enabledSP() then
-
-
 				sendHeartbeatAllSP(true)
 				for _, channel in ipairs(channelsSP) do
 					if not channel.socket and not channel.connecting then
@@ -10894,7 +12304,6 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 		end)
-
 		playerRemovingConnectionSP = PlayersSP.PlayerRemoving:Connect(function(player)
 			local userId = tostring(player.UserId)
 			local detected = autoServerHopState.RuntimeScriptUserIds
@@ -10906,7 +12315,6 @@ if IS_MINIGAME_PLACE then
 				seenAt[userId] = nil
 			end
 		end)
-
 		rawset(_G, "__TUFFHUB_PRESENCE_STOP", function()
 			stoppedSP = true
 			disconnectSignalSP(playerAddedConnectionSP)
@@ -10915,13 +12323,16 @@ if IS_MINIGAME_PLACE then
 			playerRemovingConnectionSP = nil
 			cleanupAllChannelsSP(true)
 		end)
-
 		local wasEnabledSP = false
 		while screenGui.Parent and not stoppedSP do
 			local enabled = enabledSP()
+			if not leaveEnabledSP() then
+				autoServerHopState.RuntimeScriptUserHopRequested = false
+			end
 			if enabled then
 				if not wasEnabledSP then
 					autoServerHopState.RuntimeScriptUserHopRequested = false
+					autoServerHopState.RuntimeGlobalPresenceConnectedAt = nil
 					autoServerHopState.RuntimePresenceStartedAt = os.clock()
 					autoServerHopState.RuntimePresencePlayerSeenAt =
 						autoServerHopState.RuntimePresencePlayerSeenAt or {}
@@ -10938,7 +12349,6 @@ if IS_MINIGAME_PLACE then
 						channel.lastSend = 0
 					end
 				end
-
 				for _, channel in ipairs(channelsSP) do
 					if channel.socket then
 						if not sendHeartbeatChannelSP(channel, false) then
@@ -10959,12 +12369,8 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 			wasEnabledSP = enabled
-
-
-
 			task.wait(0.12)
 		end
-
 		disconnectSignalSP(playerAddedConnectionSP)
 		disconnectSignalSP(playerRemovingConnectionSP)
 		playerAddedConnectionSP = nil
@@ -10975,18 +12381,12 @@ if IS_MINIGAME_PLACE then
 		end
 	end)
 end
-
-
-
-
 if IS_MINIGAME_PLACE then
 	task.spawn(function()
 		if not screenGui.Parent then return end
-
-		local PlayersCS = game:GetService("Players")
-		local RSCS = game:GetService("ReplicatedStorage")
+		local PlayersCS = Players
+		local RSCS = ReplicatedStorage
 		local LocalPlayerCS = PlayersCS.LocalPlayer
-
 		local function requireCS(moduleScript)
 			while screenGui.Parent do
 				local ok, result = pcall(require, moduleScript)
@@ -10994,7 +12394,6 @@ if IS_MINIGAME_PLACE then
 				task.wait(0.20)
 			end
 		end
-
 		local SharedCS = RSCS:WaitForChild("Shared")
 		local ReplicatorCS = requireCS(
 			RSCS:WaitForChild("Client"):WaitForChild("Modules"):WaitForChild("ReplicatorClient")
@@ -11003,102 +12402,162 @@ if IS_MINIGAME_PLACE then
 			SharedCS:WaitForChild("utils"):WaitForChild("EconomyMath")
 		)
 		if not (ReplicatorCS and EconomyMathCS) then return end
-
 		local playerSeenAtCS = {}
 		local minigameBoundsCacheCS
 		local minigameBoundsBuiltAtCS = 0
-
 		for _, player in ipairs(PlayersCS:GetPlayers()) do
 			playerSeenAtCS[tostring(player.UserId)] = os.clock()
 		end
-
 		PlayersCS.PlayerAdded:Connect(function(player)
 			playerSeenAtCS[tostring(player.UserId)] = os.clock()
 		end)
 		PlayersCS.PlayerRemoving:Connect(function(player)
 			playerSeenAtCS[tostring(player.UserId)] = nil
 		end)
-
-		local function tryCS(root, path)
-			if not root then return nil end
-			local ok, value = pcall(function()
-				return root:TryIndex(path)
-			end)
-			return ok and value or nil
-		end
-
-		local function selectedRaritiesCS()
-			local selected =
-				autoServerHopState.Utility.CheckServerBrainrotRarities
-			if type(selected) ~= "table" then return nil, false end
-			for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
-				if selected[rarity] == true then
-					return selected, true
-				end
-			end
-			return selected, false
-		end
-
+		local tryCS = safeTryIndex
 		local function publicBrainrotRarityCS(tool, name)
 			local explicit = tool:GetAttribute("Rarity")
 				or tool:GetAttribute("BrainrotRarity")
 			if explicit == "Meta" then return "Meta" end
-
 			local rarity = type(explicit) == "string" and explicit or nil
 			if not rarity then
 				pcall(function()
 					rarity = EconomyMathCS.GetBrainrotRarity(name)
 				end)
 			end
-
 			local metaMarked = tool:GetAttribute("Meta") == true
 				or tool:GetAttribute("IsMeta") == true
 				or (
 					type(name) == "string"
-					and string.find(
-						string.lower(name),
-						"%f[%a]meta%f[%A]"
-					) ~= nil
+					and string.find(string.lower(name), "%f[%a]meta%f[%A]") ~= nil
 				)
-
 			return rarity == "Infinity" and metaMarked and "Meta" or rarity
 		end
-
-		local function playerHasSelectedBrainrotCS(player, selected)
+		local function toolMutationCS(tool)
+			if not tool then return nil end
+			local value = tool:GetAttribute("Mutation") or tool:GetAttribute("BrainrotMutation")
+			return type(value) == "string" and value or nil
+		end
+		local function toolTraitsCS(tool)
+			local result = {}
+			if not tool then return result end
+			for _, attributeName in ipairs({"Traits", "BrainrotTraits", "Trait"}) do
+				local value = tool:GetAttribute(attributeName)
+				if type(value) == "string" then
+					for trait in string.gmatch(value, "[^,|;]+") do
+						trait = string.gsub(trait, "^%s*(.-)%s*$", "%1")
+						if trait ~= "" then result[trait] = true end
+					end
+				end
+			end
+			return result
+		end
+		local function brainrotPassesGlobalFiltersCS(tool)
+			local utility = autoServerHopState.Utility
+			local mutations = utility.CheckServerMutations
+			local traits = utility.CheckServerTraits
+			if type(mutations) == "table" and next(mutations) ~= nil then
+				local mutation = toolMutationCS(tool)
+				if not mutation or mutations[mutation] ~= true then return false end
+			end
+			if type(traits) == "table" and next(traits) ~= nil then
+				local present = toolTraitsCS(tool)
+				local matched = false
+				for trait in pairs(traits) do
+					if present[tostring(trait)] == true then matched = true break end
+				end
+				if not matched then return false end
+			end
+			return true
+		end
+		local function toolSpecificNameCS(tool)
+			if not tool or not tool:IsA("Tool") then return "" end
+			return tostring(
+				tool:GetAttribute("BrainrotName")
+					or tool:GetAttribute("ItemName")
+					or tool:GetAttribute("DisplayName")
+					or tool.Name
+					or ""
+			)
+		end
+		local function checkCriteriaCS()
+			local utility = autoServerHopState.Utility
+			local criteria = {}
+			local rarities = type(utility.CheckServerBrainrotRarities) == "table"
+				and utility.CheckServerBrainrotRarities or {}
+			for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+				if rarities[rarity] == true then
+					criteria[#criteria + 1] = {Kind = "Rarity", Value = rarity}
+				end
+			end
+			local specifics = type(utility.CheckServerSpecificItems) == "table"
+				and utility.CheckServerSpecificItems or {}
+			for itemName, enabled in pairs(specifics) do
+				if enabled == true and tostring(itemName) ~= "" then
+					criteria[#criteria + 1] = {Kind = "Specific", Value = tostring(itemName)}
+				end
+			end
+			return criteria
+		end
+		local function playerMatchesCheckCriteriaCS(player, criteria)
 			if typeof(player) ~= "Instance"
 				or not player:IsA("Player")
 				or player == LocalPlayerCS
 			then
 				return false
 			end
-
+			if type(criteria) ~= "table" or #criteria == 0 then return false end
+			local tools = {}
 			local function scan(container)
-				if not container then return false end
-				for _, tool in ipairs(container:GetChildren()) do
-					if tool:IsA("Tool") then
+				if not container then return end
+				for _, child in ipairs(container:GetChildren()) do
+					if child:IsA("Tool") then tools[#tools + 1] = child end
+				end
+			end
+			scan(player:FindFirstChildOfClass("Backpack"))
+			scan(player.Character)
+			local matched = 0
+			for _, criterion in ipairs(criteria) do
+				local criterionMatched = false
+				if criterion.Kind == "Rarity" then
+					for _, tool in ipairs(tools) do
 						local name = tool:GetAttribute("BrainrotName")
-						if type(name) == "string" and name ~= "" then
-							local rarity = publicBrainrotRarityCS(tool, name)
-							if rarity and selected[rarity] == true then
-								return true
+						if type(name) == "string" and name ~= ""
+							and publicBrainrotRarityCS(tool, name) == criterion.Value
+							and brainrotPassesGlobalFiltersCS(tool)
+						then
+							criterionMatched = true
+							break
+						end
+					end
+				else
+					for _, tool in ipairs(tools) do
+						local wanted = tostring(criterion.Value)
+						local actual = toolSpecificNameCS(tool)
+						if actual == wanted or tostring(tool.Name or "") == wanted then
+							local brainrotName = tool:GetAttribute("BrainrotName")
+							if type(brainrotName) ~= "string" or brainrotName == ""
+								or brainrotPassesGlobalFiltersCS(tool)
+							then
+								criterionMatched = true
+								break
 							end
 						end
 					end
 				end
-				return false
+				if criterionMatched then matched += 1 end
 			end
-
-			return scan(player:FindFirstChildOfClass("Backpack"))
-				or scan(player.Character)
+			local utility = autoServerHopState.Utility
+			if utility.CheckServerMustOwnAll == true then return matched == #criteria end
+			if utility.CheckServerMustOwnOne == true then return matched > 0 end
+			return false
 		end
-
 		local function minigameTablesCS()
 			local gameObjects = workspace:FindFirstChild("GameObjects")
 			local placeSpecific = gameObjects and gameObjects:FindFirstChild("PlaceSpecific")
 			local tradePlaza = placeSpecific and placeSpecific:FindFirstChild("trade_plaza")
 			return tradePlaza and tradePlaza:FindFirstChild("MinigameTables")
 		end
-
 		local function minigameBoundsCS()
 			local now = os.clock()
 			if minigameBoundsCacheCS
@@ -11106,13 +12565,11 @@ if IS_MINIGAME_PLACE then
 			then
 				return minigameBoundsCacheCS
 			end
-
 			local folder = minigameTablesCS()
 			if not folder then
 				minigameBoundsCacheCS = nil
 				return nil
 			end
-
 			local minX, maxX, minZ, maxZ
 			for _, descendant in ipairs(folder:GetDescendants()) do
 				if descendant:IsA("BasePart") then
@@ -11123,13 +12580,10 @@ if IS_MINIGAME_PLACE then
 					maxZ = maxZ and math.max(maxZ, p.Z) or p.Z
 				end
 			end
-
 			if not minX then
 				minigameBoundsCacheCS = nil
 				return nil
 			end
-
-
 			local margin = 30
 			minigameBoundsCacheCS = {
 				MinX = minX - margin,
@@ -11140,7 +12594,6 @@ if IS_MINIGAME_PLACE then
 			minigameBoundsBuiltAtCS = now
 			return minigameBoundsCacheCS
 		end
-
 		local function playerInMinigamesAreaCS(player)
 			local bounds = minigameBoundsCS()
 			local character = player and player.Character
@@ -11152,7 +12605,6 @@ if IS_MINIGAME_PLACE then
 				and p.Z >= bounds.MinZ
 				and p.Z <= bounds.MaxZ
 		end
-
 		local function rosterStableCS()
 			local now = os.clock()
 			for _, player in ipairs(PlayersCS:GetPlayers()) do
@@ -11167,20 +12619,18 @@ if IS_MINIGAME_PLACE then
 			end
 			return true
 		end
-
-		local function eligiblePlayersCS(selected, areaOnly)
+		local function eligiblePlayersCS(criteria, areaOnly)
 			local list = {}
 			for _, player in ipairs(PlayersCS:GetPlayers()) do
 				if player ~= LocalPlayerCS
 					and (not areaOnly or playerInMinigamesAreaCS(player))
-					and playerHasSelectedBrainrotCS(player, selected)
+					and playerMatchesCheckCriteriaCS(player, criteria)
 				then
 					list[#list + 1] = player
 				end
 			end
 			return list
 		end
-
 		local function everyonePlayedCS(players)
 			if #players == 0 then return false end
 			local played = autoServerHopState.RuntimePlayedMinigameUserIds
@@ -11192,10 +12642,8 @@ if IS_MINIGAME_PLACE then
 			end
 			return true
 		end
-
 		while screenGui.Parent do
 			task.wait(0.35)
-
 			local utility = autoServerHopState.Utility
 			if utility.PauseScript == true
 				or utility.PauseMinigameFeatures == true
@@ -11203,13 +12651,8 @@ if IS_MINIGAME_PLACE then
 				autoServerHopState.RuntimeCheckServerHopRequested = false
 				continue
 			end
-
-
-
 			local active
-			pcall(function()
-				active = ReplicatorCS.get("ActiveMinigame")
-			end)
+			active = safeRepGet(ReplicatorCS, "ActiveMinigame")
 			if tryCS(active, {"phase"}) == "Playing" then
 				local opponent =
 					tryCS(active, {"session", "private", "opponent"})
@@ -11224,32 +12667,27 @@ if IS_MINIGAME_PLACE then
 					] = true
 				end
 			end
-
 			local anyCondition =
 				utility.CheckServerHopNobodyServer == true
 				or utility.CheckServerHopPlayedEveryoneServer == true
 				or utility.CheckServerHopNobodyMinigamesArea == true
 				or utility.CheckServerHopPlayedEveryoneMinigamesArea == true
-
 			if not anyCondition or not rosterStableCS() then
 				autoServerHopState.RuntimeCheckServerHopRequested = false
 				continue
 			end
-
-			local selected, hasSelection = selectedRaritiesCS()
-			if not hasSelection then
+			local criteria = checkCriteriaCS()
+			if #criteria == 0 then
 				autoServerHopState.RuntimeCheckServerHopRequested = false
 				continue
 			end
-
 			local serverPlayers
 			local areaPlayers
 			local shouldHop = false
-
 			if utility.CheckServerHopNobodyServer == true
 				or utility.CheckServerHopPlayedEveryoneServer == true
 			then
-				serverPlayers = eligiblePlayersCS(selected, false)
+				serverPlayers = eligiblePlayersCS(criteria, false)
 				if utility.CheckServerHopNobodyServer == true
 					and #serverPlayers == 0
 				then
@@ -11262,14 +12700,13 @@ if IS_MINIGAME_PLACE then
 					shouldHop = true
 				end
 			end
-
 			if not shouldHop
 				and (
 					utility.CheckServerHopNobodyMinigamesArea == true
 					or utility.CheckServerHopPlayedEveryoneMinigamesArea == true
 				)
 			then
-				areaPlayers = eligiblePlayersCS(selected, true)
+				areaPlayers = eligiblePlayersCS(criteria, true)
 				if utility.CheckServerHopNobodyMinigamesArea == true
 					and #areaPlayers == 0
 				then
@@ -11282,26 +12719,17 @@ if IS_MINIGAME_PLACE then
 					shouldHop = true
 				end
 			end
-
 			autoServerHopState.RuntimeCheckServerHopRequested = shouldHop
 		end
 	end)
 end
-
-
-
-
-
-
-
-
 if IS_MINIGAME_PLACE then
 	task.spawn(function()
 		if not screenGui.Parent then return end
-		local HttpServiceHP = game:GetService("HttpService")
-		local TeleportServiceHP = game:GetService("TeleportService")
-		local RSHP = game:GetService("ReplicatedStorage")
-		local LocalPlayerHP = game:GetService("Players").LocalPlayer
+		local HttpServiceHP = HttpService
+		local TeleportServiceHP = TeleportService
+		local RSHP = ReplicatedStorage
+		local LocalPlayerHP = Players.LocalPlayer
 		local function requireHP(moduleScript)
 			while screenGui.Parent do
 				local ok, result = pcall(require, moduleScript)
@@ -11313,14 +12741,11 @@ if IS_MINIGAME_PLACE then
 			RSHP:WaitForChild("Client"):WaitForChild("Modules"):WaitForChild("ReplicatorClient")
 		)
 		if not ReplicatorHP then return end
-
 		local nowStartedHP = os.clock()
 		local startupElapsedHP = math.max(
 			0,
 			nowStartedHP - (tonumber(autoServerHopState.RuntimeStartedAt) or nowStartedHP)
 		)
-
-
 		local serverElapsedHP = (
 			autoServerHopState.Enabled == true
 			and autoServerHopState.ServerTimeEnabled == true
@@ -11338,30 +12763,44 @@ if IS_MINIGAME_PLACE then
 		local serverRngHP = Random.new(
 			math.floor((DateTime.now().UnixTimestampMillis + os.clock() * 1000000) % 2147483647)
 		)
-
-
 		local boothBlockRemainingHP = 0
+		local hopNotBeforeHP = 0
 		local previousBoothOffersHP = {}
 		local pendingBoothChecksHP = {}
 		local nextBoothScanAtHP = 0
-
-
-
-
-
-
-
-
-
 		local cachedCandidatesHP = {}
 		local serverCacheAtHP = 0
 		local cacheRefreshingHP = false
 		local wasPresenceDueHP = false
 		local PRESENCE_HOP_CACHE_MAX_AGE_HP = 2.0
-
-
-
-
+		local function pruneServerBlacklistHP()
+			local blacklist = autoServerHopState.JoinedServerBlacklist
+			if type(blacklist) ~= "table" then
+				blacklist = {}
+				autoServerHopState.JoinedServerBlacklist = blacklist
+			end
+			local nowUnix = DateTime.now().UnixTimestamp
+			for id, expiresAt in pairs(blacklist) do
+				if type(id) ~= "string" or tonumber(expiresAt) == nil or tonumber(expiresAt) <= nowUnix then
+					blacklist[id] = nil
+				end
+			end
+			return blacklist
+		end
+		local function serverBlacklistedHP(id)
+			if type(id) ~= "string" or id == "" then return true end
+			local blacklist = pruneServerBlacklistHP()
+			if tonumber(blacklist[id]) ~= nil then return true end
+			local occupied = autoServerHopState.RuntimeScriptUserServerIds
+			if autoServerHopState.LeaveIfScriptUserInServer == true
+				and type(occupied) == "table"
+			then
+				local expiresAt = tonumber(occupied[id])
+				if expiresAt and expiresAt > os.clock() then return true end
+				if expiresAt then occupied[id] = nil end
+			end
+			return false
+		end
 		local function recordRecentServerHP(id)
 			if type(id) ~= "string" or id == "" then return end
 			local list = autoServerHopState.RecentServerIds
@@ -11373,38 +12812,32 @@ if IS_MINIGAME_PLACE then
 				if list[index] == id then table.remove(list, index) end
 			end
 			list[#list + 1] = id
-			while #list > 10 do table.remove(list, 1) end
+			while #list > 50 do table.remove(list, 1) end
+			local minutes = math.clamp(
+				math.floor(tonumber(autoServerHopState.ServerBlacklistMinutes) or 10),
+				1,
+				60
+			)
+			local blacklist = pruneServerBlacklistHP()
+			blacklist[id] = DateTime.now().UnixTimestamp + (minutes * 60)
 		end
-
 		recordRecentServerHP(game.JobId)
-
-		local function tryIndexHP(root, path)
-			if not root then return nil end
-			local ok, value = pcall(function() return root:TryIndex(path) end)
-			return ok and value or nil
-		end
-
+		local tryIndexHP = safeTryIndex
 		TeleportServiceHP.TeleportInitFailed:Connect(function(player)
 			if player == LocalPlayerHP then
 				hoppingHP = false
 				serverCacheAtHP = 0
 			end
 		end)
-
 		local function activeMinigameHP()
 			local active
-			pcall(function() active = ReplicatorHP.get("ActiveMinigame") end)
+			active = safeRepGet(ReplicatorHP, "ActiveMinigame")
 			return active
 		end
-
-
-
-
 		local lastNegotiationSeenAtHP = -math.huge
 		local function lifecycleBlockedHP(active)
 			local negotiation
-			pcall(function() negotiation = ReplicatorHP.get("ActiveNegotiation") end)
-
+			negotiation = safeRepGet(ReplicatorHP, "ActiveNegotiation")
 			local now = os.clock()
 			if tryIndexHP(negotiation, {"guid"}) ~= nil then
 				lastNegotiationSeenAtHP = now
@@ -11416,29 +12849,23 @@ if IS_MINIGAME_PLACE then
 			if type(tryIndexHP(active, {"voting"})) == "table" then return true end
 			return false
 		end
-
 		local function playingHP(active)
 			if not active then return false end
 			return tryIndexHP(active, {"phase"}) == "Playing"
 				and tryIndexHP(active, {"session", "gameId"}) ~= nil
 		end
-
 		local function serverDurationHP()
 			return math.max(1, tonumber(autoServerHopState.ServerTime) or 10) * 60
 		end
-
 		local function noGameDurationHP()
 			return math.max(1, tonumber(autoServerHopState.TimeSinceLastGame) or 3) * 60
 		end
-
 		local function presenceDueHP()
 			return autoServerHopState.Utility.PauseScript ~= true
+				and autoServerHopState.LeaveIfScriptUserInServer == true
 				and autoServerHopState.RuntimeScriptUserHopRequested == true
 		end
-
 		local function scheduledDueHP()
-
-
 			if autoServerHopState.Utility.PauseScript == true then
 				return false
 			end
@@ -11468,10 +12895,9 @@ if IS_MINIGAME_PLACE then
 			end
 			return false
 		end
-
 		local function myBoothStateHP()
 			local booths
-			pcall(function() booths = ReplicatorHP.get("TradingBooths") end)
+			booths = safeRepGet(ReplicatorHP, "TradingBooths")
 			local data = booths and booths.Data
 			if type(data) ~= "table" then return nil end
 			for _, entry in pairs(data) do
@@ -11480,7 +12906,6 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 		end
-
 		local function boothContainsItemHP(state, itemId)
 			local wanted = tostring(itemId)
 			for offerId, item in pairs(state and state.items or {}) do
@@ -11492,17 +12917,15 @@ if IS_MINIGAME_PLACE then
 			end
 			return false
 		end
-
 		local function inventoryContainsHP(itemId)
 			local playerData
-			pcall(function() playerData = ReplicatorHP.get("PlayerData") end)
+			playerData = safeRepGet(ReplicatorHP, "PlayerData")
 			local inventory = tryIndexHP(playerData, {"Inventory"})
 			if type(inventory) ~= "table" then return false end
 			return inventory[itemId] ~= nil
 				or inventory[tostring(itemId)] ~= nil
 				or (tonumber(itemId) ~= nil and inventory[tonumber(itemId)] ~= nil)
 		end
-
 		local function scanBoothPurchasesHP()
 			local state = myBoothStateHP()
 			local currentOffers = {}
@@ -11511,7 +12934,6 @@ if IS_MINIGAME_PLACE then
 				local itemId = type(item) == "table" and (item.guid or item.id) or offerId
 				currentOffers[tostring(offerId)] = itemId or offerId
 			end
-
 			for offerKey, itemId in pairs(previousBoothOffersHP) do
 				local suppressions = autoServerHopState.RuntimeBoothScriptRemoveUntil
 				local suppressedUntil = type(suppressions) == "table"
@@ -11521,6 +12943,11 @@ if IS_MINIGAME_PLACE then
 					and not pendingBoothChecksHP[offerKey]
 				then
 					pendingBoothChecksHP[offerKey] = true
+					-- Block an already-due hop immediately while the disappearance
+					-- is being verified. Without this guard the 0.75s purchase
+					-- confirmation window could race the hop loop.
+					boothBlockRemainingHP = math.max(boothBlockRemainingHP, 2)
+					hopNotBeforeHP = math.max(hopNotBeforeHP, os.clock() + 2)
 					task.delay(0.75, function()
 						pendingBoothChecksHP[offerKey] = nil
 						if not screenGui.Parent or autoServerHopState.Enabled ~= true then return end
@@ -11531,6 +12958,7 @@ if IS_MINIGAME_PLACE then
 							1, 60
 						) * 60
 						boothBlockRemainingHP = math.max(boothBlockRemainingHP, seconds)
+						hopNotBeforeHP = math.max(hopNotBeforeHP, os.clock() + seconds)
 					end)
 				end
 			end
@@ -11542,14 +12970,12 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 		end
-
 		local function processMatchResultHP(active, nowPlaying)
 			local gameId = tryIndexHP(active, {"session", "gameId"})
 			if type(gameId) == "string" and gameId ~= "" and gameId ~= lastGameIdHP then
 				lastGameIdHP = gameId
 			end
 			if nowPlaying and not wasPlayingHP then lastResultSignatureHP = nil end
-
 			local result = tryIndexHP(active, {"matchResult"})
 			if type(result) ~= "table" then return end
 			local winner = tonumber(result.winnerIndex)
@@ -11559,54 +12985,59 @@ if IS_MINIGAME_PLACE then
 				.. ":" .. tostring(result.round or result.roundIndex or result.bestOf or "")
 			if signature == lastResultSignatureHP then return end
 			lastResultSignatureHP = signature
-
 			if autoServerHopState.Enabled ~= true then return end
 			if winner == 1 then
-				if autoServerHopState.ServerTimeEnabled == true then
-					local addedSeconds = math.clamp(
-						tonumber(autoServerHopState.WinWagerTimeAdded) or 3,
-						0, 60
-					) * 60
-					local duration = serverDurationHP()
-
-
-					serverElapsedHP = math.min(
-						serverElapsedHP - addedSeconds,
-						duration - addedSeconds
-					)
+				local addedSeconds = math.clamp(
+					tonumber(autoServerHopState.WinWagerTimeAdded) or 3,
+					0, 60
+				) * 60
+				if addedSeconds > 0 then
+					hopNotBeforeHP = math.max(hopNotBeforeHP, os.clock() + addedSeconds)
+					noGameElapsedHP = 0
+					if autoServerHopState.ServerTimeEnabled == true then
+						serverElapsedHP = math.max(0, serverElapsedHP - addedSeconds)
+					end
 				end
 			end
 		end
-
+		-- Observe match results directly as well as polling them in the hop
+		-- loop. This closes the frame where a just-won wager and an already-due
+		-- server timer could otherwise become visible at nearly the same time.
+		do
+			local activeResultSourceHP = activeMinigameHP()
+			if activeResultSourceHP then
+				pcall(function()
+					activeResultSourceHP:Listen({"matchResult"}, function()
+						if screenGui.Parent then
+							processMatchResultHP(activeResultSourceHP, false)
+						end
+					end)
+				end)
+			end
+		end
 		local function requestFunctionHP()
 			local env
 			pcall(function()
 				if type(getgenv) == "function" then env = getgenv() end
 			end)
 			if type(env) ~= "table" then env = _G end
-
 			local direct = env.request or env.http_request or rawget(_G, "request") or rawget(_G, "http_request")
 			if type(direct) == "function" then return direct end
-
 			local synTable = env.syn or rawget(_G, "syn")
 			if type(synTable) == "table" and type(synTable.request) == "function" then return synTable.request end
-
 			local httpTable = env.http or rawget(_G, "http")
 			if type(httpTable) == "table" and type(httpTable.request) == "function" then return httpTable.request end
 		end
-
 		local function decodeServerPageHP(body)
 			if type(body) ~= "string" or body == "" then return nil end
 			local decoded
 			local okDecode = pcall(function() decoded = HttpServiceHP:JSONDecode(body) end)
 			return okDecode and type(decoded) == "table" and decoded or nil
 		end
-
 		local function fetchServerPageHP(requestFn, cursor)
 			local url = "https://games.roblox.com/v1/games/" .. tostring(game.PlaceId)
 				.. "/servers/Public?sortOrder=Desc&limit=100&excludeFullGames=true"
 			if cursor and cursor ~= "" then url ..= "&cursor=" .. HttpServiceHP:UrlEncode(cursor) end
-
 			if requestFn then
 				local ok, response = pcall(requestFn, {
 					Url = url,
@@ -11624,45 +13055,46 @@ if IS_MINIGAME_PLACE then
 					if decoded then return decoded end
 				end
 			end
-
 			local body
 			local okHttpGet = pcall(function() body = game:HttpGet(url) end)
 			if not okHttpGet then return nil end
 			return decodeServerPageHP(body)
 		end
-
 		local function collectCandidatesHP()
 			local requestFn = requestFunctionHP()
 			local candidates = {}
 			local seen = {}
-
-
-
-
-			local decoded = fetchServerPageHP(requestFn, nil)
-			if not decoded then return candidates end
-			for _, server in ipairs(decoded.data or {}) do
-				local id = server.id
-				local playing = tonumber(server.playing)
-				local maxPlayers = tonumber(server.maxPlayers)
-				if type(id) == "string"
-					and id ~= ""
-					and id ~= game.JobId
-					and not seen[id]
-					and playing
-					and maxPlayers
-					and maxPlayers > 0
-					and playing < maxPlayers
-				then
-					seen[id] = true
-					candidates[#candidates + 1] = {
-						id = id,
-						playing = playing,
-						maxPlayers = maxPlayers,
-						fullness = playing / maxPlayers,
-						openSlots = maxPlayers - playing,
-					}
+			local cursor
+			pruneServerBlacklistHP()
+			for _ = 1, 5 do
+				local decoded = fetchServerPageHP(requestFn, cursor)
+				if not decoded then break end
+				for _, server in ipairs(decoded.data or {}) do
+					local id = server.id
+					local playing = tonumber(server.playing)
+					local maxPlayers = tonumber(server.maxPlayers)
+					if type(id) == "string"
+						and id ~= ""
+						and id ~= game.JobId
+						and not seen[id]
+						and not serverBlacklistedHP(id)
+						and playing
+						and maxPlayers
+						and maxPlayers > 0
+						and playing < maxPlayers
+					then
+						seen[id] = true
+						candidates[#candidates + 1] = {
+							id = id,
+							playing = playing,
+							maxPlayers = maxPlayers,
+							fullness = playing / maxPlayers,
+							openSlots = maxPlayers - playing,
+						}
+					end
 				end
+				cursor = decoded.nextPageCursor
+				if #candidates >= 25 or type(cursor) ~= "string" or cursor == "" then break end
 			end
 			table.sort(candidates, function(a, b)
 				if a.playing ~= b.playing then return a.playing > b.playing end
@@ -11672,7 +13104,6 @@ if IS_MINIGAME_PLACE then
 			end)
 			return candidates
 		end
-
 		local function refreshServerCacheHP()
 			if cacheRefreshingHP or not screenGui.Parent then return end
 			cacheRefreshingHP = true
@@ -11683,12 +13114,12 @@ if IS_MINIGAME_PLACE then
 			end
 			cacheRefreshingHP = false
 		end
-
 		local function chooseTopTenHP(candidates)
 			if type(candidates) ~= "table" or #candidates == 0 then return nil end
 			local topTen = {}
 			for _, candidate in ipairs(candidates) do
 				if candidate.id ~= game.JobId
+					and not serverBlacklistedHP(candidate.id)
 					and tonumber(candidate.playing)
 					and tonumber(candidate.maxPlayers)
 					and candidate.playing < candidate.maxPlayers
@@ -11698,33 +13129,31 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 			if #topTen == 0 then return nil end
-
-
-
-
 			return topTen[serverRngHP:NextInteger(1, #topTen)]
 		end
-
 		local function cachedChoiceHP()
 			return chooseTopTenHP(cachedCandidatesHP)
 		end
-
 		local function freshPresenceChoiceHP()
 			if serverCacheAtHP <= 0 then return nil end
 			if os.clock() - serverCacheAtHP > PRESENCE_HOP_CACHE_MAX_AGE_HP then return nil end
 			return cachedChoiceHP()
 		end
-
 		local function presenceChoiceHP()
-
-
-
-
 			return freshPresenceChoiceHP() or cachedChoiceHP()
 		end
-
 		local function hopDifferentHP()
 			local collisionDueHP = presenceDueHP()
+			local presenceWarmHP = true
+			if not collisionDueHP and autoServerHopState.LeaveIfScriptUserInServer == true then
+				local startedAt = tonumber(autoServerHopState.RuntimePresenceStartedAt) or os.clock()
+				local connectedAt = tonumber(autoServerHopState.RuntimeGlobalPresenceConnectedAt)
+				presenceWarmHP = (connectedAt ~= nil and os.clock() - connectedAt >= 0.30)
+					or os.clock() - startedAt >= 1.50
+			end
+			if not presenceWarmHP then
+				return
+			end
 			if hoppingHP
 				or autoServerHopState.Utility.PauseScript == true
 				or (
@@ -11736,9 +13165,6 @@ if IS_MINIGAME_PLACE then
 				return
 			end
 			hoppingHP = true
-
-
-
 			if autoServerHopState.Utility.PauseScript == true
 				or (
 					autoServerHopState.Utility.PauseMinigameFeatures == true
@@ -11754,6 +13180,7 @@ if IS_MINIGAME_PLACE then
 			local manualDueHP =
 				autoServerHopState.RuntimeManualServerHopRequested == true
 			if not scheduledDueHP()
+				or (not collisionDueHP and os.clock() < hopNotBeforeHP)
 				or (
 					not collisionDueHP
 					and not checkServerDueHP
@@ -11765,24 +13192,30 @@ if IS_MINIGAME_PLACE then
 				hoppingHP = false
 				return
 			end
-
-
-
-
-
-			local chosen = collisionDueHP and presenceChoiceHP() or cachedChoiceHP()
+			-- Resolve a fresh server list at the actual hop boundary. The cache is
+			-- only a readiness optimization; it is never authoritative for the
+			-- final destination. This keeps the random top-10 pool current and
+			-- re-applies joined/script-user blacklists immediately before teleport.
+			local chosen
+			local freshOk, freshCandidates = pcall(collectCandidatesHP)
+			if freshOk and type(freshCandidates) == "table" and #freshCandidates > 0 then
+				cachedCandidatesHP = freshCandidates
+				serverCacheAtHP = os.clock()
+				chosen = chooseTopTenHP(freshCandidates)
+			end
+			if not chosen then
+				chosen = collisionDueHP and presenceChoiceHP() or cachedChoiceHP()
+			end
 			if not chosen then
 				hoppingHP = false
 				if not cacheRefreshingHP then task.spawn(refreshServerCacheHP) end
 				return
 			end
-
 			local originJobId = game.JobId
 			recordRecentServerHP(originJobId)
 			recordRecentServerHP(chosen.id)
 			local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
 			if type(saver) == "function" then pcall(saver, true) end
-
 			if autoServerHopState.Utility.PauseScript == true
 				or (
 					autoServerHopState.Utility.PauseMinigameFeatures == true
@@ -11792,17 +13225,14 @@ if IS_MINIGAME_PLACE then
 				hoppingHP = false
 				return
 			end
-
 			local ok = pcall(function()
 				TeleportServiceHP:TeleportToPlaceInstance(game.PlaceId, chosen.id, LocalPlayerHP)
 			end)
-
 			if not ok then
 				serverCacheAtHP = 0
 				task.delay(2, function() hoppingHP = false end)
 				return
 			end
-
 			task.delay(10, function()
 				if screenGui.Parent and game.JobId == originJobId then
 					hoppingHP = false
@@ -11810,7 +13240,6 @@ if IS_MINIGAME_PLACE then
 				end
 			end)
 		end
-
 		local wakePresenceHopHP = function()
 			if not screenGui.Parent or not presenceDueHP() then return end
 			if presenceChoiceHP() == nil then
@@ -11820,14 +13249,8 @@ if IS_MINIGAME_PLACE then
 			hopDifferentHP()
 		end
 		autoServerHopState.RuntimePresenceHopWake = wakePresenceHopHP
-
 		while screenGui.Parent do
 			task.wait(0.10)
-
-
-
-
-
 			if autoServerHopState.Utility.PauseScript == true then
 				autoServerHopState.RuntimeServerHopPending = false
 				autoServerHopState.RuntimeScriptUserHopRequested = false
@@ -11835,7 +13258,6 @@ if IS_MINIGAME_PLACE then
 				wasPresenceDueHP = false
 				continue
 			end
-
 			local active = activeMinigameHP()
 			local nowPlaying = playingHP(active)
 			local lifecycleBlocked = lifecycleBlockedHP(active)
@@ -11844,10 +13266,7 @@ if IS_MINIGAME_PLACE then
 			if not pausedHP then
 				processMatchResultHP(active, nowPlaying)
 			end
-
 			local nowHP = os.clock()
-
-
 			if not pausedHP
 				and autoServerHopState.Enabled == true
 				and nowHP >= nextBoothScanAtHP
@@ -11861,6 +13280,7 @@ if IS_MINIGAME_PLACE then
 				serverElapsedHP = 0
 				noGameElapsedHP = 0
 				boothBlockRemainingHP = 0
+				hopNotBeforeHP = 0
 				lastTimerTickHP = nowHP
 			end
 			local deltaHP = math.max(0, nowHP - lastTimerTickHP)
@@ -11872,41 +13292,23 @@ if IS_MINIGAME_PLACE then
 				and autoServerHopState.ServerTimeEnabled == true
 			local noGameTimerEnabledHP = masterEnabledHP
 				and autoServerHopState.TimeSinceLastGameEnabled == true
-
-
-
 			if serverTimerEnabledHP then serverElapsedHP += deltaHP end
-
-
-
 			if nowPlaying then
 				noGameElapsedHP = 0
 			elseif noGameTimerEnabledHP then
 				if wasPlayingHP then
-
-
 					noGameElapsedHP = 0
 				else
 					noGameElapsedHP += deltaHP
 				end
 			end
 			wasPlayingHP = nowPlaying
-
 			if masterEnabledHP and boothBlockRemainingHP > 0 then
 				boothBlockRemainingHP = math.max(0, boothBlockRemainingHP - deltaHP)
 			end
-
-
-
-
 			if autoServerHopState.Utility.PauseScript == true then
 				autoServerHopState.RuntimeScriptUserHopRequested = false
 			end
-
-
-
-
-
 			local presenceNowHP = presenceDueHP()
 			if presenceNowHP and not wasPresenceDueHP then
 				if freshPresenceChoiceHP() == nil and not cacheRefreshingHP then
@@ -11914,10 +13316,6 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 			wasPresenceDueHP = presenceNowHP
-
-
-
-
 			local hopDueHP = scheduledDueHP()
 			local preparedHopReadyHP = hopDueHP and (
 				(presenceNowHP and presenceChoiceHP() ~= nil)
@@ -11929,14 +13327,9 @@ if IS_MINIGAME_PLACE then
 				or autoServerHopState.RuntimeManualServerHopRequested == true
 				or preparedHopReadyHP
 				or hoppingHP
-
-
-
-
 			if not cacheRefreshingHP then
 				local shouldRefreshHP = false
 				local maxCacheAgeHP = 10
-
 				if autoServerHopState.Utility.PauseScript ~= true then
 					shouldRefreshHP = serverCacheAtHP == 0
 						or nowHP - serverCacheAtHP >= 1.25
@@ -11955,7 +13348,6 @@ if IS_MINIGAME_PLACE then
 					if noGameTimerEnabledHP and not nowPlaying then
 						nearestRemainingHP = math.min(nearestRemainingHP, noGameDurationHP() - noGameElapsedHP)
 					end
-
 					if nearestRemainingHP <= 5 then
 						maxCacheAgeHP = 1
 						shouldRefreshHP = serverCacheAtHP == 0 or nowHP - serverCacheAtHP >= maxCacheAgeHP
@@ -11967,16 +13359,12 @@ if IS_MINIGAME_PLACE then
 						shouldRefreshHP = serverCacheAtHP == 0 or nowHP - serverCacheAtHP >= maxCacheAgeHP
 					end
 				end
-
 				if shouldRefreshHP then
 					task.spawn(refreshServerCacheHP)
 				end
 			end
-
-
-
-
 			if hopDueHP
+				and (presenceNowHP or nowHP >= hopNotBeforeHP)
 				and (presenceNowHP or not lifecycleBlocked)
 				and (
 					presenceNowHP
@@ -11995,34 +13383,23 @@ if IS_MINIGAME_PLACE then
 		end
 	end)
 end
-
-
-
-
-
-
 if IS_MINIGAME_PLACE then
 	(function()
 		local GuiServiceAR = game:GetService("GuiService")
-		local TeleportServiceAR = game:GetService("TeleportService")
-		local PlayersAR = game:GetService("Players")
+		local TeleportServiceAR = TeleportService
+		local PlayersAR = Players
 		local LocalPlayerAR = PlayersAR.LocalPlayer
 		local reconnectingAR = false
 		local reconnectSerialAR = 0
-
 		local function isConnectionLossAR(message)
 			if type(message) ~= "string" or message == "" then return false end
 			local text = string.lower(message)
-
-
-
 			if string.find(text, "kicked", 1, true)
 				or string.find(text, "error code: 267", 1, true)
 				or string.find(text, "error code: 268", 1, true)
 			then
 				return false
 			end
-
 			return string.find(text, "error code: 277", 1, true) ~= nil
 				or string.find(text, "error code: 279", 1, true) ~= nil
 				or string.find(text, "error code: 266", 1, true) ~= nil
@@ -12037,7 +13414,6 @@ if IS_MINIGAME_PLACE then
 					and string.find(text, "same account", 1, true) == nil
 				)
 		end
-
 		local function beginReconnectAR()
 			local utility = autoServerHopState and autoServerHopState.Utility
 			if reconnectingAR
@@ -12047,12 +13423,10 @@ if IS_MINIGAME_PLACE then
 			then
 				return
 			end
-
 			reconnectingAR = true
 			reconnectSerialAR += 1
 			local serial = reconnectSerialAR
 			local originJobId = game.JobId
-
 			task.spawn(function()
 				local attempt = 0
 				while screenGui.Parent
@@ -12065,10 +13439,6 @@ if IS_MINIGAME_PLACE then
 					pcall(function()
 						TeleportServiceAR:Teleport(game.PlaceId, LocalPlayerAR)
 					end)
-
-
-
-
 					local retryAt = os.clock() + math.min(8, 3 + attempt)
 					while screenGui.Parent
 						and serial == reconnectSerialAR
@@ -12080,13 +13450,11 @@ if IS_MINIGAME_PLACE then
 						task.wait(0.20)
 					end
 				end
-
 				if serial == reconnectSerialAR then
 					reconnectingAR = false
 				end
 			end)
 		end
-
 		GuiServiceAR.ErrorMessageChanged:Connect(function(message)
 			if not screenGui.Parent then return end
 			if autoServerHopState.Utility.AutoReconnect ~= true
@@ -12098,10 +13466,6 @@ if IS_MINIGAME_PLACE then
 				beginReconnectAR()
 			end
 		end)
-
-
-
-
 		TeleportServiceAR.TeleportInitFailed:Connect(function(player, _, errorMessage)
 			if player ~= LocalPlayerAR or not screenGui.Parent then return end
 			if autoServerHopState.Utility.AutoReconnect ~= true
@@ -12115,16 +13479,7 @@ if IS_MINIGAME_PLACE then
 		end)
 	end)()
 end
-
-
-
-
-
 if IS_MINIGAME_PLACE then
-
-
-
-
 	local autoChatExecutedAtAC = os.clock()
 	task.spawn(function()
 		while screenGui.Parent
@@ -12140,7 +13495,7 @@ if IS_MINIGAME_PLACE then
 		end
 		if not screenGui.Parent then return end
 		local TextChatServiceAC = game:GetService("TextChatService")
-		local ReplicatedStorageAC = game:GetService("ReplicatedStorage")
+		local ReplicatedStorageAC = ReplicatedStorage
 		local ReplicatorPublicChatAC
 		pcall(function()
 			ReplicatorPublicChatAC = require(
@@ -12154,11 +13509,9 @@ if IS_MINIGAME_PLACE then
 		local lastRevisionAC = -1
 		local lastIntervalAC
 		local pausedAtAC
-
 		local function sendPublicChatMessageAC(message)
 			local value = tostring(message or "")
 			if value == "" then return false end
-
 			if TextChatServiceAC.ChatVersion == Enum.ChatVersion.LegacyChatService then
 				local events = ReplicatedStorageAC:FindFirstChild("DefaultChatSystemChatEvents")
 				local say = events and events:FindFirstChild("SayMessageRequest")
@@ -12168,60 +13521,43 @@ if IS_MINIGAME_PLACE then
 				end)
 				return ok
 			end
-
 			local channels = TextChatServiceAC:FindFirstChild("TextChannels")
 			local general = channels and channels:FindFirstChild("RBXGeneral")
 			return general and pcall(general.SendAsync, general, value) or false
 		end
-
 		local function activeTradeAC()
 			if not ReplicatorPublicChatAC then return false end
 			local negotiation
-			pcall(function()
-				negotiation = ReplicatorPublicChatAC.get("ActiveNegotiation")
-			end)
+			negotiation = safeRepGet(ReplicatorPublicChatAC, "ActiveNegotiation")
 			if not negotiation then return false end
 			local ok, guid = pcall(function()
 				return negotiation:TryIndex({"guid"})
 			end)
 			return ok and guid ~= nil
 		end
-
 		while screenGui.Parent do
 			task.wait(0.10)
-
 			local state = autoServerHopState and autoServerHopState.Utility
 			local enabled = state
 				and state.PauseScript ~= true
 				and state.PauseMinigameFeatures ~= true
 				and state.AutoChat == true
 			local now = os.clock()
-
 			if not enabled then
-
-
-
 				if lastEnabledAC and pausedAtAC == nil then
 					pausedAtAC = now
 				end
 				continue
 			end
-
 			if pausedAtAC ~= nil then
-
-
 				if nextChatAtAC > 0 then
 					nextChatAtAC += now - pausedAtAC
 				end
 				pausedAtAC = nil
 			end
-
-
-
 			if state.AutoChatEditing == true then
 				continue
 			end
-
 			local executionDelay = math.clamp(
 				tonumber(state.AutoChatExecutionDelay) or 0,
 				0,
@@ -12230,16 +13566,11 @@ if IS_MINIGAME_PLACE then
 			if now < autoChatExecutedAtAC + executionDelay then
 				continue
 			end
-
-
-
-
 			if state.AutoChatDoNotSendDuringActiveTrade == true
 				and activeTradeAC()
 			then
 				continue
 			end
-
 			local message = tostring(state.AutoChatMessage or "")
 			local revision = math.floor(
 				tonumber(state.AutoChatMessageRevision) or 0
@@ -12250,7 +13581,6 @@ if IS_MINIGAME_PLACE then
 				lastRevisionAC = revision
 				continue
 			end
-
 			local intervalMinutes = math.clamp(
 				math.floor((tonumber(state.ChatIntervalMinutes) or 1) + 0.5),
 				1,
@@ -12258,14 +13588,10 @@ if IS_MINIGAME_PLACE then
 			)
 			local interval = intervalMinutes * 60
 			if lastIntervalAC ~= nil and interval ~= lastIntervalAC then
-
 				nextChatAtAC = now + interval
 			end
 			lastIntervalAC = interval
 			local committedNow = revision ~= lastRevisionAC
-
-
-
 			if not lastEnabledAC
 				or committedNow
 				or nextChatAtAC <= 0
@@ -12274,23 +13600,14 @@ if IS_MINIGAME_PLACE then
 				local sent = sendPublicChatMessageAC(message)
 				nextChatAtAC = now + (sent and interval or 5)
 			end
-
 			lastRevisionAC = revision
 			lastEnabledAC = true
 		end
 	end)
-
-
-
-
-
-
-
 	task.spawn(function()
-		local ReplicatedStorageATM = game:GetService("ReplicatedStorage")
-		local PlayersATM = game:GetService("Players")
+		local ReplicatedStorageATM = ReplicatedStorage
+		local PlayersATM = Players
 		local LocalPlayerATM = PlayersATM.LocalPlayer
-
 		local function requireATM(moduleScript)
 			while screenGui.Parent do
 				local ok, result = pcall(require, moduleScript)
@@ -12298,7 +13615,6 @@ if IS_MINIGAME_PLACE then
 				task.wait(0.25)
 			end
 		end
-
 		local ReplicatorATM = requireATM(
 			ReplicatedStorageATM:WaitForChild("Client")
 				:WaitForChild("Modules")
@@ -12308,7 +13624,6 @@ if IS_MINIGAME_PLACE then
 			ReplicatedStorageATM:WaitForChild("Shared"):WaitForChild("Remotes")
 		)
 		if not (ReplicatorATM and RemotesATM) then return end
-
 		local ActiveNegotiationATM
 		local currentGuidATM
 		local tradeStartedAtATM = 0
@@ -12319,32 +13634,17 @@ if IS_MINIGAME_PLACE then
 		local processedMessageCountATM = 0
 		local sendBusyATM = false
 		local wasTradeChatEnabledATM = false
-
-		local function tryIndexATM(root, path)
-			if not root then return nil end
-			local ok, value = pcall(function()
-				return root:TryIndex(path)
-			end)
-			return ok and value or nil
-		end
-
+		local tryIndexATM = safeTryIndex
 		local function refreshActiveNegotiationATM()
-			local ok, fresh = pcall(function()
-				return ReplicatorATM.get("ActiveNegotiation")
-			end)
-			if ok then
-				ActiveNegotiationATM = fresh
-			end
+			ActiveNegotiationATM = safeRepGet(ReplicatorATM, "ActiveNegotiation") or ActiveNegotiationATM
 			return ActiveNegotiationATM
 		end
-
 		local function negotiationGuidATM()
 			return tryIndexATM(
 				refreshActiveNegotiationATM(),
 				{"guid"}
 			)
 		end
-
 		local function sendTradeMessageATM(expectedGuid, message)
 			if sendBusyATM
 				or not expectedGuid
@@ -12352,13 +13652,10 @@ if IS_MINIGAME_PLACE then
 			then
 				return false
 			end
-
 			local remote = RemotesATM.TradeChatSendMessage
 			if not remote then return false end
-
 			local value = tostring(message or "")
 			if value == "" then return false end
-
 			local state = autoServerHopState and autoServerHopState.Utility
 			if not state
 				or state.PauseScript == true
@@ -12367,10 +13664,8 @@ if IS_MINIGAME_PLACE then
 			then
 				return false
 			end
-
 			sendBusyATM = true
 			local success = false
-
 			refreshActiveNegotiationATM()
 			local channelReadyUntil = os.clock() + 3.0
 			while negotiationGuidATM() == expectedGuid
@@ -12384,7 +13679,6 @@ if IS_MINIGAME_PLACE then
 			do
 				task.wait(0.05)
 			end
-
 			if negotiationGuidATM() == expectedGuid then
 				for attempt = 1, 3 do
 					local currentState =
@@ -12397,7 +13691,6 @@ if IS_MINIGAME_PLACE then
 					then
 						break
 					end
-
 					local ok, result = pcall(function()
 						return remote:InvokeServer(value)
 					end)
@@ -12410,14 +13703,11 @@ if IS_MINIGAME_PLACE then
 					end
 				end
 			end
-
 			sendBusyATM = false
 			return success
 		end
-
 		local function opponentHasValueATM()
 			refreshActiveNegotiationATM()
-
 			if math.max(
 				0,
 				math.floor(
@@ -12431,7 +13721,6 @@ if IS_MINIGAME_PLACE then
 			) > 0 then
 				return true
 			end
-
 			local slots = tryIndexATM(
 				ActiveNegotiationATM,
 				{"player2", "slots"}
@@ -12439,7 +13728,6 @@ if IS_MINIGAME_PLACE then
 			if type(slots) ~= "table" then
 				return false
 			end
-
 			for slotIndex = 1, 6 do
 				local value = slots[tostring(slotIndex)]
 				if value == nil then
@@ -12452,7 +13740,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return false
 		end
-
 		local function normalizeMessageATM(value)
 			value = string.lower(tostring(value or ""))
 			value = string.gsub(value, "[%p%c]+", " ")
@@ -12461,17 +13748,14 @@ if IS_MINIGAME_PLACE then
 			value = string.gsub(value, "%s+$", "")
 			return value
 		end
-
 		local function messageDistanceATM(a, b)
 			local aLen, bLen = #a, #b
 			if aLen == 0 then return bLen end
 			if bLen == 0 then return aLen end
-
 			local previous = {}
 			for j = 0, bLen do
 				previous[j] = j
 			end
-
 			for i = 1, aLen do
 				local current = {[0] = i}
 				local aByte = string.byte(a, i)
@@ -12487,24 +13771,17 @@ if IS_MINIGAME_PLACE then
 			end
 			return previous[bLen]
 		end
-
 		local function similarMessageATM(message, wanted)
 			local haystack = normalizeMessageATM(message)
 			local needle = normalizeMessageATM(wanted)
 			if haystack == "" or needle == "" then
 				return false
 			end
-
-
-
 			if string.find(haystack, needle, 1, true)
 				or string.find(needle, haystack, 1, true)
 			then
 				return true
 			end
-
-
-
 			local longest = math.max(#haystack, #needle)
 			if longest <= 3 then
 				return false
@@ -12514,8 +13791,6 @@ if IS_MINIGAME_PLACE then
 			if similarity >= 0.78 then
 				return true
 			end
-
-
 			local wantedWords = {}
 			local wantedCount = 0
 			for word in string.gmatch(needle, "%S+") do
@@ -12525,7 +13800,6 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 			if wantedCount == 0 then return false end
-
 			local matched = 0
 			local seen = {}
 			for word in string.gmatch(haystack, "%S+") do
@@ -12536,7 +13810,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return matched / wantedCount >= 0.75
 		end
-
 		local function resetTradeStateATM(guid)
 			currentGuidATM = guid
 			tradeStartedAtATM = guid and os.clock() or 0
@@ -12546,10 +13819,8 @@ if IS_MINIGAME_PLACE then
 			noValueSentATM = false
 			processedMessageCountATM = 0
 		end
-
 		while screenGui.Parent do
 			task.wait(0.08)
-
 			local state = autoServerHopState and autoServerHopState.Utility
 			local enabled = state
 				and state.PauseScript ~= true
@@ -12559,7 +13830,6 @@ if IS_MINIGAME_PLACE then
 				wasTradeChatEnabledATM = false
 				continue
 			end
-
 			local guid = negotiationGuidATM()
 			if guid ~= currentGuidATM then
 				resetTradeStateATM(guid)
@@ -12568,7 +13838,6 @@ if IS_MINIGAME_PLACE then
 				wasTradeChatEnabledATM = true
 				continue
 			end
-
 			if not wasTradeChatEnabledATM then
 				wasTradeChatEnabledATM = true
 				local existingMessages = tryIndexATM(
@@ -12578,12 +13847,7 @@ if IS_MINIGAME_PLACE then
 				processedMessageCountATM =
 					type(existingMessages) == "table" and #existingMessages or 0
 			end
-
 			local now = os.clock()
-
-
-
-
 			if state.AutoTradeChatEditing ~= true then
 				local message = tostring(state.AutoTradeMessage or "")
 				local revision = math.floor(
@@ -12594,7 +13858,6 @@ if IS_MINIGAME_PLACE then
 					0,
 					10
 				)
-
 				if message ~= ""
 					and now - tradeStartedAtATM >= startDelay
 				then
@@ -12620,11 +13883,6 @@ if IS_MINIGAME_PLACE then
 					end
 				end
 			end
-
-
-
-
-
 			if state.AutoTradeSendIfValueNotOffered == true
 				and state.AutoTradeNoValueMessageEditing ~= true
 			then
@@ -12650,10 +13908,6 @@ if IS_MINIGAME_PLACE then
 				noValueSinceATM = nil
 				noValueSentATM = false
 			end
-
-
-
-
 			if state.AutoTradeCustomRepliesEnabled == true then
 				local messages = tryIndexATM(
 					ActiveNegotiationATM,
@@ -12663,7 +13917,6 @@ if IS_MINIGAME_PLACE then
 					if #messages < processedMessageCountATM then
 						processedMessageCountATM = 0
 					end
-
 					for messageIndex = processedMessageCountATM + 1, #messages do
 						local messageData = messages[messageIndex]
 						if type(messageData) == "table"
@@ -12701,11 +13954,6 @@ if IS_MINIGAME_PLACE then
 			end
 		end
 	end)
-
-
-
-
-
 	task.spawn(function()
 		while screenGui.Parent
 			and not (
@@ -12717,10 +13965,9 @@ if IS_MINIGAME_PLACE then
 			task.wait(0.10)
 		end
 		if not screenGui.Parent then return end
-		local PlayersADI = game:GetService("Players")
-		local ReplicatedStorageADI = game:GetService("ReplicatedStorage")
+		local PlayersADI = Players
+		local ReplicatedStorageADI = ReplicatedStorage
 		local LocalPlayerADI = PlayersADI.LocalPlayer
-
 		local function requireADI(moduleScript)
 			while screenGui.Parent do
 				local ok, result = pcall(require, moduleScript)
@@ -12753,16 +14000,12 @@ if IS_MINIGAME_PLACE then
 		) then
 			return
 		end
-
 		local DeleteInventoryItemADI = RemotesADI.DeleteInventoryItem
 		local LockInventoryItemADI = RemotesADI.LockItem
 		local PlayerDataADI
 		local ActiveNegotiationADI
 		local ActiveMinigameADI
 		local deleteBusyADI = false
-
-
-
 		local RARITY_ORDER_ADI = {
 			Common = 1,
 			Uncommon = 2,
@@ -12778,69 +14021,40 @@ if IS_MINIGAME_PLACE then
 			Paradox = 12,
 			Eternal = 13,
 		}
-
-		local function tryIndexADI(root, path)
-			if not root then return nil end
-			local ok, value = pcall(function()
-				return root:TryIndex(path)
-			end)
-			return ok and value or nil
-		end
-
+		local tryIndexADI = safeTryIndex
 		local function refreshReplicatorsADI()
-			pcall(function()
-				PlayerDataADI = ReplicatorADI.get("PlayerData") or PlayerDataADI
-			end)
-			pcall(function()
-				ActiveNegotiationADI =
-					ReplicatorADI.get("ActiveNegotiation") or ActiveNegotiationADI
-			end)
-			pcall(function()
-				ActiveMinigameADI =
-					ReplicatorADI.get("ActiveMinigame") or ActiveMinigameADI
-			end)
+			PlayerDataADI = safeRepGet(ReplicatorADI, "PlayerData") or PlayerDataADI
+			ActiveNegotiationADI = safeRepGet(ReplicatorADI, "ActiveNegotiation") or ActiveNegotiationADI
+			ActiveMinigameADI = safeRepGet(ReplicatorADI, "ActiveMinigame") or ActiveMinigameADI
 		end
-
 		local function inventoryDataADI()
 			refreshReplicatorsADI()
 			local inventory = tryIndexADI(PlayerDataADI, {"Inventory"})
 			return type(inventory) == "table" and inventory or nil
 		end
-
 		local function inventoryItemTypeADI(item)
 			if type(item) ~= "table" then return nil end
-			local itemType
-			pcall(function()
-				itemType = GetItemTypeADI(item)
-			end)
-			return itemType
+			local ok, itemType = pcall(GetItemTypeADI, item)
+			return ok and itemType or nil
 		end
-
 		local function getItemRarityADI(item)
 			if type(item) ~= "table"
 				or inventoryItemTypeADI(item) ~= "Brainrot"
 			then
 				return nil
 			end
-
 			local explicit = item.sub and item.sub.rarity
 			if type(explicit) == "string" and RARITY_ORDER_ADI[explicit] then
 				return explicit
 			end
-
-			local rarity
-			pcall(function()
-				rarity = EconomyMathADI.GetBrainrotRarity(item.name)
-			end)
-			return type(rarity) == "string" and rarity or nil
+			local ok, rarity = pcall(EconomyMathADI.GetBrainrotRarity, item.name)
+			return ok and type(rarity) == "string" and rarity or nil
 		end
-
 		local function brainrotIsMetaADI(item)
 			local name = type(item) == "table"
 				and (item.name or (item.sub and item.sub.name))
 				or nil
 			if type(name) ~= "string" then return false end
-
 			local lower = string.lower(name)
 			local metaNames = rawget(_G, "__TSUNAMI_META_NAMES_V215")
 			if type(metaNames) == "table" then
@@ -12858,40 +14072,19 @@ if IS_MINIGAME_PLACE then
 					end
 				end
 			end
-
 			return string.find(lower, "%f[%a]meta%f[%A]") ~= nil
 		end
-
-		local function negotiationGuidADI()
-			refreshReplicatorsADI()
-			return tryIndexADI(ActiveNegotiationADI, {"guid"})
-		end
-
-		local function minigamePhaseADI()
-			refreshReplicatorsADI()
-			return tryIndexADI(ActiveMinigameADI, {"phase"})
-		end
-
-		local function minigameGameIdADI()
-			refreshReplicatorsADI()
-			return tryIndexADI(ActiveMinigameADI, {"session", "gameId"})
-		end
-
 		local function deleteBlockedADI()
 			if autoServerHopState.Utility.PauseScript == true or autoServerHopState.Utility.PauseMinigameFeatures == true then return true end
-			return negotiationGuidADI() ~= nil
-				or minigamePhaseADI() ~= nil
-				or minigameGameIdADI() ~= nil
+			refreshReplicatorsADI()
+			return tryIndexADI(ActiveNegotiationADI, {"guid"}) ~= nil
+				or tryIndexADI(ActiveMinigameADI, {"phase"}) ~= nil
+				or tryIndexADI(ActiveMinigameADI, {"session", "gameId"}) ~= nil
 		end
-
-
-
-
 		local function effectiveInventoryCountADI()
 			local count = 0
 			local backpack = LocalPlayerADI:FindFirstChildOfClass("Backpack")
 			local character = LocalPlayerADI.Character
-
 			if backpack then
 				for _, child in ipairs(backpack:GetChildren()) do
 					if child:IsA("Tool") then
@@ -12899,7 +14092,6 @@ if IS_MINIGAME_PLACE then
 					end
 				end
 			end
-
 			if character then
 				for _, child in ipairs(character:GetChildren()) do
 					if child:IsA("Tool") then
@@ -12907,20 +14099,16 @@ if IS_MINIGAME_PLACE then
 					end
 				end
 			end
-
 			if not backpack and not character then
 				local inventory = inventoryDataADI()
 				for _ in pairs(inventory or {}) do
 					count += 1
 				end
 			end
-
 			return count
 		end
-
 		local function configuredBrainrotRarityADI(item)
 			if type(item) ~= "table" then return nil end
-
 			local explicit = (item.sub and item.sub.rarity)
 				or item.rarity
 				or item.Rarity
@@ -12929,22 +14117,16 @@ if IS_MINIGAME_PLACE then
 			then
 				return explicit
 			end
-
 			local name = item.name or (item.sub and item.sub.name)
 			if type(name) ~= "string" or name == "" then
 				return nil
 			end
-
-			local rarity
-			pcall(function()
-				rarity = EconomyMathADI.GetBrainrotRarity(name)
-			end)
-			return type(rarity) == "string"
+			local ok, rarity = pcall(EconomyMathADI.GetBrainrotRarity, name)
+			return ok and type(rarity) == "string"
 				and RARITY_ORDER_ADI[rarity] ~= nil
 				and rarity
 				or nil
 		end
-
 		local function neverDeleteNameADI(item)
 			if type(item) ~= "table" then return nil end
 			local displayName
@@ -12964,32 +14146,54 @@ if IS_MINIGAME_PLACE then
 					or ""
 			)
 		end
-
 		local function neverDeleteADI(item)
 			local state = autoServerHopState and autoServerHopState.Utility
-			if not state or state.NeverDeleteEnabled ~= true then
-				return false
+			if not state or type(item) ~= "table" then return false end
+			-- Eternal is a terminal progression reward; never discard it automatically.
+			if getItemRarityADI(item) == "Eternal" then return true end
+			if state.NeverDeleteEnabled == true then
+				local selected = state.NeverDeleteItems
+				local name = neverDeleteNameADI(item)
+				if type(selected) == "table" and name ~= nil and name ~= "" and selected[name] == true then
+					return true
+				end
 			end
-			local selected = state.NeverDeleteItems
-			if type(selected) ~= "table" then return false end
-			local name = neverDeleteNameADI(item)
-			return name ~= nil and name ~= "" and selected[name] == true
+			local mutation = item.mutation or item.Mutation
+				or (item.sub and (item.sub.mutation or item.sub.Mutation))
+			if type(mutation) == "string"
+				and type(state.AvoidDeletingMutations) == "table"
+				and state.AvoidDeletingMutations[mutation] == true
+			then
+				return true
+			end
+			local traits = item.traits or item.Traits
+				or (item.sub and (item.sub.traits or item.sub.Traits))
+			if type(state.AvoidDeletingTraits) == "table" then
+				if type(traits) == "table" then
+					for key, value in pairs(traits) do
+						local trait = type(key) == "number" and value or key
+						if value ~= nil and value ~= false and state.AvoidDeletingTraits[tostring(trait)] == true then
+							return true
+						end
+					end
+				elseif type(traits) == "string" then
+					for trait in string.gmatch(traits, "[^,|;]+") do
+						trait = string.gsub(trait, "^%s*(.-)%s*$", "%1")
+						if state.AvoidDeletingTraits[trait] == true then return true end
+					end
+				end
+			end
+			return false
 		end
-
 		local function isCapacityNonBrainrotCandidateADI(item, id)
 			if id == nil or type(item) ~= "table" or neverDeleteADI(item) then
 				return false
 			end
-
 			if inventoryItemTypeADI(item) == "Brainrot" then
 				return false
 			end
-
-
-
 			return configuredBrainrotRarityADI(item) == nil
 		end
-
 		local function nonBrainrotIdsADI()
 			local ids = {}
 			for id, item in pairs(inventoryDataADI() or {}) do
@@ -12999,13 +14203,10 @@ if IS_MINIGAME_PLACE then
 			end
 			return ids
 		end
-
 		local function modifierCountADI(item)
 			if type(item) ~= "table" then return math.huge end
-
 			local count = 0
 			local sub = type(item.sub) == "table" and item.sub or nil
-
 			local mutation = (sub and sub.mutation) or item.mutation
 			if type(mutation) == "string" then
 				local lower = string.lower(mutation)
@@ -13015,7 +14216,6 @@ if IS_MINIGAME_PLACE then
 			elseif mutation ~= nil and mutation ~= false then
 				count += 1
 			end
-
 			local traits = (sub and sub.traits) or item.traits
 			if type(traits) == "table" then
 				for key, value in pairs(traits) do
@@ -13036,15 +14236,13 @@ if IS_MINIGAME_PLACE then
 			elseif type(traits) == "string" then
 				local trimmed = string.gsub(traits, "^%s*(.-)%s*$", "%1")
 				if trimmed ~= "" and string.lower(trimmed) ~= "none" then
-					for _ in string.gmatch(trimmed, "[^,%|;]+") do
+					for _ in string.gmatch(trimmed, "[^,|;]+") do
 						count += 1
 					end
 				end
 			end
-
 			return count
 		end
-
 		local function deletionBucketADI(item)
 			if type(item) ~= "table"
 				or neverDeleteADI(item)
@@ -13052,33 +14250,24 @@ if IS_MINIGAME_PLACE then
 			then
 				return nil
 			end
-
 			local rarity = getItemRarityADI(item)
-
-
 			if rarity == "Paradox" or rarity == "Eternal" then
 				return nil
 			end
-
 			local rarityRank = type(rarity) == "string"
 				and RARITY_ORDER_ADI[rarity]
 				or nil
 			if rarityRank == nil then
 				return nil
 			end
-
 			if rarity == "Infinity" then
-
 				return brainrotIsMetaADI(item) and 1001 or 1000
 			end
-
 			return rarityRank
 		end
-
 		local function worstBrainrotIdADI()
 			local inventory = inventoryDataADI()
 			if not inventory then return nil end
-
 			local worstBucket = math.huge
 			for _, item in pairs(inventory) do
 				local bucket = deletionBucketADI(item)
@@ -13089,33 +14278,25 @@ if IS_MINIGAME_PLACE then
 			if worstBucket == math.huge then
 				return nil
 			end
-
 			local minimumModifiers = math.huge
 			local exactWorst = {}
-
 			for id, item in pairs(inventory) do
 				if deletionBucketADI(item) == worstBucket then
 					local modifiers = modifierCountADI(item)
-
 					if modifiers < minimumModifiers then
 						minimumModifiers = modifiers
 						table.clear(exactWorst)
 					end
-
 					if modifiers == minimumModifiers then
 						exactWorst[#exactWorst + 1] = id
 					end
 				end
 			end
-
 			if #exactWorst == 0 then
 				return nil
 			end
-
-
 			return exactWorst[math.random(1, #exactWorst)]
 		end
-
 		local function unlockInventoryEntryIfNeededADI(id)
 			local inventory = inventoryDataADI()
 			local item = inventory and (
@@ -13126,16 +14307,13 @@ if IS_MINIGAME_PLACE then
 			if not item or item.locked ~= true then
 				return true
 			end
-
 			if not LockInventoryItemADI then
 				return false
 			end
-
 			local fired = pcall(function()
 				LockInventoryItemADI:FireServer(tostring(id), false)
 			end)
 			if not fired then return false end
-
 			local started = os.clock()
 			repeat
 				task.wait(0.05)
@@ -13149,10 +14327,8 @@ if IS_MINIGAME_PLACE then
 					return true
 				end
 			until os.clock() - started >= 0.75
-
 			return false
 		end
-
 		local function deleteNonBrainrotEntryCompletelyADI(id)
 			local state = autoServerHopState and autoServerHopState.Utility
 			if not state
@@ -13162,7 +14338,6 @@ if IS_MINIGAME_PLACE then
 			then
 				return false
 			end
-
 			local inventory = inventoryDataADI()
 			local item = inventory and (
 				inventory[id]
@@ -13173,11 +14348,9 @@ if IS_MINIGAME_PLACE then
 			if not isCapacityNonBrainrotCandidateADI(item, id) then
 				return false
 			end
-
 			local stableType = tostring(inventoryItemTypeADI(item) or "NonBrainrot")
 			local stableName = tostring(item.name or (item.sub and item.sub.name) or "")
 			local stableGuid = tostring(item.guid or item.id or "")
-
 			for confirmation = 1, 3 do
 				state = autoServerHopState and autoServerHopState.Utility
 				if not state
@@ -13186,7 +14359,6 @@ if IS_MINIGAME_PLACE then
 				then
 					return false
 				end
-
 				inventory = inventoryDataADI()
 				item = inventory and (
 					inventory[id]
@@ -13197,7 +14369,6 @@ if IS_MINIGAME_PLACE then
 				if not isCapacityNonBrainrotCandidateADI(item, id) then
 					return false
 				end
-
 				local liveType = tostring(inventoryItemTypeADI(item) or "NonBrainrot")
 				local liveName = tostring(item.name or (item.sub and item.sub.name) or "")
 				local liveGuid = tostring(item.guid or item.id or "")
@@ -13207,14 +14378,11 @@ if IS_MINIGAME_PLACE then
 				then
 					return false
 				end
-
 				if confirmation < 3 then task.wait(0.05) end
 			end
-
 			if not unlockInventoryEntryIfNeededADI(id) then
 				return false
 			end
-
 			inventory = inventoryDataADI()
 			item = inventory and (
 				inventory[id]
@@ -13227,7 +14395,6 @@ if IS_MINIGAME_PLACE then
 			then
 				return false
 			end
-
 			local finalType = tostring(inventoryItemTypeADI(item) or "NonBrainrot")
 			local finalName = tostring(item.name or (item.sub and item.sub.name) or "")
 			local finalGuid = tostring(item.guid or item.id or "")
@@ -13237,18 +14404,15 @@ if IS_MINIGAME_PLACE then
 			then
 				return false
 			end
-
 			if not DeleteInventoryItemADI then
 				return false
 			end
-
 			local ok, success = pcall(function()
 				return DeleteInventoryItemADI:InvokeServer(tostring(id), 1)
 			end)
 			if not ok or success ~= true then
 				return false
 			end
-
 			local ackUntil = os.clock() + 1.00
 			repeat
 				task.wait(0.05)
@@ -13266,10 +14430,8 @@ if IS_MINIGAME_PLACE then
 					return true
 				end
 			until os.clock() >= ackUntil
-
 			return false
 		end
-
 		local function deleteBrainrotEntryCompletelyADI(id)
 			local state = autoServerHopState and autoServerHopState.Utility
 			if not state
@@ -13279,14 +14441,12 @@ if IS_MINIGAME_PLACE then
 			then
 				return false
 			end
-
 			local function capacityClassification(item)
 				if type(item) ~= "table"
 					or inventoryItemTypeADI(item) ~= "Brainrot"
 				then
 					return nil
 				end
-
 				local rarity = getItemRarityADI(item)
 				if type(rarity) ~= "string"
 					or RARITY_ORDER_ADI[rarity] == nil
@@ -13295,14 +14455,12 @@ if IS_MINIGAME_PLACE then
 				then
 					return nil
 				end
-
 				local name = item.name or (item.sub and item.sub.name)
 				return tostring(name or ""),
 					rarity,
 					brainrotIsMetaADI(item),
 					tostring(item.guid or item.id or "")
 			end
-
 			local inventory = inventoryDataADI()
 			local item = inventory and (
 				inventory[id]
@@ -13312,14 +14470,11 @@ if IS_MINIGAME_PLACE then
 			if not item then
 				return false
 			end
-
 			local stableName, stableRarity, stableMeta, stableGuid =
 				capacityClassification(item)
 			if not stableName then
 				return false
 			end
-
-
 			for confirmation = 1, 3 do
 				state = autoServerHopState and autoServerHopState.Utility
 				if not state
@@ -13328,7 +14483,6 @@ if IS_MINIGAME_PLACE then
 				then
 					return false
 				end
-
 				inventory = inventoryDataADI()
 				item = inventory and (
 					inventory[id]
@@ -13338,7 +14492,6 @@ if IS_MINIGAME_PLACE then
 				if not item then
 					return true
 				end
-
 				local name, rarity, isMeta, guid =
 					capacityClassification(item)
 				if name ~= stableName
@@ -13348,18 +14501,13 @@ if IS_MINIGAME_PLACE then
 				then
 					return false
 				end
-
 				if confirmation < 3 then
 					task.wait(0.05)
 				end
 			end
-
 			if not unlockInventoryEntryIfNeededADI(id) then
 				return false
 			end
-
-
-
 			inventory = inventoryDataADI()
 			item = inventory and (
 				inventory[id]
@@ -13369,7 +14517,6 @@ if IS_MINIGAME_PLACE then
 			if not item or deleteBlockedADI() then
 				return false
 			end
-
 			local finalName, finalRarity, finalMeta, finalGuid =
 				capacityClassification(item)
 			if finalName ~= stableName
@@ -13379,18 +14526,15 @@ if IS_MINIGAME_PLACE then
 			then
 				return false
 			end
-
 			if not DeleteInventoryItemADI then
 				return false
 			end
-
 			local ok, success = pcall(function()
 				return DeleteInventoryItemADI:InvokeServer(tostring(id), 1)
 			end)
 			if not ok or success ~= true then
 				return false
 			end
-
 			local ackUntil = os.clock() + 1.00
 			repeat
 				task.wait(0.05)
@@ -13408,13 +14552,10 @@ if IS_MINIGAME_PLACE then
 					return true
 				end
 			until os.clock() >= ackUntil
-
 			return false
 		end
-
 		while screenGui.Parent do
-			task.wait(0.10)
-
+			task.wait(0.25)
 			local state = autoServerHopState and autoServerHopState.Utility
 			if deleteBusyADI
 				or not state
@@ -13423,7 +14564,6 @@ if IS_MINIGAME_PLACE then
 			then
 				continue
 			end
-
 			local threshold = math.clamp(
 				math.floor(
 					tonumber(state.DeleteInventoryThreshold) or 95
@@ -13431,29 +14571,21 @@ if IS_MINIGAME_PLACE then
 				1,
 				100
 			)
-
-
-
 			if effectiveInventoryCountADI() < threshold then
 				continue
 			end
-
 			local deleteNonFirst = state.DeleteNonBrainrotsFirst == true
 			local deleteBrainrotFirst = state.DeleteWorstBrainrotsFirst == true
-
 			if not deleteNonFirst and not deleteBrainrotFirst then
 				continue
 			end
-
 			local brainrotId = worstBrainrotIdADI()
 			local junkIds = nonBrainrotIdsADI()
 			local junkId = #junkIds > 0
 				and junkIds[math.random(1, #junkIds)]
 				or nil
-
 			local selectedId
 			local selectedKind
-
 			if deleteNonFirst then
 				if junkId ~= nil then
 					selectedId = junkId
@@ -13471,11 +14603,9 @@ if IS_MINIGAME_PLACE then
 					selectedKind = "NonBrainrot"
 				end
 			end
-
 			if selectedId == nil then
 				continue
 			end
-
 			deleteBusyADI = true
 			if selectedKind == "NonBrainrot" then
 				pcall(deleteNonBrainrotEntryCompletelyADI, selectedId)
@@ -13486,13 +14616,6 @@ if IS_MINIGAME_PLACE then
 		end
 	end)
 end
-
-
-
-
-
-
-
 if IS_MINIGAME_PLACE then
     task.spawn(function()
         while screenGui.Parent do
@@ -13501,22 +14624,31 @@ if IS_MINIGAME_PLACE then
             if utility
                 and utility.PauseScript ~= true
                 and utility.PauseMinigameFeatures ~= true
-                and utility.AutoOfferMaster == true
+                and (
+                    utility.AutoOfferMaster == true
+                    or utility.AutoOfferTokensEnabled == true
+                    or utility.AutoOfferBasedOnTradeChat == true
+                )
             then
-                for _, config in pairs(autoOfferState or {}) do
-                    if type(config) == "table" and config.Enabled == true then
-                        anyEnabled = true
-                        break
+                if utility.AutoOfferMaster == true then
+                    for _, config in pairs(autoOfferState or {}) do
+                        if type(config) == "table" and config.Enabled == true then
+                            anyEnabled = true
+                            break
+                        end
                     end
                 end
-                if utility.AutoOfferTokensEnabled == true then anyEnabled = true end
+                if utility.AutoOfferTokensEnabled == true
+                    or utility.AutoOfferBasedOnTradeChat == true
+                then
+                    anyEnabled = true
+                end
             end
             if anyEnabled then break end
             task.wait(0.10)
         end
         if not screenGui.Parent then return end
-        local RSAO = game:GetService("ReplicatedStorage")
-
+        local RSAO = ReplicatedStorage
         local function requireAO(moduleScript)
             while screenGui.Parent do
                 local ok, result = pcall(require, moduleScript)
@@ -13524,7 +14656,6 @@ if IS_MINIGAME_PLACE then
                 task.wait(0.25)
             end
         end
-
         local clientModules = RSAO:WaitForChild("Client"):WaitForChild("Modules")
         local shared = RSAO:WaitForChild("Shared")
         local ReplicatorAO = requireAO(clientModules:WaitForChild("ReplicatorClient"))
@@ -13534,15 +14665,14 @@ if IS_MINIGAME_PLACE then
         local ItemIsTradeableAO = requireAO(shared:WaitForChild("utils"):WaitForChild("ItemIsTradeable"))
         local EconomyMathAO = requireAO(shared:WaitForChild("utils"):WaitForChild("EconomyMath"))
         local BrainrotsConfigAO = requireAO(shared:WaitForChild("Config"):WaitForChild("Brainrots"))
-
         if not (ReplicatorAO and RemotesAO and SortItemsAO and GetItemTypeAO
             and ItemIsTradeableAO and EconomyMathAO and BrainrotsConfigAO)
         then
             return
         end
-
         local SetSlotAO = RemotesAO.NegotiationSetSlot
         local OfferCurrencyAO = RemotesAO.NegotiationOfferCurrency
+        local LocalPlayerAO = Players.LocalPlayer
         local playerDataAO
         local negotiationAO
         local lastAppliedSignature
@@ -13568,18 +14698,11 @@ if IS_MINIGAME_PLACE then
                 end
             end
         end
-
         local function refreshAO()
-            pcall(function() playerDataAO = ReplicatorAO.get("PlayerData") or playerDataAO end)
-            pcall(function() negotiationAO = ReplicatorAO.get("ActiveNegotiation") or negotiationAO end)
+            playerDataAO = safeRepGet(ReplicatorAO, "PlayerData") or playerDataAO
+            negotiationAO = safeRepGet(ReplicatorAO, "ActiveNegotiation") or negotiationAO
         end
-
-        local function tryIndexAO(root, path)
-            if not root then return nil end
-            local ok, value = pcall(function() return root:TryIndex(path) end)
-            return ok and value or nil
-        end
-
+        local tryIndexAO = safeTryIndex
         local function hasMetaMarkerAO(item)
             if type(item) ~= "table" then return false end
             local explicit = item.rarity or item.Rarity
@@ -13595,15 +14718,8 @@ if IS_MINIGAME_PLACE then
             return type(name) == "string"
                 and string.find(string.lower(name), "%f[%a]meta%f[%A]") ~= nil
         end
-
         local function rarityAO(item)
             if type(item) ~= "table" then return nil end
-
-
-
-
-
-
             local name = item.name or (item.sub and item.sub.name)
             local configured = type(name) == "string"
                 and configuredRarityAO[name]
@@ -13614,7 +14730,6 @@ if IS_MINIGAME_PLACE then
                 end
                 return configured
             end
-
             local explicit = item.rarity or item.Rarity
                 or (item.sub and (item.sub.rarity or item.sub.Rarity))
             if type(explicit) == "string" and autoOfferState[explicit] ~= nil then
@@ -13623,12 +14738,10 @@ if IS_MINIGAME_PLACE then
                 end
                 return explicit
             end
-
-            local itemType
-            pcall(function() itemType = GetItemTypeAO(item) end)
-            if itemType ~= "Brainrot" then return nil end
-            local value
-            pcall(function() value = EconomyMathAO.GetBrainrotRarity(item.name) end)
+            local okType, itemType = pcall(GetItemTypeAO, item)
+            if not okType or itemType ~= "Brainrot" then return nil end
+            local okRarity, value = pcall(EconomyMathAO.GetBrainrotRarity, item.name)
+            if not okRarity then value = nil end
             if type(value) ~= "string" or autoOfferState[value] == nil then
                 return nil
             end
@@ -13637,11 +14750,9 @@ if IS_MINIGAME_PLACE then
             end
             return value
         end
-
         local function opponentSourcesAO()
             local slots = tryIndexAO(negotiationAO, {"player2", "slots"})
             if type(slots) ~= "table" then slots = {} end
-
             local sourceCounts = {}
             local signature = {}
             for slotIndex = 1, 6 do
@@ -13650,7 +14761,6 @@ if IS_MINIGAME_PLACE then
                 local id = type(value) == "table" and value.id or value
                 local item = type(value) == "table" and value.item or nil
                 local cacheKey = tostring(slotIndex)
-
                 if type(item) == "table" and rarityAO(item) then
                     opponentItemCache[cacheKey] = {id = tostring(id or ""), item = item}
                 elseif id ~= nil then
@@ -13659,77 +14769,248 @@ if IS_MINIGAME_PLACE then
                 else
                     opponentItemCache[cacheKey] = nil
                 end
-
                 local rarity = rarityAO(item)
                 if rarity then
                     sourceCounts[rarity] = (sourceCounts[rarity] or 0) + 1
                 end
                 signature[#signature + 1] = tostring(id or "") .. ":" .. tostring(rarity or "")
             end
-
             local tokens = math.max(0, math.floor(tonumber(
                 tryIndexAO(negotiationAO, {"player2", "currency"})
             ) or 0))
             signature[#signature + 1] = "T=" .. tostring(tokens)
             return sourceCounts, tokens, table.concat(signature, "|")
         end
-
         local function inventoryAO()
             local inv = tryIndexAO(playerDataAO, {"Inventory"})
             return type(inv) == "table" and inv or nil
         end
-
         local function tokenBalanceAO()
             return math.max(0, math.floor(tonumber(tryIndexAO(playerDataAO, {"TradeTokens"})) or 0))
         end
-
-        local function findRarityItemAO(targetRarity, usedIds)
+        local function validOfferItemIdAO(value)
+            if value == nil then return nil end
+            local wantedId = tostring(value)
             local inv = inventoryAO()
-            if not inv then return nil end
-            local ids = {}
-            local ok, sorted = pcall(SortItemsAO, inv)
-            if ok and type(sorted) == "table" then
-                ids = sorted
+            local item = inv and (
+                inv[wantedId]
+                or (tonumber(wantedId) and inv[tonumber(wantedId)] or nil)
+            ) or nil
+            if type(item) ~= "table" or item.locked == true then return nil end
+            local tradeable = false
+            local itemRarity = rarityAO(item)
+            if itemRarity == "Eternal" then return nil end
+            if itemRarity == "Paradox" or itemRarity == "Meta" then
+                tradeable = true
             else
+                local okTradeable, result = pcall(ItemIsTradeableAO, item); tradeable = okTradeable and result == true
+            end
+            return tradeable and wantedId or nil
+        end
+        local function normalizeOfferChatAO(value)
+            value = string.lower(tostring(value or ""))
+            value = string.gsub(value, "[%p%c]+", " ")
+            value = string.gsub(value, "%s+", " ")
+            value = string.gsub(value, "^%s+", "")
+            value = string.gsub(value, "%s+$", "")
+            return value
+        end
+        local function offerChatDistanceAO(a, b)
+            local aLen, bLen = #a, #b
+            if aLen == 0 then return bLen end
+            if bLen == 0 then return aLen end
+            local previous = {}
+            for j = 0, bLen do previous[j] = j end
+            for i = 1, aLen do
+                local current = {[0] = i}
+                local aByte = string.byte(a, i)
+                for j = 1, bLen do
+                    local cost = aByte == string.byte(b, j) and 0 or 1
+                    current[j] = math.min(
+                        current[j - 1] + 1,
+                        previous[j] + 1,
+                        previous[j - 1] + cost
+                    )
+                end
+                previous = current
+            end
+            return previous[bLen]
+        end
+        local function similarOfferChatAO(message, wanted)
+            local haystack = normalizeOfferChatAO(message)
+            local needleText = normalizeOfferChatAO(wanted)
+            if haystack == "" or needleText == "" then return false end
+            if string.find(haystack, needleText, 1, true)
+                or string.find(needleText, haystack, 1, true)
+            then
+                return true
+            end
+            local longest = math.max(#haystack, #needleText)
+            if longest > 3 then
+                local similarity = 1 - (offerChatDistanceAO(haystack, needleText) / longest)
+                if similarity >= 0.78 then return true end
+            end
+            local wantedWords = {}
+            local wantedCount = 0
+            for word in string.gmatch(needleText, "%S+") do
+                if not wantedWords[word] then
+                    wantedWords[word] = true
+                    wantedCount += 1
+                end
+            end
+            if wantedCount == 0 then return false end
+            local matched, seen = 0, {}
+            for word in string.gmatch(haystack, "%S+") do
+                if wantedWords[word] and not seen[word] then
+                    seen[word] = true
+                    matched += 1
+                end
+            end
+            return matched / wantedCount >= 0.75
+        end
+        local function matchingTradeChatOfferAO()
+            local utility = autoServerHopState and autoServerHopState.Utility
+            if not utility or utility.AutoOfferBasedOnTradeChat ~= true then return nil end
+            local rules = utility.AutoOfferTradeChatOffers
+            if type(rules) ~= "table" then return nil end
+            local messages = tryIndexAO(negotiationAO, {"chatChannel", "messages"})
+            if type(messages) ~= "table" then return nil end
+            for messageIndex = #messages, 1, -1 do
+                local messageData = messages[messageIndex]
+                if type(messageData) == "table" and messageData.from ~= LocalPlayerAO then
+                    local incoming = tostring(messageData.message or "")
+                    for ruleIndex, rule in ipairs(rules) do
+                        if type(rule) == "table" then
+                            local lookFor = tostring(rule.LookFor or "")
+                            if lookFor ~= "" and similarOfferChatAO(incoming, lookFor) then
+                                return rule, ruleIndex, incoming
+                            end
+                        end
+                    end
+                end
+            end
+            return nil
+        end
+        local function itemMutationAO(item)
+            if type(item) ~= "table" then return nil end
+            local value = item.mutation or item.Mutation
+                or (item.sub and (item.sub.mutation or item.sub.Mutation))
+            return type(value) == "string" and value or nil
+        end
+        local function itemTraitsAO(item)
+            if type(item) ~= "table" then return {} end
+            local value = item.traits or item.Traits
+                or (item.sub and (item.sub.traits or item.sub.Traits))
+            local set = {}
+            if type(value) == "table" then
+                for key, enabled in pairs(value) do
+                    if type(key) == "number" then
+                        if enabled ~= nil and enabled ~= false then set[tostring(enabled)] = true end
+                    elseif enabled ~= nil and enabled ~= false then set[tostring(key)] = true end
+                end
+            elseif type(value) == "string" then
+                for trait in string.gmatch(value, "[^,|;]+") do
+                    trait = string.gsub(trait, "^%s*(.-)%s*$", "%1")
+                    if trait ~= "" then set[trait] = true end
+                end
+            end
+            return set
+        end
+        local function passesFallbackFiltersAO(item)
+            local utility = autoServerHopState.Utility
+            if utility.FallbackAvoidMutationsEnabled == true then
+                local selected = utility.FallbackAvoidMutations
+                local mutation = itemMutationAO(item)
+                if type(selected) == "table" and mutation and selected[mutation] == true then return false end
+            end
+            if utility.FallbackAvoidTraitsEnabled == true then
+                local selected = utility.FallbackAvoidTraits
+                if type(selected) == "table" then
+                    for trait in pairs(itemTraitsAO(item)) do
+                        if selected[trait] == true then return false end
+                    end
+                end
+            end
+            return true
+        end
+        local sortedInventoryRefAO, sortedInventoryIdsAO, sortedInventoryAtAO
+        local function sortedIdsAO(inv)
+            local now = os.clock()
+            if inv == sortedInventoryRefAO and sortedInventoryIdsAO and now - (sortedInventoryAtAO or 0) < 0.15 then
+                return sortedInventoryIdsAO
+            end
+            local ok, ids = pcall(SortItemsAO, inv)
+            if not ok or type(ids) ~= "table" then
+                ids = {}
                 for id in pairs(inv) do ids[#ids + 1] = id end
             end
-            for _, id in ipairs(ids) do
+            sortedInventoryRefAO, sortedInventoryIdsAO, sortedInventoryAtAO = inv, ids, now
+            return ids
+        end
+        -- Simple Autofarm's Eternal fallback needs the six strongest outgoing
+        -- brainrots regardless of rarity. Eternals are deliberately excluded.
+        local function highestNonEternalOfferIdsAO(limit)
+            limit = math.clamp(math.floor(tonumber(limit) or 6), 1, 6)
+            local inv = inventoryAO()
+            if not inv then return nil end
+            local byRarity = {}
+            for _, rarity in ipairs(OUTGOING_BRAINROT_RARITY_OPTIONS) do
+                byRarity[rarity] = {}
+            end
+            for _, id in ipairs(sortedIdsAO(inv)) do
+                local sid = tostring(id)
+                local item = inv[id] or inv[sid]
+                local rarity = rarityAO(item)
+                if rarity and rarity ~= "Eternal" and byRarity[rarity] and validOfferItemIdAO(sid) then
+                    byRarity[rarity][#byRarity[rarity] + 1] = sid
+                end
+            end
+            local result = {}
+            for rarityIndex = #OUTGOING_BRAINROT_RARITY_OPTIONS, 1, -1 do
+                local ids = byRarity[OUTGOING_BRAINROT_RARITY_OPTIONS[rarityIndex]]
+                for _, id in ipairs(ids) do
+                    result[#result + 1] = id
+                    if #result >= limit then return result end
+                end
+            end
+            return nil
+        end
+        local function findRarityItemAO(targetRarity, usedIds, forFallback)
+            if targetRarity == "Eternal" then return nil end
+            local inv = inventoryAO()
+            if not inv then return nil end
+            for _, id in ipairs(sortedIdsAO(inv)) do
                 local item = inv[id] or inv[tostring(id)]
                 local sid = tostring(id)
                 if (not usedIds or not usedIds[sid])
                     and type(item) == "table"
                     and not item.locked
                     and rarityAO(item) == targetRarity
+                    and (not forFallback or passesFallbackFiltersAO(item))
                 then
-
-
-
                     local tradeable = targetRarity == "Paradox"
-                        or targetRarity == "Eternal"
                         or targetRarity == "Meta"
                     if not tradeable then
-                        pcall(function() tradeable = ItemIsTradeableAO(item) == true end)
+                        local okTradeable, result = pcall(ItemIsTradeableAO, item); tradeable = okTradeable and result == true
                     end
                     if tradeable then return sid end
                 end
             end
             return nil
         end
-
         local function availableRarityCountsAO()
             local counts = {}
             local inv = inventoryAO()
             if not inv then return counts end
-
             for _, item in pairs(inv) do
                 if type(item) == "table" and not item.locked then
                     local itemRarity = rarityAO(item)
                     if itemRarity then
+                        if itemRarity == "Eternal" then continue end
                         local tradeable = itemRarity == "Paradox"
-                            or itemRarity == "Eternal"
                             or itemRarity == "Meta"
                         if not tradeable then
-                            pcall(function() tradeable = ItemIsTradeableAO(item) == true end)
+                            local okTradeable, result = pcall(ItemIsTradeableAO, item); tradeable = okTradeable and result == true
                         end
                         if tradeable then
                             counts[itemRarity] = (counts[itemRarity] or 0) + 1
@@ -13739,7 +15020,6 @@ if IS_MINIGAME_PLACE then
             end
             return counts
         end
-
         local function invokeAO(remote, ...)
             if not remote then return false end
             local args = table.pack(...)
@@ -13747,19 +15027,16 @@ if IS_MINIGAME_PLACE then
                 return remote:InvokeServer(table.unpack(args, 1, args.n))
             end)
         end
-
         local function slotIdAO(slotIndex)
             local slots = tryIndexAO(negotiationAO, {"player1", "slots"}) or {}
             local value = slots[tostring(slotIndex)]
             if value == nil then value = slots[slotIndex] end
             return type(value) == "table" and value.id or value
         end
-
         local function sameIdAO(a, b)
             if a == b then return true end
             return a ~= nil and b ~= nil and tostring(a) == tostring(b)
         end
-
         local function setCurrencyAO(expectedGuid, amount)
             amount = math.max(0, math.floor(tonumber(amount) or 0))
             for _ = 1, 3 do
@@ -13804,7 +15081,6 @@ if IS_MINIGAME_PLACE then
             end
             return false
         end
-
         local function setDesiredItemsAO(expectedGuid, desiredIds)
             for attempt = 1, 3 do
                 if autoServerHopState.Utility.PauseScript == true
@@ -13813,7 +15089,6 @@ if IS_MINIGAME_PLACE then
                 then
                     return false
                 end
-
                 for slotIndex = 1, 6 do
                     if tryIndexAO(negotiationAO, {"guid"}) ~= expectedGuid then
                         return false
@@ -13831,7 +15106,6 @@ if IS_MINIGAME_PLACE then
                         ))
                     end
                 end
-
                 for slotIndex = 1, 6 do
                     if tryIndexAO(negotiationAO, {"guid"}) ~= expectedGuid then
                         return false
@@ -13849,7 +15123,6 @@ if IS_MINIGAME_PLACE then
                         ))
                     end
                 end
-
                 local verified = true
                 for slotIndex = 1, 6 do
                     if not sameIdAO(slotIdAO(slotIndex), desiredIds[slotIndex]) then
@@ -13862,12 +15135,15 @@ if IS_MINIGAME_PLACE then
             end
             return false
         end
-
         while screenGui.Parent do
             local utilityAO = autoServerHopState.Utility
             if utilityAO.PauseScript == true
                 or utilityAO.PauseMinigameFeatures == true
-                or utilityAO.AutoOfferMaster ~= true
+                or (
+                    utilityAO.AutoOfferMaster ~= true
+                    and utilityAO.AutoOfferTokensEnabled ~= true
+                    and utilityAO.AutoOfferBasedOnTradeChat ~= true
+                )
             then
                 lastAppliedSignature = nil
                 pendingSignature = nil
@@ -13876,7 +15152,6 @@ if IS_MINIGAME_PLACE then
                 task.wait(0.08)
                 continue
             end
-
             refreshAO()
             local guid = tryIndexAO(negotiationAO, {"guid"})
             if not guid then
@@ -13891,41 +15166,36 @@ if IS_MINIGAME_PLACE then
                 task.wait(0.10)
                 continue
             end
-
             local autoOfferAlreadyOwnsAO =
                 tostring(utilityAO._AutoOfferReactiveGuid or "") == tostring(guid)
             local sourceCounts, opponentTokens, offerSignature = opponentSourcesAO()
             local aggregateTargets = {}
             local aggregateFallbackTargets = {}
             local aggregateFallbackRequests = {}
+            local specificFallbackSourceRequests = {}
             local aggregateTokens = 0
             local aggregateSignature = {}
             local hasEnabledSource = false
             local tokenRuleAuthoritative = false
             local fallbackRuleAuthoritative = false
             local openingTakeoverAO = false
-
+            local forceAllTokensAO = false
+            local specificPrimaryIdsAO = {}
+            local specificPrimarySeenAO = {}
             local fallbackEnabled = utilityAO.FallbackOffers == true
                 and (
                     utilityAO.FallbackToTokens == true
                     or utilityAO.FallbackToNextLowerRarityBrainrot == true
+                    or utilityAO.FallbackToSpecificBrainrotItem == true
                 )
-
-
-
-
-
-
             local availableCounts = availableRarityCountsAO()
             local plannedInventoryUse = {}
             local primaryRequests = {}
             local sourceOccurrences = {}
-
             local function nextLowerRarityAO(rarity)
                 local index = table.find(BRAINROT_RARITY_OPTIONS, rarity)
                 return index and index > 1 and BRAINROT_RARITY_OPTIONS[index - 1] or nil
             end
-
             local function availableForRarityAO(rarity)
                 return math.max(
                     0,
@@ -13933,7 +15203,6 @@ if IS_MINIGAME_PLACE then
                         - math.floor(tonumber(plannedInventoryUse[rarity]) or 0)
                 )
             end
-
             local function reservePrimaryAO(rarity, wanted, slotBudget)
                 wanted = math.max(0, math.floor(tonumber(wanted) or 0))
                 slotBudget = math.max(0, math.floor(tonumber(slotBudget) or 0))
@@ -13946,7 +15215,6 @@ if IS_MINIGAME_PLACE then
                 end
                 return reserved
             end
-
             local function reserveFallbackAO(rarity, wanted, slotBudget)
                 wanted = math.max(0, math.floor(tonumber(wanted) or 0))
                 slotBudget = math.max(0, math.floor(tonumber(slotBudget) or 0))
@@ -13960,7 +15228,6 @@ if IS_MINIGAME_PLACE then
                 end
                 return reserved
             end
-
             local function markOccurrenceFallbackAO(occurrence, targetRarity)
                 if not occurrence then return end
                 occurrence.NeedsFallback = true
@@ -13968,88 +15235,88 @@ if IS_MINIGAME_PLACE then
                 occurrence.MissingTargets[targetRarity] = true
                 fallbackRuleAuthoritative = true
             end
-
-
-
-
+            local function addSpecificPrimaryAO(value)
+                local valid = validOfferItemIdAO(value)
+                if not valid or specificPrimarySeenAO[valid] == true then return false end
+                if #specificPrimaryIdsAO >= 6 then return false end
+                specificPrimarySeenAO[valid] = true
+                specificPrimaryIdsAO[#specificPrimaryIdsAO + 1] = valid
+                return true
+            end
             for _, sourceRarity in ipairs(BRAINROT_RARITY_OPTIONS) do
-                local sourceCount = math.max(
-                    0,
-                    math.floor(tonumber(sourceCounts[sourceRarity]) or 0)
-                )
+                local sourceCount = math.max(0, math.floor(tonumber(sourceCounts[sourceRarity]) or 0))
                 local config = autoOfferState[sourceRarity]
-                if sourceCount > 0 and type(config) == "table" and config.Enabled == true then
+                if utilityAO.AutoOfferMaster == true
+                    and sourceCount > 0
+                    and type(config) == "table"
+                    and config.Enabled == true
+                then
                     hasEnabledSource = true
-                    local perItemTokens = math.clamp(
-                        math.floor(tonumber(config.Tokens) or 0), 0, 100000
-                    )
-                    local targets = type(config.Targets) == "table" and config.Targets or {}
-                    local sourceHasConfiguredResponseAO = perItemTokens > 0
-                    if not sourceHasConfiguredResponseAO then
-                        for _, targetRarityAO in ipairs(BRAINROT_RARITY_OPTIONS) do
-                            if targets[targetRarityAO] == true then
+                    config.OfferModeRarity = config.OfferModeRarity ~= false
+                    config.OfferModeSpecific = config.OfferModeSpecific == true
+                    config.Targets = type(config.Targets) == "table" and config.Targets or {}
+                    config.Amounts = type(config.Amounts) == "table" and config.Amounts or {}
+                    config.SpecificTargets = type(config.SpecificTargets) == "table" and config.SpecificTargets or {}
+                    local sourceHasConfiguredResponseAO = false
+                    if config.OfferModeRarity == true then
+                        if config.OfferAllTokens == true then forceAllTokensAO = true end
+                        local perItemTokens = math.clamp(math.floor(tonumber(config.Tokens) or 0), 0, 1000000)
+                        local targets = config.Targets
+                        sourceHasConfiguredResponseAO = perItemTokens > 0
+                        if not sourceHasConfiguredResponseAO then
+                            for _, targetRarityAO in ipairs(BRAINROT_RARITY_OPTIONS) do
+                                if targets[targetRarityAO] == true then sourceHasConfiguredResponseAO = true break end
+                            end
+                        end
+                        for sourceIndex = 1, sourceCount do
+                            aggregateTokens += perItemTokens
+                            local occurrence = {
+                                SourceRarity = sourceRarity,
+                                SourceIndex = sourceIndex,
+                                NeedsFallback = false,
+                                MissingTargets = {},
+                            }
+                            sourceOccurrences[#sourceOccurrences + 1] = occurrence
+                            for _, targetRarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+                                if targets[targetRarity] == true then
+                                    primaryRequests[#primaryRequests + 1] = {
+                                        Rarity = targetRarity,
+                                        Amount = math.clamp(math.floor(tonumber(config.Amounts[targetRarity]) or 1), 1, 6),
+                                        Occurrence = occurrence,
+                                    }
+                                end
+                            end
+                        end
+                    end
+                    if config.OfferModeSpecific == true then
+                        for id, selected in pairs(config.SpecificTargets) do
+                            if selected == true and addSpecificPrimaryAO(id) then
                                 sourceHasConfiguredResponseAO = true
-                                break
                             end
                         end
                     end
-                    if sourceHasConfiguredResponseAO then
-                        openingTakeoverAO = true
-                    end
-
-                    for sourceIndex = 1, sourceCount do
-                        aggregateTokens += perItemTokens
-                        local occurrence = {
-                            SourceRarity = sourceRarity,
-                            SourceIndex = sourceIndex,
-                            NeedsFallback = false,
-                            MissingTargets = {},
-                        }
-                        sourceOccurrences[#sourceOccurrences + 1] = occurrence
-
-                        for _, targetRarity in ipairs(BRAINROT_RARITY_OPTIONS) do
-                            if targets[targetRarity] then
-                                local perItemAmount = math.clamp(
-                                    math.floor(tonumber(
-                                        config.Amounts and config.Amounts[targetRarity]
-                                    ) or 1),
-                                    1,
-                                    6
-                                )
-                                primaryRequests[#primaryRequests + 1] = {
-                                    Rarity = targetRarity,
-                                    Amount = perItemAmount,
-                                    Occurrence = occurrence,
-                                }
-                            end
-                        end
-                    end
-
+                    if sourceHasConfiguredResponseAO then openingTakeoverAO = true end
                     aggregateSignature[#aggregateSignature + 1] =
                         sourceRarity .. "x" .. tostring(sourceCount)
+                        .. ":R=" .. tostring(config.OfferModeRarity == true)
+                        .. ":S=" .. tostring(config.OfferModeSpecific == true)
                 end
             end
-
-
-
-
             if utilityAO.AutoOfferTokensEnabled == true then
                 local matchTokens = utilityAO.AutoOfferMatchTokensWithTokens == true
                 local targetRarity = utilityAO.AutoOfferTokenRarity
                 local validBrainrotRule = utilityAO.AutoOfferMatchTokensWithBrainrots == true
                     and type(targetRarity) == "string"
                     and table.find(BRAINROT_RARITY_OPTIONS, targetRarity) ~= nil
-
                 if matchTokens or validBrainrotRule then
                     hasEnabledSource = true
                     aggregateSignature[#aggregateSignature + 1] =
                         "Tokens=" .. tostring(opponentTokens)
-
                     if matchTokens then
                         local lowestTokensToMatch = math.clamp(
                             math.floor(tonumber(utilityAO.AutoOfferLowestTokensToMatch) or 1),
                             1,
-                            100000
+                            1000000
                         )
                         if opponentTokens >= lowestTokensToMatch then
                             openingTakeoverAO = true
@@ -14061,12 +15328,11 @@ if IS_MINIGAME_PLACE then
                             aggregateTokens += math.max(0, opponentTokens) * tokenAddRatio
                         end
                     end
-
                     if validBrainrotRule then
                         local tokenUnit = math.clamp(
                             math.floor(tonumber(utilityAO.AutoOfferTokenAmount) or 0),
                             0,
-                            100000
+                            1000000
                         )
                         if tokenUnit > 0 then
                             local brainrotUnits = math.floor(math.max(0, opponentTokens) / tokenUnit)
@@ -14082,11 +15348,108 @@ if IS_MINIGAME_PLACE then
                     end
                 end
             end
-
-
-
-
-
+            local tradeChatRuleAO, tradeChatRuleIndexAO = matchingTradeChatOfferAO()
+            if tradeChatRuleAO then
+                table.clear(aggregateTargets)
+                table.clear(aggregateFallbackTargets)
+                table.clear(aggregateFallbackRequests)
+                table.clear(primaryRequests)
+                table.clear(sourceOccurrences)
+                table.clear(plannedInventoryUse)
+                table.clear(specificFallbackSourceRequests)
+                fallbackRuleAuthoritative = false
+                tokenRuleAuthoritative = true
+                hasEnabledSource = true
+                openingTakeoverAO = true
+                table.clear(specificPrimaryIdsAO)
+                table.clear(specificPrimarySeenAO)
+                local chatSpecificAO = type(tradeChatRuleAO.SpecificItems) == "table" and tradeChatRuleAO.SpecificItems or {}
+                if tradeChatRuleAO.BrainrotId ~= nil then
+                    chatSpecificAO[tradeChatRuleAO.BrainrotId] = true
+                end
+                for id, selected in pairs(chatSpecificAO) do
+                    if selected == true then addSpecificPrimaryAO(id) end
+                end
+                forceAllTokensAO = tradeChatRuleAO.OfferAllTokens == true
+                aggregateTokens = math.clamp(
+                    math.floor(tonumber(tradeChatRuleAO.TokenAmount) or 0),
+                    0,
+                    1000000
+                )
+                local chatTargetsAO = type(tradeChatRuleAO.Targets) == "table"
+                    and tradeChatRuleAO.Targets or {}
+                local chatAmountsAO = type(tradeChatRuleAO.Amounts) == "table"
+                    and tradeChatRuleAO.Amounts or {}
+                local chatRequestedSlotsAO = #specificPrimaryIdsAO
+                local chatTargetSignatureAO = {}
+                for _, targetRarityAO in ipairs(BRAINROT_RARITY_OPTIONS) do
+                    if chatTargetsAO[targetRarityAO] == true and chatRequestedSlotsAO < 6 then
+                        local wantedAO = math.clamp(
+                            math.floor(tonumber(chatAmountsAO[targetRarityAO]) or 1),
+                            1,
+                            6 - chatRequestedSlotsAO
+                        )
+                        primaryRequests[#primaryRequests + 1] = {
+                            Rarity = targetRarityAO,
+                            Amount = wantedAO,
+                            Occurrence = nil,
+                        }
+                        chatRequestedSlotsAO += wantedAO
+                        chatTargetSignatureAO[#chatTargetSignatureAO + 1] =
+                            targetRarityAO .. "=" .. tostring(wantedAO)
+                    end
+                end
+                aggregateSignature = {
+                    "CHAT#" .. tostring(tradeChatRuleIndexAO or 1),
+                    "LOOK=" .. normalizeOfferChatAO(tradeChatRuleAO.LookFor),
+                    "RAR=" .. table.concat(chatTargetSignatureAO, ";"),
+                    "ITEMS=" .. table.concat(specificPrimaryIdsAO, ","),
+                }
+                fallbackEnabled = false
+            end
+            -- Simple Autofarm treats Eternal as the terminal receive-only tier.
+            -- Preferred price: exactly 6 Paradox + 250,000 tokens. If that exact
+            -- package is unavailable, offer the six strongest non-Eternal brainrots
+            -- in inventory plus the entire current token balance. Never send fewer
+            -- than six brainrots for this fallback, and never offer an owned Eternal.
+            local eternalOpponentAO = math.max(0, math.floor(tonumber(sourceCounts.Eternal) or 0)) > 0
+            if eternalOpponentAO and utilityAO.SimpleAutofarmEnabled == true then
+                table.clear(aggregateTargets)
+                table.clear(aggregateFallbackTargets)
+                table.clear(aggregateFallbackRequests)
+                table.clear(primaryRequests)
+                table.clear(sourceOccurrences)
+                table.clear(plannedInventoryUse)
+                table.clear(specificFallbackSourceRequests)
+                table.clear(specificPrimaryIdsAO)
+                table.clear(specificPrimarySeenAO)
+                fallbackEnabled = false
+                fallbackRuleAuthoritative = false
+                tokenRuleAuthoritative = true
+                forceAllTokensAO = false
+                hasEnabledSource = true
+                openingTakeoverAO = true
+                if availableForRarityAO("Paradox") >= 6 and tokenBalanceAO() >= 250000 then
+                    aggregateSignature = {"ETERNAL=6xParadox+250000"}
+                    primaryRequests[1] = {Rarity = "Paradox", Amount = 6, Occurrence = nil}
+                    aggregateTokens = 250000
+                else
+                    local strongestSixAO = highestNonEternalOfferIdsAO(6)
+                    if strongestSixAO then
+                        aggregateSignature = {"ETERNAL=6xHighest+AllTokens"}
+                        for _, id in ipairs(strongestSixAO) do addSpecificPrimaryAO(id) end
+                        aggregateTokens = tokenBalanceAO()
+                    else
+                        aggregateSignature = {"ETERNAL=INSUFFICIENT_BRAINROTS"}
+                        aggregateTokens = 0
+                    end
+                end
+            end
+            if forceAllTokensAO then
+                aggregateTokens = tokenBalanceAO()
+                tokenRuleAuthoritative = true
+                openingTakeoverAO = true
+            end
             if openingTakeoverAO then
                 utilityAO._AutoOfferReactiveGuid = tostring(guid)
             end
@@ -14098,19 +15461,9 @@ if IS_MINIGAME_PLACE then
                 )
                 and autoOfferOwnsAO
             then
-
-
-
-
-
                 tokenRuleAuthoritative = true
             end
-
-
-
-
-
-            local selectionSlotsLeft = 6
+            local selectionSlotsLeft = math.max(0, 6 - #specificPrimaryIdsAO)
             for rarityIndex = #BRAINROT_RARITY_OPTIONS, 1, -1 do
                 local rarity = BRAINROT_RARITY_OPTIONS[rarityIndex]
                 for _, request in ipairs(primaryRequests) do
@@ -14121,7 +15474,6 @@ if IS_MINIGAME_PLACE then
                         if overflow > 0 then
                             markOccurrenceFallbackAO(request.Occurrence, rarity)
                         end
-
                         if selected > 0 then
                             local reserved = reservePrimaryAO(rarity, selected, selectionSlotsLeft)
                             if reserved < selected then
@@ -14132,28 +15484,87 @@ if IS_MINIGAME_PLACE then
                     end
                 end
             end
-
-
-
-
             if fallbackEnabled then
+                local simpleFallbackPlannedAO = {}
+                local simpleFallbackSlotsPlannedAO = 0
+                local simpleFallbackSlotBudgetAO = math.max(0, 6 - #specificPrimaryIdsAO)
+                for _, amount in pairs(aggregateTargets) do
+                    simpleFallbackSlotBudgetAO -= math.max(0, math.floor(tonumber(amount) or 0))
+                end
+                simpleFallbackSlotBudgetAO = math.max(0, simpleFallbackSlotBudgetAO)
                 for _, occurrence in ipairs(sourceOccurrences) do
                     if occurrence.NeedsFallback == true then
-                        if utilityAO.FallbackToTokens == true then
-                            aggregateTokens += math.clamp(
-                                math.floor(tonumber(
-                                    utilityAO["FallbackTokens" .. occurrence.SourceRarity]
-                                ) or 0),
-                                0,
-                                100000
-                            )
-                        end
-
-                        if utilityAO.FallbackToNextLowerRarityBrainrot == true then
+                        local simpleUsedLowerFallbackAO = false
+                        if utilityAO.SimpleAutofarmEnabled == true
+                            and utilityAO.FallbackToNextLowerRarityBrainrot == true
+                        then
                             local lowerAmount = math.clamp(
-                                math.floor(tonumber(
-                                    utilityAO.FallbackNextLowerRarityAmount
-                                ) or 1),
+                                math.floor(tonumber(utilityAO.FallbackNextLowerRarityAmount) or 1),
+                                1,
+                                6
+                            )
+                            local plannedForOccurrenceAO = {}
+                            local plannedSlotsForOccurrenceAO = 0
+                            local hasLowerAO = false
+                            local canCoverAO = true
+                            for missingRarity in pairs(occurrence.MissingTargets or {}) do
+                                local lowerRarity = nextLowerRarityAO(missingRarity)
+                                if lowerRarity then
+                                    hasLowerAO = true
+                                    local alreadyPlanned = simpleFallbackPlannedAO[lowerRarity] or 0
+                                    local available = availableForRarityAO(lowerRarity) - alreadyPlanned
+                                    if available < lowerAmount then
+                                        canCoverAO = false
+                                        break
+                                    end
+                                    plannedForOccurrenceAO[lowerRarity] =
+                                        (plannedForOccurrenceAO[lowerRarity] or 0) + lowerAmount
+                                    plannedSlotsForOccurrenceAO += lowerAmount
+                                else
+                                    canCoverAO = false
+                                    break
+                                end
+                            end
+                            if plannedSlotsForOccurrenceAO > math.max(0, simpleFallbackSlotBudgetAO - simpleFallbackSlotsPlannedAO) then
+                                canCoverAO = false
+                            end
+                            if hasLowerAO and canCoverAO then
+                                simpleUsedLowerFallbackAO = true
+                                simpleFallbackSlotsPlannedAO += plannedSlotsForOccurrenceAO
+                                for lowerRarity, amount in pairs(plannedForOccurrenceAO) do
+                                    simpleFallbackPlannedAO[lowerRarity] =
+                                        (simpleFallbackPlannedAO[lowerRarity] or 0) + amount
+                                    aggregateFallbackRequests[lowerRarity] =
+                                        (aggregateFallbackRequests[lowerRarity] or 0) + amount
+                                end
+                            end
+                        end
+                        if utilityAO.FallbackToTokens == true
+                            and (utilityAO.SimpleAutofarmEnabled ~= true or not simpleUsedLowerFallbackAO)
+                        then
+                            if utilityAO["Fallback" .. tostring(occurrence.SourceRarity) .. "OfferAllTokens"] == true then
+                                forceAllTokensAO = true
+                            else
+                                aggregateTokens += math.clamp(
+                                    math.floor(tonumber(
+                                        utilityAO["FallbackTokens" .. occurrence.SourceRarity]
+                                    ) or 0),
+                                    0,
+                                    1000000
+                                )
+                            end
+                        end
+                        if utilityAO.FallbackToSpecificBrainrotItem == true then
+                            local key = "FallbackSpecific" .. tostring(occurrence.SourceRarity) .. "Item"
+                            if utilityAO[key] ~= nil then
+                                specificFallbackSourceRequests[occurrence.SourceRarity] = true
+                            end
+                        end
+                        if utilityAO.SimpleAutofarmEnabled ~= true
+                            and utilityAO.FallbackToNextLowerRarityBrainrot == true
+                        then
+                            local lowerAmount = math.clamp(
+                                math.floor(tonumber(utilityAO.FallbackNextLowerRarityAmount) or 1),
                                 1,
                                 6
                             )
@@ -14161,25 +15572,26 @@ if IS_MINIGAME_PLACE then
                                 local lowerRarity = nextLowerRarityAO(missingRarity)
                                 if lowerRarity then
                                     aggregateFallbackRequests[lowerRarity] =
-                                        (aggregateFallbackRequests[lowerRarity] or 0)
-                                        + lowerAmount
+                                        (aggregateFallbackRequests[lowerRarity] or 0) + lowerAmount
                                 end
                             end
                         end
                     end
                 end
             end
-
-
-
-
-
-
             local reservedPrimarySlots = 0
             for _, amount in pairs(aggregateTargets) do
                 reservedPrimarySlots += math.max(0, math.floor(tonumber(amount) or 0))
             end
-            local fallbackSlotsLeft = math.max(0, 6 - reservedPrimarySlots)
+            local plannedSpecificFallbackCountAO = 0
+            if fallbackEnabled and utilityAO.FallbackToSpecificBrainrotItem == true then
+                for sourceRarity in pairs(specificFallbackSourceRequests) do
+                    if validOfferItemIdAO(utilityAO["FallbackSpecific" .. tostring(sourceRarity) .. "Item"]) then
+                        plannedSpecificFallbackCountAO += 1
+                    end
+                end
+            end
+            local fallbackSlotsLeft = math.max(0, 6 - reservedPrimarySlots - #specificPrimaryIdsAO - plannedSpecificFallbackCountAO)
             if fallbackEnabled
                 and utilityAO.FallbackToNextLowerRarityBrainrot == true
                 and fallbackSlotsLeft > 0
@@ -14201,7 +15613,6 @@ if IS_MINIGAME_PLACE then
                     end
                 end
             end
-
             if not hasEnabledSource and not autoOfferOwnsAO then
                 lastAppliedSignature = nil
                 pendingSignature = nil
@@ -14210,7 +15621,6 @@ if IS_MINIGAME_PLACE then
                 task.wait(0.08)
                 continue
             end
-
             local targetSignature = {}
             local requestedSlots = 0
             for _, targetRarity in ipairs(BRAINROT_RARITY_OPTIONS) do
@@ -14233,7 +15643,26 @@ if IS_MINIGAME_PLACE then
                     requestedSlots += fallbackAmount
                 end
             end
-
+            for _, id in ipairs(specificPrimaryIdsAO) do
+                targetSignature[#targetSignature + 1] = "SPEC=" .. tostring(id)
+                requestedSlots += 1
+            end
+            local specificFallbackIdsAO = {}
+            local fallbackSpecificSeenAO = {}
+            if fallbackEnabled and utilityAO.FallbackToSpecificBrainrotItem == true then
+                for _, sourceRarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+                    if specificFallbackSourceRequests[sourceRarity] == true then
+                        local key = "FallbackSpecific" .. sourceRarity .. "Item"
+                        local valid = validOfferItemIdAO(utilityAO[key])
+                        if valid and not specificPrimarySeenAO[valid] and not fallbackSpecificSeenAO[valid] then
+                            fallbackSpecificSeenAO[valid] = true
+                            specificFallbackIdsAO[#specificFallbackIdsAO + 1] = valid
+                            targetSignature[#targetSignature + 1] = "FB-SPEC-" .. sourceRarity .. "=" .. valid
+                            requestedSlots += 1
+                        end
+                    end
+                end
+            end
             if requestedSlots <= 0 and aggregateTokens <= 0
                 and not tokenRuleAuthoritative
                 and not fallbackRuleAuthoritative
@@ -14245,13 +15674,11 @@ if IS_MINIGAME_PLACE then
                 task.wait(0.08)
                 continue
             end
-
             local desiredSignature = tostring(guid)
                 .. ":" .. tostring(offerSignature)
                 .. ":SRC=" .. table.concat(aggregateSignature, ",")
                 .. ":OUT=" .. table.concat(targetSignature, ",")
                 .. ":T=" .. tostring(aggregateTokens)
-
             if desiredSignature == lastAppliedSignature then
                 pendingSignature = nil
                 pendingContext = nil
@@ -14259,7 +15686,6 @@ if IS_MINIGAME_PLACE then
                 task.wait(0.06)
                 continue
             end
-
             local reactionContext = tostring(guid)
             if pendingContext ~= reactionContext then
                 pendingContext = reactionContext
@@ -14269,22 +15695,23 @@ if IS_MINIGAME_PLACE then
                         and tonumber(autoServerHopState.Utility.ReactionDelay)) or 1.6875, 0, 5
                 )
             elseif pendingSignature ~= desiredSignature then
-
-
                 pendingSignature = desiredSignature
             end
-
             if os.clock() < reactionDueAt then
                 task.wait(0.03)
                 continue
             end
-
             local desiredIds = {}
             local usedIds = {}
             local slotIndex = 1
-
-
-
+            for _, specificId in ipairs(specificPrimaryIdsAO) do
+                if slotIndex > 6 then break end
+                if not usedIds[specificId] then
+                    usedIds[specificId] = true
+                    desiredIds[slotIndex] = specificId
+                    slotIndex += 1
+                end
+            end
             for rarityIndex = #BRAINROT_RARITY_OPTIONS, 1, -1 do
                 local targetRarity = BRAINROT_RARITY_OPTIONS[rarityIndex]
                 local wanted = math.max(
@@ -14301,7 +15728,16 @@ if IS_MINIGAME_PLACE then
                 end
                 if slotIndex > 6 then break end
             end
-
+            if slotIndex <= 6 then
+                for _, fallbackId in ipairs(specificFallbackIdsAO) do
+                    if slotIndex > 6 then break end
+                    if not usedIds[fallbackId] then
+                        usedIds[fallbackId] = true
+                        desiredIds[slotIndex] = fallbackId
+                        slotIndex += 1
+                    end
+                end
+            end
             if slotIndex <= 6 then
                 for rarityIndex = #BRAINROT_RARITY_OPTIONS, 1, -1 do
                     local targetRarity = BRAINROT_RARITY_OPTIONS[rarityIndex]
@@ -14311,7 +15747,7 @@ if IS_MINIGAME_PLACE then
                     )
                     for _ = 1, wanted do
                         if slotIndex > 6 then break end
-                        local itemId = findRarityItemAO(targetRarity, usedIds)
+                        local itemId = findRarityItemAO(targetRarity, usedIds, true)
                         if not itemId then break end
                         usedIds[itemId] = true
                         desiredIds[slotIndex] = itemId
@@ -14320,9 +15756,6 @@ if IS_MINIGAME_PLACE then
                     if slotIndex > 6 then break end
                 end
             end
-
-
-
             local tokenAmount = math.min(
                 math.max(0, math.floor(aggregateTokens)),
                 tokenBalanceAO()
@@ -14330,7 +15763,6 @@ if IS_MINIGAME_PLACE then
             local tokenOk = setCurrencyAO(guid, tokenAmount)
             local itemOk = tryIndexAO(negotiationAO, {"guid"}) == guid
                 and setDesiredItemsAO(guid, desiredIds)
-
             if tokenOk and itemOk and tryIndexAO(negotiationAO, {"guid"}) == guid then
                 lastAppliedSignature = desiredSignature
                 pendingSignature = nil
@@ -14343,14 +15775,6 @@ if IS_MINIGAME_PLACE then
         end
     end)
 end
-
-
-
-
-
-
-
-
 if IS_MINIGAME_PLACE then
 	task.spawn(function()
 		while screenGui.Parent do
@@ -14365,13 +15789,20 @@ if IS_MINIGAME_PLACE then
 						break
 					end
 				end
+				if not anyEnabled then
+					for _, rule in ipairs(autoServerHopState.Utility.AutoAcceptSpecificItems or {}) do
+						if type(rule) == "table" and rule.Item ~= nil and tostring(rule.Item) ~= "" then
+							anyEnabled = true
+							break
+						end
+					end
+				end
 			end
 			if anyEnabled then break end
 			task.wait(0.10)
 		end
 		if not screenGui.Parent then return end
-		local RSAAC = game:GetService("ReplicatedStorage")
-
+		local RSAAC = ReplicatedStorage
 		local function requireAAC(moduleScript)
 			while screenGui.Parent do
 				local ok, result = pcall(require, moduleScript)
@@ -14381,26 +15812,23 @@ if IS_MINIGAME_PLACE then
 				task.wait(0.25)
 			end
 		end
-
 		local clientModules = RSAAC:WaitForChild("Client"):WaitForChild("Modules")
 		local shared = RSAAC:WaitForChild("Shared")
 		local ReplicatorAAC = requireAAC(clientModules:WaitForChild("ReplicatorClient"))
 		local RemotesAAC = requireAAC(shared:WaitForChild("Remotes"))
 		local GetItemTypeAAC = requireAAC(shared:WaitForChild("utils"):WaitForChild("GetItemType"))
+		local ItemToStringAAC = requireAAC(shared:WaitForChild("utils"):WaitForChild("ItemToString"))
 		local EconomyMathAAC = requireAAC(shared:WaitForChild("utils"):WaitForChild("EconomyMath"))
 		local BrainrotsConfigAAC = requireAAC(shared:WaitForChild("Config"):WaitForChild("Brainrots"))
-
-		if not (ReplicatorAAC and RemotesAAC and GetItemTypeAAC
+		if not (ReplicatorAAC and RemotesAAC and GetItemTypeAAC and ItemToStringAAC
 			and EconomyMathAAC and BrainrotsConfigAAC)
 		then
 			return
 		end
-
 		local ReadyAAC = RemotesAAC.NegotiationReady
 		if not ReadyAAC then
 			return
 		end
-
 		local negotiationAAC
 		local opponentItemCacheAAC = {}
 		local lastReadySignatureAAC
@@ -14424,32 +15852,17 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 		end
-
 		local function refreshAAC()
-			pcall(function()
-				negotiationAAC = ReplicatorAAC.get("ActiveNegotiation") or negotiationAAC
-			end)
+			negotiationAAC = safeRepGet(ReplicatorAAC, "ActiveNegotiation") or negotiationAAC
 		end
-
-		local function tryIndexAAC(root, path)
-			if not root then
-				return nil
-			end
-			local ok, value = pcall(function()
-				return root:TryIndex(path)
-			end)
-			return ok and value or nil
-		end
-
+		local tryIndexAAC = safeTryIndex
 		local function rarityAAC(item)
 			if type(item) ~= "table" then return nil end
-
 			local name = item.name or (item.sub and item.sub.name)
 			local explicit = item.rarity
 				or item.Rarity
 				or (item.sub and (item.sub.rarity or item.sub.Rarity))
 			if explicit == "Meta" then return "Meta" end
-
 			local baseRarity = type(explicit) == "string"
 				and autoAcceptState[explicit] ~= nil
 				and explicit
@@ -14460,18 +15873,15 @@ if IS_MINIGAME_PLACE then
 					baseRarity = configured
 				end
 			end
-
 			if not baseRarity then
-				local itemType
-				pcall(function() itemType = GetItemTypeAAC(item) end)
-				if itemType ~= "Brainrot" then return nil end
-				pcall(function() baseRarity = EconomyMathAAC.GetBrainrotRarity(name) end)
+				local okType, itemType = pcall(GetItemTypeAAC, item)
+				if not okType or itemType ~= "Brainrot" then return nil end
+				local okRarity, resolved = pcall(EconomyMathAAC.GetBrainrotRarity, name)
+				baseRarity = okRarity and resolved or nil
 			end
-
 			if type(baseRarity) ~= "string" or autoAcceptState[baseRarity] == nil then
 				return nil
 			end
-
 			local metaMarked = item.Meta == true
 				or item.IsMeta == true
 				or (item.sub and (item.sub.Meta == true or item.sub.IsMeta == true))
@@ -14479,27 +15889,112 @@ if IS_MINIGAME_PLACE then
 					and string.find(string.lower(name), "%f[%a]meta%f[%A]") ~= nil)
 			return baseRarity == "Infinity" and metaMarked and "Meta" or baseRarity
 		end
-
+		local function itemMutationAAC(item)
+			if type(item) ~= "table" then return nil end
+			local value = item.mutation or item.Mutation
+				or (item.sub and (item.sub.mutation or item.sub.Mutation))
+			return type(value) == "string" and value or nil
+		end
+		local function itemTraitsAAC(item)
+			if type(item) ~= "table" then return {} end
+			local value = item.traits or item.Traits
+				or (item.sub and (item.sub.traits or item.sub.Traits))
+			local result = {}
+			if type(value) == "table" then
+				for key, enabled in pairs(value) do
+					if type(key) == "number" then
+						if enabled ~= nil and enabled ~= false then result[tostring(enabled)] = true end
+					elseif enabled ~= nil and enabled ~= false then
+						result[tostring(key)] = true
+					end
+				end
+			elseif type(value) == "string" then
+				for trait in string.gmatch(value, "[^,|;]+") do
+					trait = string.gsub(trait, "^%s*(.-)%s*$", "%1")
+					if trait ~= "" then result[trait] = true end
+				end
+			end
+			return result
+		end
+		local function itemPassesAcceptFiltersAAC(item, rarity)
+			local utility = autoServerHopState.Utility
+			local mutations = utility["AutoAccept" .. tostring(rarity) .. "Mutations"]
+			local traits = utility["AutoAccept" .. tostring(rarity) .. "Traits"]
+			if type(mutations) == "table" and next(mutations) ~= nil then
+				local mutation = itemMutationAAC(item)
+				if not mutation or mutations[mutation] ~= true then return false end
+			end
+			if type(traits) == "table" and next(traits) ~= nil then
+				local present = itemTraitsAAC(item)
+				local matched = false
+				for trait in pairs(traits) do
+					if present[tostring(trait)] == true then matched = true break end
+				end
+				if not matched then return false end
+			end
+			return true
+		end
+		local function itemDisplayNameAAC(item)
+			if type(item) ~= "table" then return "" end
+			local displayName
+			pcall(function()
+				displayName = ItemToStringAAC(item, {
+					rich = false,
+					displayLevel = false,
+					displayMutation = false,
+				})
+			end)
+			return tostring(
+				displayName
+				or item.name
+				or (item.sub and item.sub.name)
+				or item.displayName
+				or item.DisplayName
+				or ""
+			)
+		end
+		local function specificRuleMatchesAAC(item, rule)
+			if type(item) ~= "table" or type(rule) ~= "table" or rule.Item == nil then
+				return false
+			end
+			local wanted = tostring(rule.Item)
+			local directName = tostring(item.name or (item.sub and item.sub.name) or "")
+			local displayName = itemDisplayNameAAC(item)
+			if directName ~= wanted and displayName ~= wanted then return false end
+			local mutations = type(rule.Mutations) == "table" and rule.Mutations or {}
+			if next(mutations) ~= nil then
+				local mutation = itemMutationAAC(item)
+				if not mutation or mutations[mutation] ~= true then return false end
+			end
+			local traits = type(rule.Traits) == "table" and rule.Traits or {}
+			if next(traits) ~= nil then
+				local present = itemTraitsAAC(item)
+				local matched = false
+				for trait in pairs(traits) do
+					if present[tostring(trait)] == true then matched = true break end
+				end
+				if not matched then return false end
+			end
+			return true
+		end
 		local function opponentOfferAAC()
 			local counts = {}
+			local offeredItems = {}
 			local signatureParts = {}
 			local slots = tryIndexAAC(negotiationAAC, {"player2", "slots"})
 			if type(slots) ~= "table" then
 				slots = {}
 			end
-
 			for slotIndex = 1, 6 do
 				local value = slots[tostring(slotIndex)]
 				if value == nil then
 					value = slots[slotIndex]
 				end
-
 				local id = type(value) == "table" and value.id or value
 				signatureParts[#signatureParts + 1] = tostring(id or "")
-
 				local item = type(value) == "table" and value.item or nil
 				local cacheKey = tostring(slotIndex)
-				if type(item) == "table" and rarityAAC(item) then
+				if type(item) == "table" then
 					opponentItemCacheAAC[cacheKey] = {
 						id = tostring(id or ""),
 						item = item,
@@ -14512,13 +16007,14 @@ if IS_MINIGAME_PLACE then
 				else
 					opponentItemCacheAAC[cacheKey] = nil
 				end
-
+				if type(item) == "table" then
+					offeredItems[#offeredItems + 1] = item
+				end
 				local rarity = rarityAAC(item)
-				if rarity then
+				if rarity and itemPassesAcceptFiltersAAC(item, rarity) then
 					counts[rarity] = (counts[rarity] or 0) + 1
 				end
 			end
-
 			local tokens = math.max(
 				0,
 				math.floor(
@@ -14528,19 +16024,12 @@ if IS_MINIGAME_PLACE then
 				)
 			)
 			signatureParts[#signatureParts + 1] = "T=" .. tostring(tokens)
-
-			return counts, tokens, table.concat(signatureParts, "|")
+			return counts, tokens, table.concat(signatureParts, "|"), offeredItems
 		end
-
-		local function requirementsMatchAAC(counts, tokens)
+		local function requirementsMatchAAC(counts, tokens, offeredItems)
 			local enabledCount = 0
-			local matchedAny = false
-
-			for _, rarity in ipairs({
-				"Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythical",
-				"Cosmic", "Secret", "Celestial", "Divine", "Infinity", "Meta", "Paradox",
-				"Eternal",
-			}) do
+			local matchedCount = 0
+			for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 				local config = autoAcceptState[rarity]
 				if config and config.Enabled == true then
 					enabledCount += 1
@@ -14550,35 +16039,50 @@ if IS_MINIGAME_PLACE then
 						6
 					)
 					if (counts[rarity] or 0) >= wanted then
-						matchedAny = true
+						matchedCount += 1
 					end
 				end
 			end
-
 			local tokenConfig = autoAcceptState.Tokens
 			if tokenConfig and tokenConfig.Enabled == true then
 				enabledCount += 1
 				local wantedTokens = math.clamp(
 					math.floor(tonumber(tokenConfig.Amount) or 1),
 					1,
-					100000
+					1000000
 				)
 				if tokens >= wantedTokens then
-					matchedAny = true
+					matchedCount += 1
 				end
 			end
-
-			return matchedAny, enabledCount
+			local utility = autoServerHopState.Utility
+			for _, rule in ipairs(type(utility.AutoAcceptSpecificItems) == "table" and utility.AutoAcceptSpecificItems or {}) do
+				if type(rule) == "table" and rule.Item ~= nil and tostring(rule.Item) ~= "" then
+					enabledCount += 1
+					local ruleMatched = false
+					for _, item in ipairs(type(offeredItems) == "table" and offeredItems or {}) do
+						if specificRuleMatchesAAC(item, rule) then
+							ruleMatched = true
+							break
+						end
+					end
+					if ruleMatched then matchedCount += 1 end
+				end
+			end
+			local oneMode = utility.AutoAcceptMustHaveOne == true
+			local allMode = utility.AutoAcceptMustHaveAll == true
+			local matched = enabledCount > 0 and (
+				(oneMode and matchedCount > 0)
+				or (allMode and matchedCount == enabledCount)
+			)
+			return matched, enabledCount
 		end
-
 		while screenGui.Parent do
 			local utilityAAC = autoServerHopState.Utility
 			if utilityAAC.PauseScript == true
 			or utilityAAC.PauseMinigameFeatures == true
 				or utilityAAC.AutoAcceptMaster ~= true
 			then
-
-
 				if lastReadySignatureAAC then
 					refreshAAC()
 					if tryIndexAAC(negotiationAAC, {"player1", "ready"}) == true then
@@ -14594,7 +16098,6 @@ if IS_MINIGAME_PLACE then
 				task.wait(0.08)
 				continue
 			end
-
 			refreshAAC()
 			local guid = tryIndexAAC(negotiationAAC, {"guid"})
 			if not guid then
@@ -14605,9 +16108,8 @@ if IS_MINIGAME_PLACE then
 				task.wait(0.10)
 				continue
 			end
-
-			local counts, tokens, offerSignature = opponentOfferAAC()
-			local matches, enabledCount = requirementsMatchAAC(counts, tokens)
+			local counts, tokens, offerSignature, offeredItems = opponentOfferAAC()
+			local matches, enabledCount = requirementsMatchAAC(counts, tokens, offeredItems)
 			if enabledCount == 0 then
 				lastReadySignatureAAC = nil
 				pendingReadySignatureAAC = nil
@@ -14615,7 +16117,6 @@ if IS_MINIGAME_PLACE then
 				task.wait(0.10)
 				continue
 			end
-
 			local localReady = tryIndexAAC(
 				negotiationAAC,
 				{"player1", "ready"}
@@ -14624,7 +16125,6 @@ if IS_MINIGAME_PLACE then
 				negotiationAAC,
 				{"timers", "version"}
 			) or 0
-
 			if not matches then
 				lastReadySignatureAAC = nil
 				pendingReadySignatureAAC = nil
@@ -14637,7 +16137,6 @@ if IS_MINIGAME_PLACE then
 				task.wait(0.08)
 				continue
 			end
-
 			local lastUpdate = tonumber(
 				tryIndexAAC(
 					negotiationAAC,
@@ -14650,7 +16149,6 @@ if IS_MINIGAME_PLACE then
 				.. offerSignature
 				.. ":"
 				.. tostring(version)
-
 			if stable and not localReady then
 				if pendingReadySignatureAAC ~= readySignature then
 					pendingReadySignatureAAC = readySignature
@@ -14682,8 +16180,6 @@ if IS_MINIGAME_PLACE then
 							and tryIndexAAC(negotiationAAC, {"player1", "ready"}) ~= true
 							and lastReadySignatureAAC == readySignature
 						then
-
-
 							lastReadySignatureAAC = nil
 						end
 					end)
@@ -14692,20 +16188,11 @@ if IS_MINIGAME_PLACE then
 				pendingReadySignatureAAC = nil
 				readyDueAtAAC = 0
 			end
-
 			task.wait(0.08)
 		end
 	end)
 end
-
-
-
-
-
 if IS_MINIGAME_PLACE then
-
-
-
 	task.spawn(function()
 		while screenGui.Parent
 			and not (
@@ -14717,8 +16204,8 @@ if IS_MINIGAME_PLACE then
 			task.wait(0.10)
 		end
 		if not screenGui.Parent then return end
-		local PlayersAE = game:GetService("Players")
-		local RSAE = game:GetService("ReplicatedStorage")
+		local PlayersAE = Players
+		local RSAE = ReplicatedStorage
 		local LocalPlayerAE = PlayersAE.LocalPlayer
 		local ClientModulesAE = RSAE:WaitForChild("Client"):WaitForChild("Modules")
 		local SharedAE = RSAE:WaitForChild("Shared")
@@ -14747,28 +16234,15 @@ if IS_MINIGAME_PLACE then
 			Cosmic=7, Secret=8, Celestial=9, Divine=10, Infinity=11,
 			Paradox=12, Eternal=13,
 		}
-
-		local function tryAE(root, path)
-			if not root then return nil end
-			local ok, value = pcall(function() return root:TryIndex(path) end)
+		local tryAE = safeTryIndex
+		local function refreshAE()
+			PlayerDataAE = safeRepGet(ReplicatorAE, "PlayerData") or PlayerDataAE
+			ActiveMinigameAE = safeRepGet(ReplicatorAE, "ActiveMinigame") or ActiveMinigameAE
+		end
+		local function itemTypeAE(item)
+			local ok, value = pcall(GetItemTypeAE, item)
 			return ok and value or nil
 		end
-
-		local function refreshAE()
-			local freshPlayerData
-			local freshMinigame
-			pcall(function() freshPlayerData = ReplicatorAE.get("PlayerData") end)
-			pcall(function() freshMinigame = ReplicatorAE.get("ActiveMinigame") end)
-			if freshPlayerData ~= nil then PlayerDataAE = freshPlayerData end
-			if freshMinigame ~= nil then ActiveMinigameAE = freshMinigame end
-		end
-
-		local function itemTypeAE(item)
-			local value
-			pcall(function() value = GetItemTypeAE(item) end)
-			return value
-		end
-
 		local function rarityAE(item)
 			if type(item) ~= "table" or itemTypeAE(item) ~= "Brainrot" then return nil end
 			local explicit = item.sub and (item.sub.rarity or item.sub.Rarity)
@@ -14776,39 +16250,34 @@ if IS_MINIGAME_PLACE then
 			if type(explicit) == "string" and rarityRankAE[explicit] then
 				return explicit
 			end
-			local value
-			pcall(function()
-				value = EconomyMathAE.GetBrainrotRarity(
-					item.name or (item.sub and item.sub.name)
-				)
-			end)
-			return type(value) == "string" and value or nil
+			local ok, value = pcall(EconomyMathAE.GetBrainrotRarity, item.name or (item.sub and item.sub.name))
+			return ok and type(value) == "string" and value or nil
 		end
-
 		local function sortedIdsAE(inventory)
-			local sorted
-			local ok = pcall(function() sorted = SortItemsAE(inventory) end)
+			local ok, sorted = pcall(SortItemsAE, inventory)
 			if ok and type(sorted) == "table" then return sorted end
 			sorted = {}
 			for id in pairs(inventory or {}) do sorted[#sorted + 1] = id end
 			return sorted
 		end
-
+		local tablesFolderCacheAE, nextTablesScanAE = nil, 0
 		local function tablesFolderAE()
+			if tablesFolderCacheAE and tablesFolderCacheAE.Parent then return tablesFolderCacheAE end
 			local gameObjects = workspace:FindFirstChild("GameObjects")
 			local placeSpecific = gameObjects and gameObjects:FindFirstChild("PlaceSpecific")
 			local tradePlaza = placeSpecific and placeSpecific:FindFirstChild("trade_plaza")
 			local canonical = tradePlaza and tradePlaza:FindFirstChild("MinigameTables")
-			if canonical then return canonical end
+			if canonical then tablesFolderCacheAE = canonical; return canonical end
+			local now = os.clock()
+			if now < nextTablesScanAE then return nil end
+			nextTablesScanAE = now + 2
 			for _, descendant in ipairs(workspace:GetDescendants()) do
-				if descendant.Name == "MinigameTables"
-					and descendant:FindFirstChildWhichIsA("Seat", true)
-				then
+				if descendant.Name == "MinigameTables" and descendant:FindFirstChildWhichIsA("Seat", true) then
+					tablesFolderCacheAE = descendant
 					return descendant
 				end
 			end
 		end
-
 		local function seatedAtTableAE(character, humanoid)
 			local folder = tablesFolderAE()
 			if not folder then return false end
@@ -14828,7 +16297,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return false
 		end
-
 		local function unequipBrainrotToolsAE(character, humanoid, inventory)
 			for _, child in ipairs(character:GetChildren()) do
 				if child:IsA("Tool") then
@@ -14840,7 +16308,6 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 		end
-
 		local function mountAE()
 			if not RideActionAE or os.clock() < nextRideAtAE then return false end
 			nextRideAtAE = os.clock() + 0.75
@@ -14849,20 +16316,18 @@ if IS_MINIGAME_PLACE then
 			end)
 			return ok and result ~= false
 		end
-
 		while screenGui.Parent do
 			task.wait(0.35)
 			local state = autoServerHopState.Utility
 			if state.PauseScript == true
 			or state.PauseMinigameFeatures == true
 				or state.AutoEquipBestBrainrot ~= true
-				or (state.EquipBestBrainrot ~= true
-					and state.EquipBestMountableBrainrot ~= true
-					and state.EquipSpecificBrainrot ~= true)
+				or (state.AutoEquipModeHold ~= true
+					and state.AutoEquipModeMount ~= true
+					and state.AutoEquipModeHoldMount ~= true)
 			then
 				continue
 			end
-
 			refreshAE()
 			local inventory = tryAE(PlayerDataAE, {"Inventory"})
 			local character = LocalPlayerAE.Character
@@ -14871,19 +16336,16 @@ if IS_MINIGAME_PLACE then
 			if type(inventory) ~= "table" or not character or not humanoid or not backpack then
 				continue
 			end
-
 			local minigameActive = tryAE(ActiveMinigameAE, {"phase"}) ~= nil
 				or tryAE(ActiveMinigameAE, {"session", "gameId"}) ~= nil
 			if seatedAtTableAE(character, humanoid) or minigameActive then
 				unequipBrainrotToolsAE(character, humanoid, inventory)
 				continue
 			end
-
 			local bestId
 			local bestRank
 			local bestRideableId
 			local bestRideableName
-
 			for _, id in ipairs(sortedIdsAE(inventory)) do
 				local item = inventory[id] or inventory[tostring(id)]
 				if type(item) == "table" and itemTypeAE(item) == "Brainrot" then
@@ -14893,10 +16355,10 @@ if IS_MINIGAME_PLACE then
 						bestId = tostring(id)
 						bestRank = rank
 					end
-
-					if bestRank and rank
-						and (rank == bestRank or rank == bestRank - 1)
-					then
+					-- sortedIdsAE is already strongest-first, so the first
+					-- rideable item is the best mountable brainrot regardless
+					-- of how far below the absolute best rarity it sits.
+					if not bestRideableId then
 						local itemName = item.name or (item.sub and item.sub.name)
 						local rideable = false
 						if type(itemName) == "string" and itemName ~= "" then
@@ -14907,136 +16369,97 @@ if IS_MINIGAME_PLACE then
 						if rideable then
 							bestRideableId = tostring(id)
 							bestRideableName = itemName
-							break
 						end
-					elseif bestRank and rank and rank < bestRank - 1 then
-						break
 					end
 				end
 			end
-
-			local mounted = LocalPlayerAE:GetAttribute("RideableBrainrotActive") == true
-			local specificId = state.EquipSpecificBrainrot == true
-				and state.SpecificBrainrotId
-				or nil
-			local specificItem = specificId and (
-				inventory[specificId]
-					or inventory[tostring(specificId)]
-					or (tonumber(specificId) and inventory[tonumber(specificId)] or nil)
-			) or nil
-			if specificId ~= nil
-				and (
-					type(specificItem) ~= "table"
-					or itemTypeAE(specificItem) ~= "Brainrot"
-				)
-			then
-
-
-				state.SpecificBrainrotId = nil
-				specificId = nil
-				specificItem = nil
-				local refreshSettings = rawget(_G, "__TUFFHUB_REFRESH_DYNAMIC_DROPDOWNS")
-				if type(refreshSettings) == "function" then
-					task.defer(refreshSettings)
-				end
+			local function validBrainrotIdAE(id)
+				if id == nil then return nil, nil end
+				local sid = tostring(id)
+				local item = inventory[id] or inventory[sid]
+					or (tonumber(id) and inventory[tonumber(id)] or nil)
+				if type(item) ~= "table" or itemTypeAE(item) ~= "Brainrot" then return nil, nil end
+				return sid, item
 			end
-
-			local desiredId
-			local desiredName
-			local shouldMount = false
-
-			if specificId ~= nil then
-				desiredId = tostring(specificId)
-				desiredName = specificItem.name
-					or (specificItem.sub and specificItem.sub.name)
-				if state.MountBrainrotIfPossible == true
-					and type(desiredName) == "string"
-				then
-					pcall(function()
-						shouldMount = RideableAE.isRideable(desiredName) == true
-					end)
-				end
-			elseif state.EquipBestMountableBrainrot == true then
-				desiredId = bestRideableId
-				desiredName = bestRideableName
-				shouldMount = desiredId ~= nil
-			else
-
-
-				desiredId = bestId
-				local desiredItem = desiredId and (
-					inventory[desiredId] or inventory[tostring(desiredId)]
-				) or nil
-				desiredName = type(desiredItem) == "table"
-					and (desiredItem.name or (desiredItem.sub and desiredItem.sub.name))
-					or nil
-				if state.MountBrainrotIfPossible == true
-					and type(desiredName) == "string"
-				then
-					pcall(function()
-						shouldMount = RideableAE.isRideable(desiredName) == true
-					end)
-				end
-			end
-
-			if not desiredId then continue end
-
-			if mounted then
-				local mountedName = LocalPlayerAE:GetAttribute("RideableBrainrotName")
-				if shouldMount
-					and (
-						desiredName == nil
-						or mountedName == desiredName
-					)
-				then
-					unequipBrainrotToolsAE(character, humanoid, inventory)
-					continue
-				end
-
-
-				continue
-			end
-
-			local equipped = character:FindFirstChild(desiredId)
-			if not (equipped and equipped:IsA("Tool")) then
-				local tool = backpack:FindFirstChild(desiredId)
+			local function equipIdAE(id)
+				if not id then return nil end
+				local equipped = character:FindFirstChild(tostring(id))
+				if equipped and equipped:IsA("Tool") then return equipped end
+				local tool = backpack:FindFirstChild(tostring(id))
 				if tool and tool:IsA("Tool") then
 					pcall(humanoid.EquipTool, humanoid, tool)
-					equipped = character:FindFirstChild(desiredId)
+					return character:FindFirstChild(tostring(id))
 				end
 			end
-
-			if shouldMount and equipped and equipped:IsA("Tool") and mountAE() then
-				task.spawn(function()
-					local deadline = os.clock() + 1.25
-					while screenGui.Parent
-						and os.clock() < deadline
-						and LocalPlayerAE:GetAttribute("RideableBrainrotActive") ~= true
-					do
-						task.wait(0.03)
+			local modeHold = state.AutoEquipModeHold == true
+			local modeMount = state.AutoEquipModeMount == true
+			local modeBoth = state.AutoEquipModeHoldMount == true
+			local useSpecific = state.AutoEquipUseSpecificBrainrot == true
+			local useBest = not useSpecific and state.AutoEquipUseBestBrainrot == true
+			local holdId, holdItem
+			if modeHold or modeBoth then
+				if useSpecific then
+					holdId, holdItem = validBrainrotIdAE(state.HoldSpecificBrainrotId)
+					if not holdId then state.HoldSpecificBrainrotId = nil end
+				elseif useBest then
+					holdId, holdItem = validBrainrotIdAE(bestId)
+				end
+			end
+			local mountId, mountItem, mountName
+			if modeMount or modeBoth then
+				if useSpecific then
+					mountId, mountItem = validBrainrotIdAE(state.MountSpecificBrainrotId)
+					if not mountId then state.MountSpecificBrainrotId = nil end
+				elseif useBest then
+					mountId, mountItem = validBrainrotIdAE(bestRideableId)
+				end
+				if mountItem then
+					mountName = mountItem.name or (mountItem.sub and mountItem.sub.name)
+					local rideable = false
+					if type(mountName) == "string" then
+						pcall(function() rideable = RideableAE.isRideable(mountName) == true end)
 					end
-					if LocalPlayerAE:GetAttribute("RideableBrainrotActive") == true
-						and (
-							desiredName == nil
-							or LocalPlayerAE:GetAttribute("RideableBrainrotName") == desiredName
-						)
-					then
-						local liveCharacter = LocalPlayerAE.Character
-						local liveHumanoid = liveCharacter
-							and liveCharacter:FindFirstChildOfClass("Humanoid")
-						if liveCharacter and liveHumanoid then
-							unequipBrainrotToolsAE(liveCharacter, liveHumanoid, inventory)
+					if not rideable then
+						if useSpecific then
+							state.MountSpecificBrainrotId = nil
 						end
+						mountId, mountItem, mountName = nil, nil, nil
 					end
-				end)
+				end
+			end
+			local mounted = LocalPlayerAE:GetAttribute("RideableBrainrotActive") == true
+			local mountedName = LocalPlayerAE:GetAttribute("RideableBrainrotName")
+			local mountedCorrectly = mounted and mountId ~= nil
+				and (mountName == nil or mountedName == mountName)
+			if (modeMount or modeBoth) and mountId and not mountedCorrectly then
+				if not mounted then
+					local tool = equipIdAE(mountId)
+					if tool and tool:IsA("Tool") and mountAE() then
+						task.wait(0.12)
+						mounted = LocalPlayerAE:GetAttribute("RideableBrainrotActive") == true
+						mountedName = LocalPlayerAE:GetAttribute("RideableBrainrotName")
+						mountedCorrectly = mounted and (mountName == nil or mountedName == mountName)
+					end
+				end
+			end
+			if modeMount and not modeBoth then
+				if mountedCorrectly then
+					unequipBrainrotToolsAE(character, humanoid, inventory)
+				end
+			elseif (modeHold or modeBoth) and holdId then
+				if not (mountedCorrectly and holdId == mountId) then
+					equipIdAE(holdId)
+				end
+			end
+			if useSpecific and (
+				((modeHold or modeBoth) and state.HoldSpecificBrainrotId == nil)
+				or ((modeMount or modeBoth) and state.MountSpecificBrainrotId == nil)
+			) then
+				local refreshSettings = rawget(_G, "__TUFFHUB_REFRESH_DYNAMIC_DROPDOWNS")
+				if type(refreshSettings) == "function" then task.defer(refreshSettings) end
 			end
 		end
 	end)
-
-
-
-
-
 	task.spawn(function()
 		while screenGui.Parent do
 			local state = autoServerHopState and autoServerHopState.Utility
@@ -15054,7 +16477,7 @@ if IS_MINIGAME_PLACE then
 			task.wait(0.10)
 		end
 		if not screenGui.Parent then return end
-		local RSAO2 = game:GetService("ReplicatedStorage")
+		local RSAO2 = ReplicatedStorage
 		local ClientModulesAO2 = RSAO2:WaitForChild("Client"):WaitForChild("Modules")
 		local SharedAO2 = RSAO2:WaitForChild("Shared")
 		local function requireAO2(moduleScript)
@@ -15113,43 +16536,26 @@ if IS_MINIGAME_PLACE then
 			Ascendro = true,
 			Zeledrax = true,
 		}
-
-		local function tryAO2(root, path)
-			if not root then return nil end
-			local ok, value = pcall(function() return root:TryIndex(path) end)
-			return ok and value or nil
-		end
-
+		local tryAO2 = safeTryIndex
 		local function refreshAO2()
-			local freshPlayerData
-			local freshNegotiation
-			pcall(function() freshPlayerData = ReplicatorAO2.get("PlayerData") end)
-			pcall(function() freshNegotiation = ReplicatorAO2.get("ActiveNegotiation") end)
-			if freshPlayerData ~= nil then PlayerDataAO2 = freshPlayerData end
-			if freshNegotiation ~= nil then NegotiationAO2 = freshNegotiation end
+			PlayerDataAO2 = safeRepGet(ReplicatorAO2, "PlayerData") or PlayerDataAO2
+			NegotiationAO2 = safeRepGet(ReplicatorAO2, "ActiveNegotiation") or NegotiationAO2
 		end
-
 		local function guidAO2()
 			refreshAO2()
 			return tryAO2(NegotiationAO2, {"guid"})
 		end
-
 		local function autoOfferOwnsWagerAO2(expectedGuid)
 			local utility = autoServerHopState and autoServerHopState.Utility
 			return utility ~= nil
 				and tostring(utility._AutoOfferReactiveGuid or "") == tostring(expectedGuid)
 		end
-
 		local function openingStillActiveAO2(expectedGuid)
 			if autoServerHopState.Utility.PauseScript == true or autoServerHopState.Utility.PauseMinigameFeatures == true then return false end
 			if guidAO2() ~= expectedGuid then return false end
 			if tryAO2(NegotiationAO2, {"player1", "ready"}) == true then return false end
-
-
-
 			return not autoOfferOwnsWagerAO2(expectedGuid)
 		end
-
 		local function invokeAO2(remote, ...)
 			if not remote then return false, nil end
 			local args = table.pack(...)
@@ -15158,7 +16564,6 @@ if IS_MINIGAME_PLACE then
 			end)
 			return ok, result
 		end
-
 		local function slotIdAO2(slotIndex)
 			local slots = tryAO2(NegotiationAO2, {"player1", "slots"})
 			if type(slots) ~= "table" then return nil end
@@ -15166,23 +16571,17 @@ if IS_MINIGAME_PLACE then
 			if value == nil then value = slots[slotIndex] end
 			return type(value) == "table" and value.id or value
 		end
-
 		local function sameIdAO2(a, b)
 			if a == b then return true end
 			return a ~= nil and b ~= nil and tostring(a) == tostring(b)
 		end
-
 		local function displayTradeableAO2(item)
 			if type(item) ~= "table" then return false end
-
-
-
-
 			local explicit = item.rarity
 				or item.Rarity
 				or (item.sub and (item.sub.rarity or item.sub.Rarity))
-			if explicit == "Paradox" or explicit == "Eternal" then return true end
-
+			if explicit == "Eternal" then return false end
+			if explicit == "Paradox" then return true end
 			local rarity
 			local name = item.name or (item.sub and item.sub.name)
 			if type(name) == "string" then
@@ -15191,47 +16590,40 @@ if IS_MINIGAME_PLACE then
 					pcall(function() rarity = EconomyMathAO2.GetBrainrotRarity(name) end)
 				end
 			end
+			if rarity == "Eternal" then return false end
 			if rarity == "Paradox"
-				or rarity == "Eternal"
 				or (type(name) == "string" and protectedDisplayNamesAO2[name] == true)
 			then
 				return true
 			end
-
 			local tradeable = false
 			pcall(function() tradeable = TradeableAO2(item) == true end)
 			return tradeable
 		end
-
 		local function topBrainrotsAO2()
 			local inventory = tryAO2(PlayerDataAO2, {"Inventory"})
 			if type(inventory) ~= "table" then return {} end
-			local sorted
-			local ok = pcall(function() sorted = SortItemsAO2(inventory) end)
+			local ok, sorted = pcall(SortItemsAO2, inventory)
 			if not ok or type(sorted) ~= "table" then
 				sorted = {}
 				for id in pairs(inventory) do sorted[#sorted + 1] = id end
 			end
-
 			local result = {}
 			for _, id in ipairs(sorted) do
 				if #result >= 6 then break end
 				local item = inventory[id] or inventory[tostring(id)]
 				if type(item) == "table" and not item.locked then
-					local itemType
-					pcall(function() itemType = GetItemTypeAO2(item) end)
-					if itemType == "Brainrot" and displayTradeableAO2(item) then
+					local okType, itemType = pcall(GetItemTypeAO2, item)
+					if okType and itemType == "Brainrot" and displayTradeableAO2(item) then
 						result[#result + 1] = tostring(id)
 					end
 				end
 			end
 			return result
 		end
-
 		local function customBrainrotsAO2(state)
 			local inventory = tryAO2(PlayerDataAO2, {"Inventory"})
 			if type(inventory) ~= "table" then return {} end
-
 			local desired = {}
 			local used = {}
 			for slotIndex = 1, 6 do
@@ -15241,22 +16633,17 @@ if IS_MINIGAME_PLACE then
 						or inventory[tostring(selectedId)]
 						or (tonumber(selectedId) and inventory[tonumber(selectedId)] or nil)
 				) or nil
-
 				local valid = false
 				if type(item) == "table" and not item.locked then
-					local itemType
-					pcall(function() itemType = GetItemTypeAO2(item) end)
-					valid = itemType == "Brainrot"
+					local okType, itemType = pcall(GetItemTypeAO2, item)
+					valid = okType and itemType == "Brainrot"
 						and displayTradeableAO2(item)
 						and used[tostring(selectedId)] ~= true
 				end
-
 				if valid then
 					desired[slotIndex] = tostring(selectedId)
 					used[tostring(selectedId)] = true
 				elseif selectedId ~= nil then
-
-
 					state["OpeningOfferBrainrot" .. tostring(slotIndex)] = nil
 					local refreshSettings = rawget(_G, "__TUFFHUB_REFRESH_DYNAMIC_DROPDOWNS")
 					if type(refreshSettings) == "function" then
@@ -15264,7 +16651,6 @@ if IS_MINIGAME_PLACE then
 					end
 				end
 			end
-
 			local best = topBrainrotsAO2()
 			local bestIndex = 1
 			for slotIndex = 1, 6 do
@@ -15282,14 +16668,12 @@ if IS_MINIGAME_PLACE then
 			end
 			return desired
 		end
-
 		local function tokenBalanceAO2()
 			return math.max(
 				0,
 				math.floor(tonumber(tryAO2(PlayerDataAO2, {"TradeTokens"})) or 0)
 			)
 		end
-
 		local function setTokensAO2(expectedGuid, amount)
 			amount = math.max(0, math.floor(tonumber(amount) or 0))
 			for _ = 1, 3 do
@@ -15328,11 +16712,9 @@ if IS_MINIGAME_PLACE then
 			end
 			return false
 		end
-
 		local function setItemsAO2(expectedGuid, desired)
 			for attempt = 1, 3 do
 				if not openingStillActiveAO2(expectedGuid) then return false end
-
 				for slotIndex = 1, 6 do
 					if not openingStillActiveAO2(expectedGuid) then return false end
 					local desiredId = desired[slotIndex]
@@ -15349,7 +16731,6 @@ if IS_MINIGAME_PLACE then
 						))
 					end
 				end
-
 				for slotIndex = 1, 6 do
 					if not openingStillActiveAO2(expectedGuid) then return false end
 					local desiredId = desired[slotIndex]
@@ -15366,7 +16747,6 @@ if IS_MINIGAME_PLACE then
 						))
 					end
 				end
-
 				if not openingStillActiveAO2(expectedGuid) then return false end
 				local verified = true
 				for slotIndex = 1, 6 do
@@ -15380,7 +16760,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return false
 		end
-
 		while screenGui.Parent do
 			task.wait(0.05)
 			local state = autoServerHopState.Utility
@@ -15390,31 +16769,26 @@ if IS_MINIGAME_PLACE then
 				continue
 			end
 			local customItems = state.CustomOpeningOffer == true
+			local customTokens = state.CustomOpeningTokens == true
 			local showItems = state.AutoshowBestBrainrots == true or customItems
-			local showTokens = state.AutoshowAllTokens == true
+			local showTokens = state.AutoshowAllTokens == true or customTokens
 			if not showItems and not showTokens then
 				appliedSignatureAO2 = nil
 				scheduledSignatureAO2 = nil
 				continue
 			end
-
 			local guid = guidAO2()
 			if not guid then
 				appliedSignatureAO2 = nil
 				scheduledSignatureAO2 = nil
 				continue
 			end
-
 			if autoOfferOwnsWagerAO2(guid) then
-
-
-
 				continue
 			end
 			if tryAO2(NegotiationAO2, {"player1", "ready"}) == true then
 				continue
 			end
-
 			local signature = tostring(guid)
 				.. ":I=" .. tostring(showItems)
 				.. ":C=" .. tostring(customItems)
@@ -15425,20 +16799,19 @@ if IS_MINIGAME_PLACE then
 				.. ":B5=" .. tostring(state.OpeningOfferBrainrot5)
 				.. ":B6=" .. tostring(state.OpeningOfferBrainrot6)
 				.. ":T=" .. tostring(showTokens)
+				.. ":TC=" .. tostring(customTokens)
+				.. ":TA=" .. tostring(state.OpeningOfferTokenAmount)
 			if appliedSignatureAO2 == signature then continue end
-
 			if scheduledSignatureAO2 ~= signature then
 				scheduledSignatureAO2 = signature
 				scheduleStartedAtAO2 = os.clock()
 			end
-
 			local initialDelay = math.clamp(
 				(state.CustomDelays == true and tonumber(state.InitialJoinDelay)) or 1.125,
 				0,
 				5
 			)
 			if os.clock() - scheduleStartedAtAO2 < initialDelay then continue end
-
 			if state.AutoTradeChat == true
 				and tostring(state.AutoTradeMessage or "") ~= ""
 			then
@@ -15451,18 +16824,23 @@ if IS_MINIGAME_PLACE then
 					)
 					if os.clock() - sentAt < postDelay then continue end
 				elseif os.clock() - scheduleStartedAtAO2 < initialDelay + 3.0 then
-
-
 					continue
 				end
 			end
-
 			if guidAO2() ~= guid then continue end
-
 			local itemOk = true
 			local tokenOk = true
 			if showTokens and openingStillActiveAO2(guid) then
-				tokenOk = setTokensAO2(guid, tokenBalanceAO2())
+				local desiredTokens
+				if state.AutoshowAllTokens == true then
+					desiredTokens = tokenBalanceAO2()
+				else
+					desiredTokens = math.min(
+						tokenBalanceAO2(),
+						math.max(0, math.floor(tonumber(state.OpeningOfferTokenAmount) or 0))
+					)
+				end
+				tokenOk = setTokensAO2(guid, desiredTokens)
 			end
 			if showItems and openingStillActiveAO2(guid) then
 				itemOk = setItemsAO2(
@@ -15470,18 +16848,11 @@ if IS_MINIGAME_PLACE then
 					customItems and customBrainrotsAO2(state) or topBrainrotsAO2()
 				)
 			end
-
 			if openingStillActiveAO2(guid) and itemOk and tokenOk then
 				appliedSignatureAO2 = signature
 			end
 		end
 	end)
-
-
-
-
-
-
 	task.spawn(function()
 		while screenGui.Parent do
 			local state = autoServerHopState and autoServerHopState.Utility
@@ -15498,7 +16869,7 @@ if IS_MINIGAME_PLACE then
 			task.wait(0.10)
 		end
 		if not screenGui.Parent then return end
-		local RSVC = game:GetService("ReplicatedStorage")
+		local RSVC = ReplicatedStorage
 		local ClientModulesVC = RSVC:WaitForChild("Client"):WaitForChild("Modules")
 		local SharedVC = RSVC:WaitForChild("Shared")
 		local function requireVC(moduleScript)
@@ -15529,44 +16900,29 @@ if IS_MINIGAME_PLACE then
 		}
 		local gameLabelVC = {}
 		for label, id in pairs(gameMapVC) do gameLabelVC[id] = label end
-
-		local function tryVC(root, path)
-			if not root then return nil end
-			local ok, value = pcall(function() return root:TryIndex(path) end)
-			return ok and value or nil
-		end
-
+		local tryVC = safeTryIndex
 		local function refreshVC()
-			local active
-			local negotiation
-			pcall(function() active = ReplicatorVC.get("ActiveMinigame") end)
-			pcall(function() negotiation = ReplicatorVC.get("ActiveNegotiation") end)
-			if active ~= nil then ActiveVC = active end
-			if negotiation ~= nil then NegotiationVC = negotiation end
+			ActiveVC = safeRepGet(ReplicatorVC, "ActiveMinigame") or ActiveVC
+			NegotiationVC = safeRepGet(ReplicatorVC, "ActiveNegotiation") or NegotiationVC
 		end
-
 		local function votingVC()
 			refreshVC()
 			return tryVC(ActiveVC, {"voting"})
 		end
-
 		local function phaseVC()
 			refreshVC()
 			return tryVC(ActiveVC, {"phase"})
 		end
-
 		local function negotiationGuidVC()
 			refreshVC()
 			return tryVC(NegotiationVC, {"guid"})
 		end
-
 		local function fireVoteVC(gameId, bestOf)
 			if not VoteRemoteVC then return false end
 			return pcall(function()
 				VoteRemoteVC:FireServer(gameId, bestOf)
 			end)
 		end
-
 		local function stillVoteVC(generation, wantedPhase, selectionRound)
 			if autoServerHopState.Utility.PauseScript == true
 				or autoServerHopState.Utility.PauseMinigameFeatures == true
@@ -15585,13 +16941,11 @@ if IS_MINIGAME_PLACE then
 			local liveRound = tonumber(voting.voteRound) or selectionRound
 			return liveRound == selectionRound, voting
 		end
-
 		local function sendGameVC(generation, selectionRound, gameId)
 			local valid = stillVoteVC(generation, "game", selectionRound)
 			if not valid or not gameLabelVC[gameId] then return false end
 			return fireVoteVC(gameId, nil)
 		end
-
 		local function sendRoundsVC(generation, selectionRound, bestOf)
 			local valid = stillVoteVC(generation, "rounds", selectionRound)
 			if not valid or (bestOf ~= 1 and bestOf ~= 3 and bestOf ~= 5) then
@@ -15599,7 +16953,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return fireVoteVC(nil, bestOf)
 		end
-
 		local function startGameVoteVC()
 			voteGenerationVC += 1
 			local generation = voteGenerationVC
@@ -15608,7 +16961,6 @@ if IS_MINIGAME_PLACE then
 				and tonumber(voting.voteRound) or tonumber(voteRoundSeenVC) or 1
 			local state = autoServerHopState.Utility
 			local primary = gameMapVC[state.GameToChoose] or "PopcornBurst"
-
 			local function submit(choice)
 				if not sendGameVC(generation, selectionRound, choice) then return end
 				task.spawn(function()
@@ -15620,7 +16972,6 @@ if IS_MINIGAME_PLACE then
 					end
 				end)
 			end
-
 			local waitSeconds = math.clamp(
 				tonumber(
 					selectionRound <= 1
@@ -15674,7 +17025,6 @@ if IS_MINIGAME_PLACE then
 				)
 			end)
 		end
-
 		local function startRoundsVoteVC()
 			voteGenerationVC += 1
 			local generation = voteGenerationVC
@@ -15684,19 +17034,17 @@ if IS_MINIGAME_PLACE then
 			local state = autoServerHopState.Utility
 			local primary = tonumber(state.RoundsToChoose) or 1
 			if primary ~= 1 and primary ~= 3 and primary ~= 5 then primary = 1 end
-
 			local function submit(choice)
 				sendRoundsVC(generation, selectionRound, choice)
 			end
-
 			local waitSeconds = math.clamp(
 				tonumber(
 					selectionRound <= 1
-						and state.AutoChooseRound1Delay
+						and state.AutoChooseRoundsRound1Delay
 						or (
 							selectionRound == 2
-								and state.AutoChooseRound2Delay
-								or state.AutoChooseRound3Delay
+								and state.AutoChooseRoundsRound2Delay
+								or state.AutoChooseRoundsRound3Delay
 						)
 				) or 0,
 				0,
@@ -15740,7 +17088,6 @@ if IS_MINIGAME_PLACE then
 				)
 			end)
 		end
-
 		while screenGui.Parent do
 			task.wait(0.05)
 			local state = autoServerHopState.Utility
@@ -15769,7 +17116,6 @@ if IS_MINIGAME_PLACE then
 				continue
 			end
 			voteSuspendedVC = false
-
 			local phase = phaseVC()
 			local voting = votingVC()
 			if phase == nil or type(voting) ~= "table" then
@@ -15777,7 +17123,6 @@ if IS_MINIGAME_PLACE then
 				voteRoundSeenVC = nil
 				continue
 			end
-
 			local votePhase = voting.votePhase or "game"
 			local voteRound = tonumber(voting.voteRound) or 1
 			if votePhase == "game" then
@@ -15803,8 +17148,6 @@ if IS_MINIGAME_PLACE then
 			end
 		end
 	end)
-
-
 	task.spawn(function()
 		while screenGui.Parent do
 			local state = autoServerHopState and autoServerHopState.Utility
@@ -15816,7 +17159,7 @@ if IS_MINIGAME_PLACE then
 			task.wait(0.10)
 		end
 		if not screenGui.Parent then return end
-		local RSLG = game:GetService("ReplicatedStorage")
+		local RSLG = ReplicatedStorage
 		local function requireLG(moduleScript)
 			while screenGui.Parent do
 				local ok, result = pcall(require, moduleScript)
@@ -15857,19 +17200,10 @@ if IS_MINIGAME_PLACE then
 				configuredRarityLG[tostring(name)] = tostring(rarity)
 			end
 		end
-
-		local function tryLG(root, path)
-			if not root then return nil end
-			local ok, value = pcall(function() return root:TryIndex(path) end)
-			return ok and value or nil
-		end
-
+		local tryLG = safeTryIndex
 		local function refreshLG()
-			local fresh
-			pcall(function() fresh = ReplicatorLG.get("ActiveMinigame") end)
-			if fresh ~= nil then ActiveLG = fresh end
+			ActiveLG = safeRepGet(ReplicatorLG, "ActiveMinigame") or ActiveLG
 		end
-
 		local function cacheContextLG()
 			local gameId = tryLG(ActiveLG, {"session", "gameId"})
 			if type(gameId) == "string" and gameId ~= "" then
@@ -15884,7 +17218,6 @@ if IS_MINIGAME_PLACE then
 				lastWagerLG = wager
 			end
 		end
-
 		local function itemNameLG(item)
 			if type(item) ~= "table" then return nil end
 			local name = item.name or item.Name
@@ -15893,7 +17226,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return name ~= nil and tostring(name) or nil
 		end
-
 		local function itemRarityLG(item, name)
 			if type(item) ~= "table" then return nil end
 			local rarity = item.rarity or item.Rarity or item.BrainrotRarity
@@ -15908,7 +17240,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return "Unknown"
 		end
-
 		local function isBrainrotLG(item)
 			if type(item) ~= "table" then return false end
 			if GetItemTypeLG then
@@ -15917,7 +17248,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return itemNameLG(item) ~= nil
 		end
-
 		local function appendWagerLG(parts, won, wager)
 			wager = type(wager) == "table" and wager or {}
 			local currency = tonumber(won and wager.oppCurrency or wager.myCurrency) or 0
@@ -15932,7 +17262,6 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 		end
-
 		local function printResultLG(result)
 			if type(result) ~= "table" then return end
 			local winner = tonumber(result.winnerIndex)
@@ -15943,7 +17272,6 @@ if IS_MINIGAME_PLACE then
 				.. ":" .. tostring(result.round or result.roundIndex or result.bestOf or "")
 			if identity == lastPrintedLG then return end
 			lastPrintedLG = identity
-
 			if autoServerHopState.Utility.PauseScript ~= true
 				and autoServerHopState.Utility.PauseMinigameFeatures ~= true
 				and autoServerHopState.Utility.PrintWinsLossesToTerminal == true
@@ -15959,13 +17287,11 @@ if IS_MINIGAME_PLACE then
 				print(string.rep("\\", 10))
 			end
 		end
-
 		local function bindObserverLG()
 			if not ActiveLG or ActiveLG == observedActiveLG then return end
 			local object = ActiveLG
 			local ok = pcall(function()
 				object:Observe({"matchResult"}, function(result)
-
 					if object == ActiveLG and type(result) == "table" then
 						queuedResultLG = result
 					end
@@ -15973,13 +17299,11 @@ if IS_MINIGAME_PLACE then
 			end)
 			if ok then observedActiveLG = object end
 		end
-
 		while screenGui.Parent do
-			task.wait(0.05)
+			task.wait(0.10)
 			refreshLG()
 			bindObserverLG()
 			cacheContextLG()
-
 			local gameId = tryLG(ActiveLG, {"session", "gameId"})
 			local phase = tryLG(ActiveLG, {"phase"})
 			local playingNow = phase == "Playing"
@@ -15989,12 +17313,10 @@ if IS_MINIGAME_PLACE then
 				lastPrintedLG = nil
 			end
 			wasPlayingLG = playingNow
-
 			if type(gameId) == "string" and gameId ~= "" then
 				if gameId ~= lastGameLG then lastPrintedLG = nil end
 				lastGameLG = gameId
 			end
-
 			local result = queuedResultLG or tryLG(ActiveLG, {"matchResult"})
 			queuedResultLG = nil
 			if result ~= nil then
@@ -16002,15 +17324,7 @@ if IS_MINIGAME_PLACE then
 			end
 		end
 	end)
-
 end
-
-
-
-
-
-
-
 if IS_MINIGAME_PLACE then
 	task.spawn(function()
 		while screenGui.Parent
@@ -16019,14 +17333,12 @@ if IS_MINIGAME_PLACE then
 			task.wait(0.10)
 		end
 		if not screenGui.Parent then return end
-
-		local PlayersAB = game:GetService("Players")
-		local RSAB = game:GetService("ReplicatedStorage")
+		local PlayersAB = Players
+		local RSAB = ReplicatedStorage
 		local TextChatServiceAB = game:GetService("TextChatService")
 		local LocalPlayerAB = PlayersAB.LocalPlayer
 		local SharedAB = RSAB:WaitForChild("Shared")
 		local ClientModulesAB = RSAB:WaitForChild("Client"):WaitForChild("Modules")
-
 		local function requireAB(moduleScript)
 			while screenGui.Parent do
 				local ok, result = pcall(require, moduleScript)
@@ -16034,7 +17346,6 @@ if IS_MINIGAME_PLACE then
 				task.wait(0.25)
 			end
 		end
-
 		local ReplicatorAB = requireAB(ClientModulesAB:WaitForChild("ReplicatorClient"))
 		local SortItemsAB = requireAB(ClientModulesAB:WaitForChild("utils"):WaitForChild("SortItems"))
 		local RemotesAB = requireAB(SharedAB:WaitForChild("Remotes"))
@@ -16055,7 +17366,6 @@ if IS_MINIGAME_PLACE then
 		) then
 			return
 		end
-
 		local ClaimBoothAB = RemotesAB.ClaimBooth
 		local ListBoothOfferingAB = RemotesAB.ListBoothOffering
 		local RemoveBoothOfferingAB = RemotesAB.RemoveBoothOffering
@@ -16063,7 +17373,6 @@ if IS_MINIGAME_PLACE then
 		if not (ClaimBoothAB and ListBoothOfferingAB and RemoveBoothOfferingAB and ChangeBoothMessageAB) then
 			return
 		end
-
 		local PlayerDataAB
 		local TradingBoothsAB
 		local ActiveNegotiationAB
@@ -16078,7 +17387,6 @@ if IS_MINIGAME_PLACE then
 		local BOOTH_REPLICATION_CONFIRM_TIMEOUT_AB = 1.25
 		local BOOTH_MESSAGE_RETRY_HOLD_AB = 4.00
 		autoServerHopState.RuntimeBoothMutationBusy = false
-
 		if type(BrainrotsConfigAB) == "table" then
 			for _, rarity in ipairs(BrainrotsConfigAB.ClassNames or {}) do
 				local entries = (BrainrotsConfigAB.Chances or {})[rarity]
@@ -16094,31 +17402,22 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 		end
-
 		local function refreshAB()
-			local playerData, booths, negotiation, minigame
-			pcall(function() playerData = ReplicatorAB.get("PlayerData") end)
-			pcall(function() booths = ReplicatorAB.get("TradingBooths") end)
-			pcall(function() negotiation = ReplicatorAB.get("ActiveNegotiation") end)
-			pcall(function() minigame = ReplicatorAB.get("ActiveMinigame") end)
-			if playerData ~= nil then PlayerDataAB = playerData end
-			if booths ~= nil then TradingBoothsAB = booths end
-			if negotiation ~= nil then ActiveNegotiationAB = negotiation end
-			if minigame ~= nil then ActiveMinigameAB = minigame end
+			PlayerDataAB = safeRepGet(ReplicatorAB, "PlayerData") or PlayerDataAB
+			TradingBoothsAB = safeRepGet(ReplicatorAB, "TradingBooths") or TradingBoothsAB
+			ActiveNegotiationAB = safeRepGet(ReplicatorAB, "ActiveNegotiation") or ActiveNegotiationAB
+			ActiveMinigameAB = safeRepGet(ReplicatorAB, "ActiveMinigame") or ActiveMinigameAB
 		end
-
-		local function tryAB(root, path)
-			if not root then return nil end
-			local ok, value = pcall(function() return root:TryIndex(path) end)
-			return ok and value or nil
-		end
-
+		local tryAB = safeTryIndex
+		local inventoryCacheAB, inventoryCacheAtAB
 		local function inventoryAB()
+			local now = os.clock()
+			if inventoryCacheAB and now - (inventoryCacheAtAB or 0) < 0.15 then return inventoryCacheAB end
 			refreshAB()
 			local inventory = tryAB(PlayerDataAB, {"Inventory"})
-			return type(inventory) == "table" and inventory or nil
+			if type(inventory) == "table" then inventoryCacheAB, inventoryCacheAtAB = inventory, now; return inventory end
+			inventoryCacheAB = nil
 		end
-
 		local function myBoothStateAB(skipRefresh)
 			if not skipRefresh then refreshAB() end
 			local data = TradingBoothsAB and TradingBoothsAB.Data
@@ -16129,12 +17428,10 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 		end
-
 		local function boothMutationAllowedAB()
 			if autoServerHopState.Utility.PauseScript == true
 			or autoServerHopState.Utility.PauseMinigameFeatures == true
 				or autoServerHopState.Utility.AutoBooth ~= true
-				or autoServerHopState.RuntimeAutoSitBusy == true
 				or LocalPlayerAB:GetAttribute("Seated") == true
 			then
 				return false
@@ -16148,14 +17445,11 @@ if IS_MINIGAME_PLACE then
 			then
 				return false
 			end
-
 			local character = LocalPlayerAB.Character
 			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 			local root = character and character:FindFirstChild("HumanoidRootPart")
 			if root and root:FindFirstChild("CustomSeatWeld") then return false end
 			if humanoid then
-
-
 				local gameObjects = workspace:FindFirstChild("GameObjects")
 				local placeSpecific = gameObjects and gameObjects:FindFirstChild("PlaceSpecific")
 				local tradePlaza = placeSpecific and placeSpecific:FindFirstChild("trade_plaza")
@@ -16178,7 +17472,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return true
 		end
-
 		local function waitMutationSlotAB()
 			while screenGui.Parent and autoServerHopState.Utility.AutoBooth == true do
 				if not boothMutationAllowedAB() then return false end
@@ -16191,20 +17484,13 @@ if IS_MINIGAME_PLACE then
 			end
 			return false
 		end
-
 		local function invokeMutationAB(remote, rejectFalse, ...)
 			if not remote or not waitMutationSlotAB() then return false, nil end
-
-
 			if not boothMutationAllowedAB()
 				or autoServerHopState.RuntimeBoothMutationBusy == true
 			then
 				return false, nil
 			end
-
-
-
-
 			autoServerHopState.RuntimeBoothMutationBusy = true
 			local args = table.pack(...)
 			local ok, result = pcall(function()
@@ -16217,12 +17503,10 @@ if IS_MINIGAME_PLACE then
 			end
 			return true, result
 		end
-
 		local function boothFolderAB()
 			local gameObjects = workspace:FindFirstChild("GameObjects")
 			return gameObjects and gameObjects:FindFirstChild("Booths") or nil
 		end
-
 		local function claimAnyBoothAB()
 			local state, key = myBoothStateAB()
 			if state then return state, key end
@@ -16243,8 +17527,6 @@ if IS_MINIGAME_PLACE then
 								if state then return state, key end
 								task.wait(0.05)
 							until os.clock() >= deadline
-
-
 							return myBoothStateAB()
 						end
 					end
@@ -16252,7 +17534,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return myBoothStateAB()
 		end
-
 		local function isMetaAB(item)
 			if type(item) ~= "table" then return false end
 			local name = item.name or (item.sub and item.sub.name)
@@ -16264,7 +17545,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return type(name) == "string" and string.find(string.lower(name), "%f[%a]meta%f[%A]") ~= nil
 		end
-
 		local function rarityAB(item)
 			if type(item) ~= "table" then return nil end
 			if isMetaAB(item) then return "Meta" end
@@ -16277,14 +17557,58 @@ if IS_MINIGAME_PLACE then
 			local name = item.name or (item.sub and item.sub.name)
 			local configured = type(name) == "string" and configuredRarityAB[name] or nil
 			if type(configured) == "string" then return configured end
-			local itemType
-			pcall(function() itemType = GetItemTypeAB(item) end)
-			if itemType ~= "Brainrot" then return nil end
-			local value
-			pcall(function() value = EconomyMathAB.GetBrainrotRarity(name) end)
-			return value
+			local okType, itemType = pcall(GetItemTypeAB, item)
+			if not okType or itemType ~= "Brainrot" then return nil end
+			local okRarity, value = pcall(EconomyMathAB.GetBrainrotRarity, name)
+			return okRarity and value or nil
 		end
-
+		local protectedCacheStateAB, protectedCacheAtAB, protectedCacheIdsAB, protectedCacheRarityCountsAB
+		local function simpleAutofarmProtectedBoothIdsAB(state)
+			local now = os.clock()
+			if state == protectedCacheStateAB and now - (protectedCacheAtAB or 0) < 0.20 then
+				return protectedCacheIdsAB, protectedCacheRarityCountsAB
+			end
+			local protected, protectedRarityCounts = {}, {}
+			if autoServerHopState.Utility.SimpleAutofarmEnabled ~= true then
+				protectedCacheStateAB, protectedCacheAtAB = state, now
+				protectedCacheIdsAB, protectedCacheRarityCountsAB = protected, protectedRarityCounts
+				return protected, protectedRarityCounts
+			end
+			-- Simple Autofarm always keeps the six best owned brainrots out of the
+			-- booth. This is deliberately based on the game's own SortItems order,
+			-- rather than only protecting six copies of the current highest rarity.
+			-- That way, if fewer than six copies exist at the top tier, the remaining
+			-- protected slots roll down into the next-best tiers automatically.
+			local combined = {}
+			for id, item in pairs(inventoryAB() or {}) do
+				combined[tostring(id)] = item
+			end
+			for offerId, item in pairs(state and state.items or {}) do
+				local id = type(item) == "table" and (item.guid or item.id) or offerId
+				combined[tostring(id or offerId)] = item
+			end
+			local _, sorted = pcall(SortItemsAB, combined)
+			if type(sorted) ~= "table" then
+				sorted = {}
+				for id in pairs(combined) do sorted[#sorted + 1] = id end
+			end
+			local protectedCount = 0
+			for _, id in ipairs(sorted) do
+				local sid = tostring(id)
+				local item = combined[sid] or combined[id]
+				local rarity = rarityAB(item)
+				if rarity then
+					protected[sid] = true
+					protectedRarityCounts[rarity] =
+						(protectedRarityCounts[rarity] or 0) + 1
+					protectedCount += 1
+					if protectedCount >= 6 then break end
+				end
+			end
+			protectedCacheStateAB, protectedCacheAtAB = state, now
+			protectedCacheIdsAB, protectedCacheRarityCountsAB = protected, protectedRarityCounts
+			return protected, protectedRarityCounts
+		end
 		local function boothContainsItemAB(state, itemId)
 			local wanted = tostring(itemId)
 			for offerId, item in pairs(state and state.items or {}) do
@@ -16296,13 +17620,11 @@ if IS_MINIGAME_PLACE then
 			end
 			return false
 		end
-
 		local function boothOfferCountAB(state)
 			local count = 0
 			for _ in pairs(state and state.offers or {}) do count += 1 end
 			return count
 		end
-
 		local function ownedInventoryCountAB(state)
 			local seen = {}
 			local count = 0
@@ -16317,7 +17639,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return count
 		end
-
 		local function maxBoothSlotsAB()
 			local maximum = tonumber(autoServerHopState.RuntimeBoothMaxSlots) or 3
 			pcall(function()
@@ -16333,13 +17654,11 @@ if IS_MINIGAME_PLACE then
 			autoServerHopState.RuntimeBoothMaxSlots = maximum
 			return maximum
 		end
-
 		local function brainrotNameAB(item)
 			if type(item) ~= "table" then return nil end
 			local name = item.name or (item.sub and item.sub.name)
 			return type(name) == "string" and name or nil
 		end
-
 		local function brainrotMutationAB(item)
 			if type(item) ~= "table" then return nil end
 			local mutation = item.mutation
@@ -16347,7 +17666,6 @@ if IS_MINIGAME_PLACE then
 				or (item.sub and (item.sub.mutation or item.sub.Mutation))
 			return type(mutation) == "string" and mutation or nil
 		end
-
 		local function brainrotTraitsAB(item)
 			if type(item) ~= "table" then return {} end
 			local traits = item.traits
@@ -16363,21 +17681,20 @@ if IS_MINIGAME_PLACE then
 			end
 			return {}
 		end
-
 		local function itemPassesGlobalFiltersAB(item)
+			-- Eternal is receive-only and can never be listed by Auto Booth.
+			if rarityAB(item) == "Eternal" then return false end
 			local utility = autoServerHopState.Utility
 			local avoidNames = utility.AutoBoothAvoidBrainrots
 			local avoidMutations = utility.AutoBoothAvoidMutations
 			local avoidTraits = utility.AutoBoothAvoidTraits
-			local specificOnly = utility.AutoBoothSpecificOnly == true
-
+			local specificOnly = false
 			local hasAvoidNames =
 				type(avoidNames) == "table" and next(avoidNames) ~= nil
 			local hasAvoidMutations =
 				type(avoidMutations) == "table" and next(avoidMutations) ~= nil
 			local hasAvoidTraits =
 				type(avoidTraits) == "table" and next(avoidTraits) ~= nil
-
 			if not specificOnly
 				and not hasAvoidNames
 				and not hasAvoidMutations
@@ -16385,7 +17702,6 @@ if IS_MINIGAME_PLACE then
 			then
 				return true
 			end
-
 			local name
 			if specificOnly or hasAvoidNames then
 				name = brainrotNameAB(item)
@@ -16400,14 +17716,12 @@ if IS_MINIGAME_PLACE then
 					end
 				end
 			end
-
 			if hasAvoidMutations then
 				local mutation = brainrotMutationAB(item)
 				if mutation and avoidMutations[mutation] == true then
 					return false
 				end
 			end
-
 			if hasAvoidTraits then
 				for _, trait in ipairs(brainrotTraitsAB(item)) do
 					if avoidTraits[tostring(trait)] == true then
@@ -16417,7 +17731,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return true
 		end
-
 		local function itemMatchesListingSpecAB(item, spec)
 			if type(item) ~= "table" or type(spec) ~= "table" then
 				return false
@@ -16428,7 +17741,6 @@ if IS_MINIGAME_PLACE then
 			return spec.Mode == "Rarity"
 				and rarityAB(item) == spec.Rarity
 		end
-
 		local function ownedChoiceCountsAB(state)
 			local seen = {}
 			local nameCounts = {}
@@ -16438,7 +17750,6 @@ if IS_MINIGAME_PLACE then
 				local key = tostring(id)
 				if seen[key] then return end
 				seen[key] = true
-
 				local name = brainrotNameAB(item)
 				if name then
 					nameCounts[name] = (nameCounts[name] or 0) + 1
@@ -16448,7 +17759,6 @@ if IS_MINIGAME_PLACE then
 					rarityCounts[rarity] = (rarityCounts[rarity] or 0) + 1
 				end
 			end
-
 			for id, item in pairs(inventoryAB() or {}) do
 				addItem(id, item)
 			end
@@ -16458,11 +17768,49 @@ if IS_MINIGAME_PLACE then
 			end
 			return nameCounts, rarityCounts
 		end
-
 		local function desiredSpecsAB(state, inventoryCount)
 			local utility = autoServerHopState.Utility
 			local specs = {}
 			local nameCounts, rarityCounts = ownedChoiceCountsAB(state)
+			if utility.SimpleAutofarmEnabled == true then
+				-- Simple Autofarm only begins booth listing once the owned inventory
+				-- reaches 91 items. Listed booth items still count as owned so the
+				-- threshold does not oscillate as items move into the booth.
+				if inventoryCount < 91 then
+					return specs
+				end
+				local _, protectedRarityCounts = simpleAutofarmProtectedBoothIdsAB(state)
+				local slotsLeft = maxBoothSlotsAB()
+				for rarityIndex = table.find(BRAINROT_RARITY_OPTIONS, "Meta"), 1, -1 do
+					local rarity = BRAINROT_RARITY_OPTIONS[rarityIndex]
+					local ownedCount = math.max(0, math.floor(tonumber(rarityCounts[rarity]) or 0))
+					local protectedCount = math.max(
+						0,
+						math.floor(tonumber(protectedRarityCounts[rarity]) or 0)
+					)
+					local count = math.max(0, ownedCount - protectedCount)
+					local listCount = math.min(count, slotsLeft)
+					for _ = 1, listCount do
+						specs[#specs + 1] = {
+							Index = #specs + 1,
+							Mode = "Rarity",
+							Rarity = rarity,
+							Price = math.clamp(
+								math.floor(tonumber(utility["FallbackTokens" .. rarity]) or 1),
+								1,
+								1000000
+							),
+							MessageWhenListed = false,
+							ListedMessage = "",
+							MessageDelay = 0,
+						}
+						slotsLeft -= 1
+						if slotsLeft <= 0 then break end
+					end
+					if slotsLeft <= 0 then break end
+				end
+				return specs
+			end
 			for index = 1, maxBoothSlotsAB() do
 				local prefix = "AutoBoothListing" .. tostring(index)
 				local enabled = utility[prefix .. "Enabled"] == true
@@ -16484,7 +17832,6 @@ if IS_MINIGAME_PLACE then
 					1,
 					100
 				)
-
 				local spec
 				if listByBrainrot and type(brainrot) == "string" and brainrot ~= "" then
 					spec = {
@@ -16499,7 +17846,6 @@ if IS_MINIGAME_PLACE then
 						Rarity = rarity,
 					}
 				end
-
 				local ownedCount = spec
 					and (
 						spec.Mode == "Brainrot"
@@ -16534,15 +17880,17 @@ if IS_MINIGAME_PLACE then
 			end
 			return specs
 		end
-
 		local function matchExistingAB(state, specs)
 			local matchedOffers, matchedSpecs = {}, {}
+			local protected = simpleAutofarmProtectedBoothIdsAB(state)
 			for offerId, offer in pairs(state and state.offers or {}) do
 				local item = state.items and state.items[offerId] or nil
+				local protectedId = tostring((type(item) == "table" and (item.guid or item.id)) or offerId)
 				local rarity = rarityAB(item)
 				local price = tonumber(offer and offer.cost and offer.cost.value)
 				for specIndex, spec in ipairs(specs) do
 					if not matchedSpecs[specIndex]
+						and protected[protectedId] ~= true
 						and itemMatchesListingSpecAB(item, spec)
 						and price == spec.Price
 						and itemPassesGlobalFiltersAB(item)
@@ -16555,7 +17903,6 @@ if IS_MINIGAME_PLACE then
 			end
 			return matchedOffers, matchedSpecs
 		end
-
 		local function removeOfferAB(offerId)
 			local suppressions = autoServerHopState.RuntimeBoothScriptRemoveUntil
 			if type(suppressions) ~= "table" then
@@ -16573,28 +17920,23 @@ if IS_MINIGAME_PLACE then
 			until os.clock() >= deadline
 			return false
 		end
-
 		local function findListingItemAB(spec, state, reserved)
 			local inventory = inventoryAB()
+			local protected = simpleAutofarmProtectedBoothIdsAB(state)
 			if not inventory or type(spec) ~= "table" then return nil end
-
-			local sorted
-			local ok = pcall(function() sorted = SortItemsAB(inventory) end)
+			local ok, sorted = pcall(SortItemsAB, inventory)
 			if not ok or type(sorted) ~= "table" then return nil end
-
 			local utility = autoServerHopState.Utility
 			local bestFirst = utility.AutoBoothListBestFirst == true
-
-
 			local first = bestFirst and 1 or #sorted
 			local last = bestFirst and #sorted or 1
 			local step = bestFirst and 1 or -1
-
 			for index = first, last, step do
 				local id = sorted[index]
 				local sid = tostring(id)
 				local item = inventory[id] or inventory[sid]
 				if not reserved[sid]
+					and protected[sid] ~= true
 					and type(item) == "table"
 					and item.locked ~= true
 					and itemMatchesListingSpecAB(item, spec)
@@ -16609,7 +17951,6 @@ if IS_MINIGAME_PLACE then
 				end
 			end
 		end
-
 		local function sendPublicChatAB(message)
 			if autoServerHopState.Utility.PauseScript == true or autoServerHopState.Utility.PauseMinigameFeatures == true then return false end
 			message = tostring(message or "")
@@ -16624,7 +17965,6 @@ if IS_MINIGAME_PLACE then
 			local say = events and events:FindFirstChild("SayMessageRequest")
 			return say and pcall(say.FireServer, say, message, "All") or false
 		end
-
 		local function scheduleBoothMessageAB(message, delaySeconds, guardKey)
 			message = tostring(message or "")
 			if message == "" then return end
@@ -16640,7 +17980,6 @@ if IS_MINIGAME_PLACE then
 				end
 			end)
 		end
-
 		local function listItemAB(itemId, spec)
 			local inventory = inventoryAB()
 			local item = inventory and (inventory[itemId] or inventory[tostring(itemId)])
@@ -16648,7 +17987,6 @@ if IS_MINIGAME_PLACE then
 			local tradeable = false
 			pcall(function() tradeable = ItemIsTradeableAB(item) == true end)
 			if not tradeable then return false end
-
 			local invoked = invokeMutationAB(ListBoothOfferingAB, true, itemId, spec.Price)
 			if not invoked then return false end
 			local deadline = os.clock() + BOOTH_REPLICATION_CONFIRM_TIMEOUT_AB
@@ -16668,7 +18006,6 @@ if IS_MINIGAME_PLACE then
 			until os.clock() >= deadline
 			return false
 		end
-
 		local function updateBoothNameAB(state)
 			local wanted = string.sub(tostring(autoServerHopState.Utility.AutoBoothName or ""), 1, 70)
 			local current = state.details and tostring(state.details.BoothMessage or "") or ""
@@ -16681,26 +18018,21 @@ if IS_MINIGAME_PLACE then
 			end
 			return false
 		end
-
 		local function maintainBoothAB()
 			if not boothMutationAllowedAB() then return end
 			local state = myBoothStateAB(true)
 			if not state then state = select(1, claimAnyBoothAB()) end
 			if not state then return end
-
 			if updateBoothNameAB(state) then return end
-
 			if autoServerHopState.Utility.AutoBoothMessageAllListingsCompleted ~= true then
 				configuredCompleteMessagedAB = false
 			end
 			if autoServerHopState.Utility.AutoBoothMessageAllPossibleCompleted ~= true then
 				possibleCompleteMessagedAB = false
 			end
-
 			local inventoryCount = ownedInventoryCountAB(state)
 			local specs = desiredSpecsAB(state, inventoryCount)
 			local boothCapacity = maxBoothSlotsAB()
-
 			local matchedOffers, matchedSpecs = matchExistingAB(state, specs)
 			for offerId in pairs(state.offers or {}) do
 				if not matchedOffers[tostring(offerId)] then
@@ -16710,12 +18042,10 @@ if IS_MINIGAME_PLACE then
 					return
 				end
 			end
-
 			local matchedCount = 0
 			for _ in pairs(matchedSpecs) do matchedCount += 1 end
 			local allConfiguredComplete =
 				#specs > 0 and matchedCount >= #specs
-
 			if allConfiguredComplete then
 				if not configuredCompleteMessagedAB
 					and autoServerHopState.Utility.AutoBoothMessageAllListingsCompleted == true
@@ -16730,12 +18060,10 @@ if IS_MINIGAME_PLACE then
 			else
 				configuredCompleteMessagedAB = false
 			end
-
 			if #specs == 0 then
 				possibleCompleteMessagedAB = false
 				return
 			end
-
 			local offerCount = boothOfferCountAB(state)
 			if offerCount >= boothCapacity then
 				if not possibleCompleteMessagedAB
@@ -16750,20 +18078,15 @@ if IS_MINIGAME_PLACE then
 				end
 				return
 			end
-
 			if allConfiguredComplete then
-
-
 				possibleCompleteMessagedAB = false
 				return
 			end
-
 			local reserved = {}
 			for offerId, item in pairs(state.items or {}) do
 				local id = type(item) == "table" and (item.guid or item.id) or offerId
 				reserved[tostring(id or offerId)] = true
 			end
-
 			for specIndex, spec in ipairs(specs) do
 				if not matchedSpecs[specIndex] then
 					local itemId = findListingItemAB(spec, state, reserved)
@@ -16775,8 +18098,6 @@ if IS_MINIGAME_PLACE then
 					end
 				end
 			end
-
-
 			if not possibleCompleteMessagedAB
 				and autoServerHopState.Utility.AutoBoothMessageAllPossibleCompleted == true
 			then
@@ -16786,40 +18107,23 @@ if IS_MINIGAME_PLACE then
 				)
 			end
 		end
-
 		while screenGui.Parent do
 			if autoServerHopState.Utility.PauseScript ~= true
 			and autoServerHopState.Utility.PauseMinigameFeatures ~= true
 				and autoServerHopState.Utility.AutoBooth == true
 			then
 				local ok = pcall(maintainBoothAB)
-				if not ok then
-					task.wait(0.50)
-				end
+				if not ok then task.wait(0.50) end
 			else
 				configuredCompleteMessagedAB = false
 				possibleCompleteMessagedAB = false
 			end
-			task.wait(0.10)
+			task.wait(0.25)
 		end
 	end)
 end
-
-
-
-
-
-
 if IS_MINIGAME_PLACE then
-
-
-
-
-
-
 task.spawn(function()
-
-
 while screenGui.Parent do
     local flags = rawget(_G, "__TUFFHUB_MINIGAME_AUTOPLAY")
     local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
@@ -16841,30 +18145,7 @@ while screenGui.Parent do
     task.wait(0.10)
 end
 if not screenGui.Parent then return end
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
 local CollectionService = game:GetService("CollectionService")
-local HttpService = game:GetService("HttpService")
-
 local function requireWhenReadyMG(moduleScript)
     while screenGui.Parent do
         local ok, result = pcall(require, moduleScript)
@@ -16872,7 +18153,6 @@ local function requireWhenReadyMG(moduleScript)
         task.wait(0.25)
     end
 end
-
 local ClientGlobals = requireWhenReadyMG(
     ReplicatedStorage:WaitForChild("Client")
         :WaitForChild("Modules")
@@ -16886,7 +18166,6 @@ if not (ClientGlobals and Remotes) then return end
 local ActiveMinigame = ClientGlobals.ActiveMinigame
 local MinigameGameAction = Remotes.MinigameGameAction
 local LocalPlayer = Players.LocalPlayer
-
 local MINIGAME_AUTOPLAY_KEY = "__TUFFHUB_MINIGAME_AUTOPLAY"
 local function minigameAutoplayEnabled(id)
     local flags = rawget(_G, MINIGAME_AUTOPLAY_KEY)
@@ -16898,10 +18177,8 @@ local function minigameAutoplayEnabled(id)
         and type(flags) == "table"
         and flags[id] == true
 end
-
 local scriptEnabled = true
 local GLOBAL_KEY = "__TSUNAMI_UNIVERSAL_SMART_MINIGAMES_V13"
-
 local oldController = rawget(_G, GLOBAL_KEY)
     or rawget(_G, "__TSUNAMI_UNIVERSAL_SMART_MINIGAMES_V11")
     or rawget(_G, "__TSUNAMI_UNIVERSAL_SMART_MINIGAMES_V10")
@@ -16918,13 +18195,11 @@ if oldController and type(oldController.Destroy) == "function" then
     pcall(function() oldController:Destroy() end)
 end
 rawset(_G, GLOBAL_KEY, nil)
-
 local controller = {
     destroyed = false,
     startedAt = os.clock(),
 }
 rawset(_G, GLOBAL_KEY, controller)
-
 local function envFunction(name)
     local environments = {}
     local function add(env)
@@ -16934,17 +18209,14 @@ local function envFunction(name)
         end
         environments[#environments + 1] = env
     end
-
     add(_G)
     pcall(function() if getgenv then add(getgenv()) end end)
     pcall(function() if getrenv then add(getrenv()) end end)
     pcall(function() if getfenv then add(getfenv(0)) end end)
-
     local aliases = { name }
     if name == "request" or name == "http_request" then
         aliases = { "request", "http_request", "httprequest", "krnl_request" }
     end
-
     for _, env in ipairs(environments) do
         for _, alias in ipairs(aliases) do
             local ok, value = pcall(function() return env[alias] end)
@@ -16962,39 +18234,28 @@ local function envFunction(name)
     end
     return nil
 end
-
 local function tryIndex(path)
-    local ok, value = pcall(function()
-        return ActiveMinigame:TryIndex(path)
-    end)
+    local ok, value = pcall(ActiveMinigame.TryIndex, ActiveMinigame, path)
     return ok and value or nil
 end
-
 local function safeIndex(value, key)
     if value == nil then return nil end
     local ok, result = pcall(function() return value[key] end)
     return ok and result or nil
 end
-
 local function gameId()
     return tryIndex({ "session", "gameId" })
 end
-
 local function publicPhase()
     return tryIndex({ "session", "public", "phase" })
 end
-
 local function seatIndex()
     return tonumber(tryIndex({ "session", "private", "seatIndex" }))
 end
-
 controller.MoveDelaySeconds = function(id)
-
-
     if id == "PopcornBurst" then
         return 0
     end
-
     local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
     if type(utility) ~= "table" or type(id) ~= "string" then
         return 0
@@ -17005,9 +18266,7 @@ controller.MoveDelaySeconds = function(id)
         5
     )
 end
-
 controller.MoveDelayApplied = {}
-
 local MOVE_DELAY_RESERVE = {
     ConnectFour = 2.00,
     CandyBomb = 1.25,
@@ -17016,7 +18275,6 @@ local MOVE_DELAY_RESERVE = {
     Knockout = 3.25,
     Battleship = 1.25,
 }
-
 local function moveDelayEligibleAction(id, action)
     if id == "ConnectFour" then
         return action == "DropChip"
@@ -17025,20 +18283,14 @@ local function moveDelayEligibleAction(id, action)
     elseif id == "NumberGuess" then
         return action == "PickNumber" or action == "Guess"
     elseif id == "FootballDraft" then
-
         return action == "Reroll" or action == "Pick"
     elseif id == "Knockout" then
-
-
         return action == "LockAim"
     elseif id == "Battleship" then
-
-
         return action == "Fire"
     end
     return false
 end
-
 local function fireAction(action, ...)
     local currentGameId = gameId()
     if controller.destroyed
@@ -17047,20 +18299,16 @@ local function fireAction(action, ...)
     then
         return false
     end
-
     local args = table.pack(...)
     local requestedDelay = controller.MoveDelaySeconds(currentGameId)
-
     if requestedDelay > 0 and moveDelayEligibleAction(currentGameId, action) then
         local phaseBefore = publicPhase()
         local publicTurnBefore = tryIndex({ "session", "public", "currentTurn" })
         local privateBefore = tryIndex({ "session", "private" })
         local privateTurnBefore = safeIndex(privateBefore, "currentTurn")
-
         local publicDeadline = tonumber(tryIndex({ "session", "public", "deadline" }))
         local privateDeadline = tonumber(safeIndex(privateBefore, "phaseDeadline"))
         local actionDeadline = publicDeadline or privateDeadline
-
         local delayToken = table.concat({
             tostring(currentGameId),
             tostring(phaseBefore),
@@ -17071,10 +18319,8 @@ local function fireAction(action, ...)
             currentGameId == "NumberGuess" and tostring(action) or "",
             currentGameId == "CandyBomb" and tostring(action) or "",
         }, "|")
-
         if controller.MoveDelayApplied[delayToken] ~= true then
             controller.MoveDelayApplied[delayToken] = true
-
             if next(controller.MoveDelayApplied) ~= nil then
                 local count = 0
                 for _ in pairs(controller.MoveDelayApplied) do
@@ -17085,7 +18331,6 @@ local function fireAction(action, ...)
                     end
                 end
             end
-
             local actualDelay = requestedDelay
             if actionDeadline then
                 local remaining =
@@ -17098,10 +18343,8 @@ local function fireAction(action, ...)
                     )
                 )
             end
-
             if actualDelay > 0 then
                 task.wait(actualDelay)
-
                 if controller.destroyed
                     or not scriptEnabled
                     or gameId() ~= currentGameId
@@ -17110,7 +18353,6 @@ local function fireAction(action, ...)
                 then
                     return false
                 end
-
                 local publicTurnAfter =
                     tryIndex({ "session", "public", "currentTurn" })
                 if publicTurnBefore ~= nil
@@ -17118,7 +18360,6 @@ local function fireAction(action, ...)
                 then
                     return false
                 end
-
                 local privateAfter = tryIndex({ "session", "private" })
                 local privateTurnAfter = safeIndex(privateAfter, "currentTurn")
                 if privateTurnBefore ~= nil
@@ -17129,84 +18370,28 @@ local function fireAction(action, ...)
             end
         end
     end
-
     return pcall(function()
         MinigameGameAction:FireServer(action, table.unpack(args, 1, args.n))
     end)
 end
-
 local function randomRange(rng, a, b)
     return a + (b - a) * rng:NextNumber()
 end
-
 function controller:Destroy()
     if self.destroyed then return end
     self.destroyed = true
     scriptEnabled = false
-
     local popController = rawget(_G, "__TSUNAMI_POPCORN_PERFECT_V17")
         or rawget(_G, "__TSUNAMI_POPCORN_PERFECT_V16")
     if popController and type(popController.Destroy) == "function" then
         pcall(function() popController:Destroy() end)
     end
-
     if rawget(_G, GLOBAL_KEY) == self then
         rawset(_G, GLOBAL_KEY, nil)
     end
 end
-
-
-
-
 task.spawn(function()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
 local Stats = game:GetService("Stats")
-
-
-
 for _, key in ipairs({
     "__TSUNAMI_PERFECT_POPCORN",
     "__TSUNAMI_POPCORN_PERFECT_V2",
@@ -17224,6 +18409,8 @@ for _, key in ipairs({
     "__TSUNAMI_POPCORN_PERFECT_V15",
     "__TSUNAMI_POPCORN_PERFECT_V16",
     "__TSUNAMI_POPCORN_PERFECT_V17",
+    "__TSUNAMI_POPCORN_PERFECT_V18",
+    "__TSUNAMI_POPCORN_PERFECT_V19",
 }) do
     local old = rawget(_G, key)
     if old and type(old.Destroy) == "function" then
@@ -17233,32 +18420,21 @@ for _, key in ipairs({
     end
     rawset(_G, key, nil)
 end
-
 local ClientGlobals = require(ReplicatedStorage.Client.Modules.ClientGlobals)
 local Remotes = require(ReplicatedStorage.Shared.Remotes)
-
 local ActiveMinigame = ClientGlobals.ActiveMinigame
 local MinigameGameAction = Remotes.MinigameGameAction
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-
 local GAME_ID = "PopcornBurst"
-
 local OUTER_START_SCALE = 0.65
 local TARGET_SCALE = 0.35
 local TARGET_FRACTION = 1 - TARGET_SCALE / OUTER_START_SCALE
-
-
-
-
-
 local TRACKING_HISTORY = 7
 local TRACKING_PING_REFRESH = 0.10
 local MIN_GEOMETRY_SAMPLES = 5
 local MAX_GEOMETRY_SAMPLES = 12
 local GEOMETRY_LOCK_SPREAD = 0.008
-
-
 local LIMITED_GEOMETRY_LOCK_WINDOW = 0.024
 local ZERO_GEOMETRY_HARD_FALLBACK_WINDOW = 0.010
 local PING_HISTORY_LIMIT = 31
@@ -17266,21 +18442,8 @@ local CURRENT_PING_WEIGHT = 0.20
 local MAX_CURRENT_PING_DEVIATION = 0.015
 local MAX_KERNEL_COMPENSATION_DRIFT = 0.008
 local KERNEL_COMPENSATION_HISTORY = 7
-
-
-
-local BASE_PRECISION_SPIN_WINDOW = 0.004
-local MAX_PRECISION_SPIN_WINDOW = 0.010
 local FAILSAFE_EXTRA_EARLY_LEAD = 0.000
-
-
-
-
 local MAX_INBOUND_COMPENSATION = 0.200
-
-
-
-
 local HIGH_SCORE_ANCHOR_MIN = 90
 local PING_FOLLOW_FACTOR = 0.50
 local STALE_ANCHOR_PING_DELTA = 0.055
@@ -17294,13 +18457,8 @@ local PROBE_STEP_MIN = 0.0005
 local PROBE_STEP_MAX = 0.0030
 local LOCAL_RESIDUAL_LEARN_FACTOR = 0.45
 local LOCAL_RESIDUAL_MAX_CORRECTION = 0.0020
-
-
-
-
 rawset(_G, "__TSUNAMI_POPCORN_CALIBRATION", nil)
 rawset(_G, "__TSUNAMI_POPCORN_TIMING_MODEL_V6", nil)
-
 local timingModel = rawget(_G, "__TSUNAMI_POPCORN_TIMING_MODEL_V11")
 if type(timingModel) ~= "table" then
     timingModel = {
@@ -17316,7 +18474,6 @@ if type(timingModel) ~= "table" then
     }
     rawset(_G, "__TSUNAMI_POPCORN_TIMING_MODEL_V11", timingModel)
 end
-
 local controller = {
     destroyed = false,
     connections = {},
@@ -17339,69 +18496,51 @@ local controller = {
     timingModel = timingModel,
     authoritativeFieldPrinted = {},
 }
-
-_G.__TSUNAMI_POPCORN_PERFECT_V17 = controller
-
+_G.__TSUNAMI_POPCORN_PERFECT_V19 = controller
 local function nowServer()
     return workspace:GetServerTimeNow()
 end
-
 local function tryIndex(path)
-    local ok, value = pcall(function()
-        return ActiveMinigame:TryIndex(path)
-    end)
+    local ok, value = pcall(ActiveMinigame.TryIndex, ActiveMinigame, path)
     return ok and value or nil
 end
-
 local function privateState()
     local private = tryIndex({ "session", "private" })
     return type(private) == "table" and private.myState or nil
 end
-
 local function popcornActive()
     if not scriptEnabled or not minigameAutoplayEnabled(GAME_ID) then
         return false
     end
-
     if tryIndex({ "session", "gameId" }) ~= GAME_ID then
         return false
     end
-
     local phase = tryIndex({ "session", "public", "phase" })
     if phase ~= nil and phase ~= "Playing" then
         return false
     end
-
     local state = privateState()
     return type(state) == "table" and state.finished ~= true
 end
-
 local function median(values)
     if #values == 0 then return nil end
-
     local copy = table.clone(values)
     table.sort(copy)
-
     local n = #copy
     if n % 2 == 1 then
         return copy[(n + 1) // 2]
     end
-
     return (copy[n // 2] + copy[n // 2 + 1]) * 0.5
 end
-
 local function pushSample(list, value, limit)
     if type(value) ~= "number" or value <= 0 then
         return
     end
-
     list[#list + 1] = value
-
     while #list > limit do
         table.remove(list, 1)
     end
 end
-
 local function readDataPingSeconds()
     local ok, value = pcall(function()
         local network = Stats:FindFirstChild("Network")
@@ -17409,62 +18548,42 @@ local function readDataPingSeconds()
         local dataPing = serverStats and serverStats:FindFirstChild("Data Ping")
         return dataPing and dataPing:GetValue()
     end)
-
     value = ok and tonumber(value) or nil
     if not value or value <= 0 then
         return nil
     end
-
-
-
     if value > 5 then
         value /= 1000
     end
-
     if value > 2 then
         return nil
     end
-
     return value
 end
-
 local function readNetworkPingSeconds()
     local ok, value = pcall(function()
         return LocalPlayer:GetNetworkPing()
     end)
-
     value = ok and tonumber(value) or nil
     if not value or value <= 0 or value > 2 then
         return nil
     end
-
     return value
 end
-
 local function updatePingSamples()
     local data = readDataPingSeconds()
     local network = readNetworkPingSeconds()
-
     pushSample(controller.dataPingSamples, data, PING_HISTORY_LIMIT)
     pushSample(controller.networkPingSamples, network, PING_HISTORY_LIMIT)
-
     return data, network
 end
-
 local function inboundReplicationEstimate()
-
-
     local currentData = readDataPingSeconds()
     local currentNetwork = readNetworkPingSeconds()
-
-
-
-
     local dataSorted = table.clone(controller.dataPingSamples)
     local networkSorted = table.clone(controller.networkPingSamples)
     table.sort(dataSorted)
     table.sort(networkSorted)
-
     local function quantile(sorted, fraction)
         if #sorted == 0 then return nil end
         local position = 1 + (#sorted - 1) * math.clamp(fraction, 0, 1)
@@ -17474,14 +18593,8 @@ local function inboundReplicationEstimate()
         local alpha = position - lower
         return sorted[lower] + (sorted[upper] - sorted[lower]) * alpha
     end
-
     local dataMedian = quantile(dataSorted, 0.50)
     local networkMedian = quantile(networkSorted, 0.50)
-
-
-
-
-
     local networkMedianHalf = networkMedian and networkMedian * 0.5 or nil
     local dataMedianHalf = dataMedian and dataMedian * 0.5 or nil
     local medianHalf
@@ -17494,7 +18607,6 @@ local function inboundReplicationEstimate()
     else
         medianHalf = dataMedianHalf or networkMedianHalf or 0
     end
-
     local currentNetworkHalf = currentNetwork and currentNetwork * 0.5 or nil
     local currentDataHalf = currentData and currentData * 0.5 or nil
     local currentHalf
@@ -17507,11 +18619,6 @@ local function inboundReplicationEstimate()
     else
         currentHalf = currentDataHalf or currentNetworkHalf or medianHalf
     end
-
-
-
-
-
     currentHalf = math.clamp(
         currentHalf,
         math.max(0, medianHalf - MAX_CURRENT_PING_DEVIATION),
@@ -17519,17 +18626,11 @@ local function inboundReplicationEstimate()
     )
     local liveHalf = medianHalf * (1 - CURRENT_PING_WEIGHT)
         + currentHalf * CURRENT_PING_WEIGHT
-
     local model = controller.timingModel
     local baseEstimate = liveHalf
-
     if type(model.anchorBaseComp) == "number"
         and type(model.anchorPingHalf) == "number"
     then
-
-
-
-
         local pingDelta = math.clamp(
             liveHalf - model.anchorPingHalf,
             -STALE_ANCHOR_PING_DELTA,
@@ -17537,7 +18638,6 @@ local function inboundReplicationEstimate()
         )
         baseEstimate = model.anchorBaseComp + pingDelta * PING_FOLLOW_FACTOR
     end
-
     local explicitBias = math.clamp(
         tonumber(model.explicitBias) or 0,
         -EXPLICIT_BIAS_MAX_ABS,
@@ -17548,9 +18648,7 @@ local function inboundReplicationEstimate()
         -ADAPTIVE_BIAS_MAX_ABS,
         ADAPTIVE_BIAS_MAX_ABS
     )
-
     local estimate = baseEstimate + explicitBias + adaptiveBias
-
     return math.clamp(estimate, 0, MAX_INBOUND_COMPENSATION),
         dataMedian,
         networkMedian,
@@ -17561,19 +18659,16 @@ local function inboundReplicationEstimate()
         explicitBias,
         adaptiveBias
 end
-
 local function popcornHolder()
     local minigameGui = PlayerGui:FindFirstChild("MinigameGui")
     local games = minigameGui and minigameGui:FindFirstChild("Games")
     local gui = games and games:FindFirstChild("PopcornBurstGui")
     return gui and gui:FindFirstChild("Holder")
 end
-
 local function clearGeometryCache()
     controller.currentButton = nil
     controller.currentOuter = nil
 end
-
 local function cacheStillValid()
     local h = popcornHolder()
     return h
@@ -17582,31 +18677,19 @@ local function cacheStillValid()
         and controller.currentOuter
         and controller.currentOuter.Parent == controller.currentButton
 end
-
 local function locateOuterRing()
     if cacheStillValid() then
         return controller.currentOuter
     end
-
     clearGeometryCache()
-
     local h = popcornHolder()
     if not h then
         return nil
     end
-
-
-
-
-
-
-
-
     for _, button in ipairs(h:GetChildren()) do
         if button:IsA("TextButton") then
             local candidate = nil
             local candidateScale = -math.huge
-
             for _, child in ipairs(button:GetChildren()) do
                 if child:IsA("Frame") and child:FindFirstChildOfClass("UIStroke") then
                     local scale = tonumber(child.Size.X.Scale)
@@ -17616,13 +18699,9 @@ local function locateOuterRing()
                     end
                 end
             end
-
-
-
             if not candidate then
                 local farthest = nil
                 local farthestDistance = 0
-
                 for _, child in ipairs(button:GetChildren()) do
                     if child:IsA("Frame") and child:FindFirstChildOfClass("UIStroke") then
                         local scale = tonumber(child.Size.X.Scale)
@@ -17635,10 +18714,8 @@ local function locateOuterRing()
                         end
                     end
                 end
-
                 candidate = farthest
             end
-
             if candidate then
                 controller.currentButton = button
                 controller.currentOuter = candidate
@@ -17646,104 +18723,85 @@ local function locateOuterRing()
             end
         end
     end
-
     return nil
 end
-
 local function sampleOuterScale()
     local outer = locateOuterRing()
     if not outer then return nil end
-
     local before = nowServer()
-
     local ok, scale = pcall(function()
         return outer.Size.X.Scale
     end)
-
     local after = nowServer()
-
     if not ok then
         clearGeometryCache()
         return nil
     end
-
     scale = tonumber(scale)
     if not scale then
         return nil
     end
-
     return scale, (before + after) * 0.5
 end
-
-local function resultBlocksAttempt(state)
-
-
-
-
-    return type(state and state.lastResult) == "table"
+local function resultBlocksAttempt(state, slot)
+    local result = type(state) == "table" and state.lastResult or nil
+    if type(result) ~= "table" then
+        return false
+    end
+    local activeSlot = tonumber(slot)
+        or tonumber(type(state) == "table" and state.activeKernelSlot)
+    local resultSlot = tonumber(result.cellIndex)
+    -- The game's own Popcorn client only considers lastResult terminal for
+    -- the currently active kernel. A previous kernel's result can remain
+    -- replicated briefly after the next kernel becomes active. Treating any
+    -- lastResult as terminal can therefore skip an entire kernel.
+    return activeSlot ~= nil
+        and resultSlot ~= nil
+        and resultSlot == activeSlot
 end
-
 local function kernelStillLive(slot)
     if controller.destroyed or not popcornActive() then
         return false
     end
-
     local state = privateState()
     if type(state) ~= "table"
         or state.finished == true
         or tonumber(state.activeKernelSlot) ~= tonumber(slot)
-        or resultBlocksAttempt(state)
+        or resultBlocksAttempt(state, slot)
     then
         return false
     end
-
     return (tonumber(state.ringDuration) or 0) > 0
 end
-
 local function normalizeServerTimestamp(value)
     value = tonumber(value)
     if not value then return nil end
-
-
     if value > 100000000000 then
         value /= 1000
     end
-
-
-
     if math.abs(value - nowServer()) > 15 then
         return nil
     end
-
     return value
 end
-
 local function scanTimingTable(tbl, prefix, duration, depth, seen)
     if type(tbl) ~= "table" or depth > 2 or seen[tbl] then
         return nil
     end
-
     seen[tbl] = true
-
     for key, value in pairs(tbl) do
         local keyString = string.lower(tostring(key))
         local fullKey = prefix == "" and tostring(key)
             or (prefix .. "." .. tostring(key))
-
         if type(value) == "number" then
             local timestamp = normalizeServerTimestamp(value)
-
             if timestamp then
-
-
                 if (string.find(keyString, "perfect", 1, true)
                     or string.find(keyString, "target", 1, true))
                     and string.find(keyString, "time", 1, true)
                 then
                     return timestamp, fullKey, "target"
                 end
-
-
                 if (string.find(keyString, "ring", 1, true)
                     and (string.find(keyString, "start", 1, true)
                         or string.find(keyString, "begin", 1, true)))
@@ -17754,8 +18812,6 @@ local function scanTimingTable(tbl, prefix, duration, depth, seen)
                         fullKey,
                         "start"
                 end
-
-
                 if string.find(keyString, "ring", 1, true)
                     and (string.find(keyString, "deadline", 1, true)
                         or string.find(keyString, "end", 1, true)
@@ -17775,24 +18831,19 @@ local function scanTimingTable(tbl, prefix, duration, depth, seen)
                 depth + 1,
                 seen
             )
-
             if target then
                 return target, foundKey, kind
             end
         end
     end
-
     return nil
 end
-
 local function authoritativeTargetFromState(state, duration)
     if type(state) ~= "table" then
         return nil
     end
-
     return scanTimingTable(state, "", duration, 0, {})
 end
-
 local function visualCrossingFromSample(scale, sampledAt, duration)
     if type(scale) ~= "number" or type(sampledAt) ~= "number" then
         return nil
@@ -17800,62 +18851,38 @@ local function visualCrossingFromSample(scale, sampledAt, duration)
     if scale < -0.01 or scale > OUTER_START_SCALE + 0.02 then
         return nil
     end
-
-
-
-
     return sampledAt
         + duration * ((scale - TARGET_SCALE) / OUTER_START_SCALE)
 end
-
 local function chooseProbeOffset()
-
-
-
     return 0
 end
-
-local function precisionSpinWindow()
-    local frameTime
-    pcall(function() frameTime = tonumber(Stats.FrameTime) end)
-    frameTime = tonumber(frameTime) or 0
-    return math.clamp(
-        math.max(BASE_PRECISION_SPIN_WINDOW, frameTime * 0.20),
-        BASE_PRECISION_SPIN_WINDOW,
-        MAX_PRECISION_SPIN_WINDOW
-    )
-end
-
 local function preciseWaitUntil(targetTime, slot, key)
+    -- Do not busy-spin here. The previous tight loop could monopolize the
+    -- client thread for several milliseconds exactly when replication and
+    -- the remote need to be serviced. AttemptPop already carries a
+    -- server-synchronised timestamp, so if the scheduler resumes slightly
+    -- after the crossing we still report the calculated crossing time.
     while controller.currentKernelKey == key and kernelStillLive(slot) do
         local remaining = targetTime - nowServer()
-        local spinWindow = precisionSpinWindow()
-        if remaining <= spinWindow then
+        if remaining <= 0 then
             break
         end
-
-
-
-        task.wait(math.max(0.001, remaining - spinWindow))
-    end
-
-    if controller.currentKernelKey ~= key or not kernelStillLive(slot) then
-        return false
-    end
-
-    while nowServer() < targetTime do
-        if controller.destroyed
-            or not scriptEnabled
-            or not minigameAutoplayEnabled(GAME_ID)
-            or controller.currentKernelKey ~= key
-        then
-            return false
+        if remaining > 0.025 then
+            task.wait(math.max(0.001, remaining - 0.012))
+        else
+            RunService.Heartbeat:Wait()
         end
     end
-
-    return controller.currentKernelKey == key and kernelStillLive(slot)
+    if controller.destroyed
+        or not scriptEnabled
+        or not minigameAutoplayEnabled(GAME_ID)
+        or controller.currentKernelKey ~= key
+    then
+        return false
+    end
+    return kernelStillLive(slot)
 end
-
 local function fireAttempt(slot, key, targetTime, details)
     if controller.fired[key]
         or controller.currentKernelKey ~= key
@@ -17863,22 +18890,13 @@ local function fireAttempt(slot, key, targetTime, details)
     then
         return false
     end
-
-
-
-
     local firedAt
     local sent = false
     for _ = 1, 3 do
         if controller.currentKernelKey ~= key or not kernelStillLive(slot) then
             return false
         end
-
         firedAt = nowServer()
-
-
-
-
         local reportedAt = tonumber(targetTime) or firedAt
         if reportedAt > firedAt then
             reportedAt = firedAt
@@ -17894,13 +18912,10 @@ local function fireAttempt(slot, key, targetTime, details)
             break
         end
     end
-
     if not sent then
         return false
     end
-
     controller.fired[key] = true
-
     local localScale, localScaleAt = sampleOuterScale()
     local scaleAtFire = localScale
     if type(localScale) == "number"
@@ -17911,44 +18926,35 @@ local function fireAttempt(slot, key, targetTime, details)
         scaleAtFire = localScale + OUTER_START_SCALE
             * math.max(0, localScaleAt - firedAt) / details.duration
     end
-
     details.targetTime = targetTime
     details.firedAt = firedAt
     details.localScale = scaleAtFire
     details.localScaleAt = firedAt
-    details.schedulerErrorMs = (firedAt - targetTime) * 1000
-
+    details.schedulerErrorMs = (firedAt - (tonumber(details.fireTime) or targetTime)) * 1000
     if type(scaleAtFire) == "number"
-        and type(details.effectiveCompensation) == "number"
         and type(details.duration) == "number"
         and details.duration > 0
         and string.sub(tostring(details.source), 1, 7) ~= "server:"
     then
         local expectedScale = TARGET_SCALE
-            + OUTER_START_SCALE
-                * (details.effectiveCompensation / details.duration)
         details.expectedLocalScale = expectedScale
         details.localTimingResidual = (expectedScale - scaleAtFire)
             * details.duration / OUTER_START_SCALE
     end
-
     controller.attempts[key] = details
     controller.lastAttemptKeyBySlot[slot] = key
     return true
 end
-
 local function runKernel(slot, duration, key, stateSeenAt)
     clearGeometryCache()
-
     local state = privateState()
     local authoritativeTarget, authoritativeField, authoritativeKind =
         authoritativeTargetFromState(state, duration)
-
     local compensation, dataRtt, networkRtt, livePingHalf,
         currentDataRtt, currentNetworkRtt, baseCompensation,
         explicitBias, adaptiveBias = inboundReplicationEstimate()
-
-    local targetTime
+    local reportedTargetTime
+    local fireTime
     local source
     local visualTarget = nil
     local sampleCount = 0
@@ -17957,11 +18963,10 @@ local function runKernel(slot, duration, key, stateSeenAt)
     local crossingHistory = {}
     local kernelBaseCompensation = compensation
     local compensationHistory = { compensation }
-
     if authoritativeTarget then
-        targetTime = authoritativeTarget
+        reportedTargetTime = authoritativeTarget
+        fireTime = authoritativeTarget
         source = "server:" .. tostring(authoritativeField)
-
         if not controller.authoritativeFieldPrinted[authoritativeField] then
             controller.authoritativeFieldPrinted[authoritativeField] = true
         end
@@ -17969,16 +18974,10 @@ local function runKernel(slot, duration, key, stateSeenAt)
         probeOffset = chooseProbeOffset()
         visualTarget = stateSeenAt + duration * TARGET_FRACTION
         source = "live-ring+latency"
-
         local nextPingRefreshAt = 0
-
-
-
-
         while kernelStillLive(slot) do
             local scale, sampledAt = sampleOuterScale()
             latestScale = scale or latestScale
-
             local crossing = visualCrossingFromSample(scale, sampledAt, duration)
             if crossing then
                 crossingHistory[#crossingHistory + 1] = crossing
@@ -17988,17 +18987,12 @@ local function runKernel(slot, duration, key, stateSeenAt)
                 visualTarget = median(crossingHistory) or crossing
                 sampleCount += 1
             end
-
             local nowClock = os.clock()
             if nowClock >= nextPingRefreshAt then
                 local freshCompensation
                 freshCompensation, dataRtt, networkRtt, livePingHalf,
                     currentDataRtt, currentNetworkRtt, baseCompensation,
                     explicitBias, adaptiveBias = inboundReplicationEstimate()
-
-
-
-
                 freshCompensation = math.clamp(
                     freshCompensation,
                     math.max(0, kernelBaseCompensation - MAX_KERNEL_COMPENSATION_DRIFT),
@@ -18012,19 +19006,17 @@ local function runKernel(slot, duration, key, stateSeenAt)
                 compensation = median(compensationHistory) or freshCompensation
                 nextPingRefreshAt = nowClock + TRACKING_PING_REFRESH
             end
-
-
-
-
-
             local failsafeLead = sampleCount >= MIN_GEOMETRY_SAMPLES
                 and 0 or FAILSAFE_EXTRA_EARLY_LEAD
-            targetTime = visualTarget - compensation - probeOffset - failsafeLead
-
-
-
-
-            local remainingToTarget = targetTime - nowServer()
+            -- Score with the server-time estimate for the perfect crossing,
+            -- but do not physically fire the remote early. Waiting until the
+            -- locally rendered ring reaches the target prevents an inbound
+            -- ping spike from causing an early click. The remote still carries
+            -- the compensated server timestamp, so a late rendered frame does
+            -- not change the intended scoring time.
+            reportedTargetTime = visualTarget - compensation - probeOffset - failsafeLead
+            fireTime = visualTarget
+            local remainingToTarget = fireTime - nowServer()
             local stableGeometry = false
             if sampleCount >= MIN_GEOMETRY_SAMPLES and #crossingHistory > 0 then
                 local minCrossing = math.huge
@@ -18035,7 +19027,6 @@ local function runKernel(slot, duration, key, stateSeenAt)
                 end
                 stableGeometry = maxCrossing - minCrossing <= GEOMETRY_LOCK_SPREAD
             end
-
             if stableGeometry or sampleCount >= MAX_GEOMETRY_SAMPLES then
                 source = "live-ring+latency"
                 break
@@ -18050,27 +19041,18 @@ local function runKernel(slot, duration, key, stateSeenAt)
                 source = "state-arrival-failsafe"
                 break
             end
-
             RunService.RenderStepped:Wait()
         end
     end
-
     if not kernelStillLive(slot) then
         controller.scheduled[key] = nil
         return
     end
-
-
-
-    targetTime = targetTime or nowServer()
-
-
-
-
+    reportedTargetTime = reportedTargetTime or nowServer()
+    fireTime = fireTime or reportedTargetTime
     local effectiveCompensation = string.sub(tostring(source), 1, 7) == "server:"
         and 0
         or (compensation + probeOffset)
-
     local details = {
         source = source,
         duration = duration,
@@ -18093,74 +19075,54 @@ local function runKernel(slot, duration, key, stateSeenAt)
         geometrySamples = sampleCount,
         latestTrackedScale = latestScale,
     }
-
-    if preciseWaitUntil(targetTime, slot, key) then
-        fireAttempt(slot, key, targetTime, details)
+    if preciseWaitUntil(fireTime, slot, key) then
+        fireAttempt(slot, key, reportedTargetTime, details)
     end
-
     controller.scheduled[key] = nil
 end
-
 local function directionalHintFromResult(result)
     if type(result) ~= "table" then
         return nil
     end
-
-
-
-
     for key, value in pairs(result) do
         local keyText = string.lower(tostring(key))
         local valueText = string.lower(tostring(value))
-
         if string.find(keyText, "early", 1, true)
             or string.find(valueText, "early", 1, true)
         then
             return -1
         end
-
         if string.find(keyText, "late", 1, true)
             or string.find(valueText, "late", 1, true)
         then
             return 1
         end
     end
-
     return nil
 end
-
 local function learnFromResult(result, attempt)
     if not attempt
         or string.sub(tostring(attempt.source), 1, 7) == "server:"
     then
         return
     end
-
     local model = controller.timingModel
     local points = tonumber(result.points)
     local rating = tostring(result.rating)
     local quality = points or (rating == "Perfect" and 100 or 0)
     quality = math.clamp(tonumber(quality) or 0, 0, 100)
     model.lastQuality = quality
-
-
-
     local direction = directionalHintFromResult(result)
     if direction then
         local deficit = (100 - quality) / 100
         local step = EXPLICIT_DIRECTION_STEP_MIN
             + (EXPLICIT_DIRECTION_STEP_MAX - EXPLICIT_DIRECTION_STEP_MIN) * deficit
-
         model.explicitBias = math.clamp(
             (tonumber(model.explicitBias) or 0) + direction * step,
             -EXPLICIT_BIAS_MAX_ABS,
             EXPLICIT_BIAS_MAX_ABS
         )
     end
-
-
-
-
     local localResidual = tonumber(attempt.localTimingResidual)
     local reliableGeometryResidual =
         attempt.source == "live-ring+latency"
@@ -18182,10 +19144,6 @@ local function learnFromResult(result, attempt)
             EXPLICIT_BIAS_MAX_ABS
         )
     end
-
-
-
-
     local probeOffset = tonumber(attempt.probeOffset) or 0
     if math.abs(probeOffset) >= PROBE_OFFSET * 0.5 then
         local sample = {
@@ -18193,13 +19151,11 @@ local function learnFromResult(result, attempt)
             pingHalf = tonumber(attempt.livePingHalf) or 0,
             duration = tonumber(attempt.duration) or 0,
         }
-
         if probeOffset > 0 then
             model.probePositive = sample
         else
             model.probeNegative = sample
         end
-
         local positive = model.probePositive
         local negative = model.probeNegative
         if type(positive) == "table" and type(negative) == "table" then
@@ -18211,17 +19167,14 @@ local function learnFromResult(result, attempt)
                 (tonumber(positive.duration) or 0)
                 - (tonumber(negative.duration) or 0)
             ) <= 1.50
-
             if comparablePing and comparableDuration then
                 local gap = (tonumber(positive.quality) or 0)
                     - (tonumber(negative.quality) or 0)
-
                 if math.abs(gap) >= PROBE_MIN_SCORE_GAP then
                     local strength = math.clamp(math.abs(gap) / 35, 0, 1)
                     local step = PROBE_STEP_MIN
                         + (PROBE_STEP_MAX - PROBE_STEP_MIN) * strength
                     local directionFromProbe = gap > 0 and 1 or -1
-
                     model.adaptiveBias = math.clamp(
                         (tonumber(model.adaptiveBias) or 0)
                             + directionFromProbe * step,
@@ -18230,23 +19183,14 @@ local function learnFromResult(result, attempt)
                     )
                 end
             end
-
-
-
             model.probePositive = nil
             model.probeNegative = nil
         end
     end
-
-
-
-
-
     local previousAnchorQuality = tonumber(model.anchorQuality) or 0
     local mayUpdateAnchor = rating == "Perfect"
         or quality >= 99
         or (previousAnchorQuality < 99 and quality >= HIGH_SCORE_ANCHOR_MIN)
-
     if mayUpdateAnchor then
         local weight
         if rating == "Perfect" then
@@ -18260,7 +19204,6 @@ local function learnFromResult(result, attempt)
                 1
             )
         end
-
         local observedBase = tonumber(attempt.baseCompensation)
         local observedPing = tonumber(attempt.livePingHalf)
         if observedBase and observedPing then
@@ -18274,37 +19217,25 @@ local function learnFromResult(result, attempt)
                     + (observedPing - model.anchorPingHalf) * weight
             end
         end
-
         model.anchorQuality = math.max(previousAnchorQuality, quality)
     end
 end
-
 local function armCurrentKernel()
     if controller.destroyed or not popcornActive() then
         return
     end
-
     local state = privateState()
     if type(state) ~= "table" or state.finished == true then
         return
     end
-
     local slot = tonumber(state.activeKernelSlot) or 0
     local duration = tonumber(state.ringDuration) or 0
-
     if slot <= 0 or duration <= 0 or duration > 10 then
         return
     end
-
-    if resultBlocksAttempt(state) then
-
-
-
+    if resultBlocksAttempt(state, slot) then
         return
     end
-
-
-
     if controller.currentKernelKey == nil
         or controller.currentKernelSlot ~= slot
     then
@@ -18316,26 +19247,16 @@ local function armCurrentKernel()
             tostring(slot),
         }, ":")
     end
-
     local key = controller.currentKernelKey
-
     if controller.scheduled[key] or controller.fired[key] then
         return
     end
-
     controller.scheduled[key] = true
-
-
     local stateSeenAt = nowServer()
-
     task.spawn(runKernel, slot, duration, key, stateSeenAt)
 end
-
 local function resultIdentity(result, key)
     if type(result) ~= "table" then return nil end
-
-
-
     return table.concat({
         tostring(key or "unowned"),
         tostring(result.cellIndex),
@@ -18343,41 +19264,28 @@ local function resultIdentity(result, key)
         tostring(result.points),
     }, ":")
 end
-
 local function reportAndCalibrate()
     local state = privateState()
     local result = state and state.lastResult
     if type(result) ~= "table" then
         return
     end
-
     local slot = tonumber(result.cellIndex)
     local key = controller.currentKernelKey
-
-
-
-
     if not key
         or tonumber(controller.currentKernelSlot) ~= slot
         or controller.resultProcessed[key] == true
     then
         return
     end
-
     controller.resultProcessed[key] = true
     controller.lastResultIdentity = resultIdentity(result, key)
-
     local attempt = controller.attempts[key]
         or (slot and controller.attempts[controller.lastAttemptKeyBySlot[slot]])
-
-
     controller.currentKernelKey = nil
     controller.currentKernelSlot = nil
-
     learnFromResult(result, attempt)
-
 end
-
 local function resetRound()
     controller.roundSerial += 1
     controller.kernelOccurrence = 0
@@ -18391,10 +19299,8 @@ local function resetRound()
     controller.lastResultIdentity = nil
     clearGeometryCache()
 end
-
 local function update()
     local isActive = popcornActive()
-
     if isActive and not controller.wasActive then
         controller.wasActive = true
         resetRound()
@@ -18403,26 +19309,19 @@ local function update()
         resetRound()
         return
     end
-
     if isActive then
         armCurrentKernel()
         reportAndCalibrate()
     end
 end
-
 local function addDisconnector(fn)
     if type(fn) == "function" then
         controller.disconnectors[#controller.disconnectors + 1] = fn
     end
 end
-
-
 for _ = 1, 7 do
     updatePingSamples()
 end
-
-
-
 local rawConnection = ActiveMinigame:ListenRaw(function()
     update()
 end)
@@ -18433,90 +19332,63 @@ if rawConnection then
         addDisconnector(rawConnection)
     end
 end
-
 addDisconnector(ActiveMinigame:Listen({ "session", "private" }, function()
     update()
 end))
-
 addDisconnector(ActiveMinigame:Listen({ "session", "gameId" }, function()
     update()
 end))
-
 addDisconnector(ActiveMinigame:Listen({ "session", "public", "phase" }, function()
     update()
 end))
-
-
-
-
 controller.connections[#controller.connections + 1] =
     RunService.RenderStepped:Connect(function()
         if popcornActive() then
             update()
         end
     end)
-
 local pingAccumulator = 0
-
 controller.connections[#controller.connections + 1] =
     RunService.Heartbeat:Connect(function(dt)
         if not popcornActive() then
             pingAccumulator = 0
             return
         end
-
         pingAccumulator += dt
         if pingAccumulator >= 0.05 then
             pingAccumulator = 0
             updatePingSamples()
         end
-
-
-
-
     end)
-
 function controller:Destroy()
     if self.destroyed then
         return
     end
-
     self.destroyed = true
     self.roundSerial += 1
-
     for _, disconnect in ipairs(self.disconnectors) do
         pcall(disconnect)
     end
     table.clear(self.disconnectors)
-
     for _, connection in ipairs(self.connections) do
         pcall(function()
             connection:Disconnect()
         end)
     end
     table.clear(self.connections)
-
     table.clear(self.scheduled)
     table.clear(self.fired)
     table.clear(self.attempts)
     table.clear(self.resultProcessed)
     table.clear(self.lastAttemptKeyBySlot)
     clearGeometryCache()
-
-    if rawget(_G, "__TSUNAMI_POPCORN_PERFECT_V17") == self then
-        rawset(_G, "__TSUNAMI_POPCORN_PERFECT_V17", nil)
+    if rawget(_G, "__TSUNAMI_POPCORN_PERFECT_V19") == self then
+        rawset(_G, "__TSUNAMI_POPCORN_PERFECT_V19", nil)
     end
 end
-
 update()
-
-
 end)
-
-
 task.spawn(function()
-
-
 local function createCFSolver()
 local COLS = 7
 local ROWS = 6
@@ -18525,7 +19397,6 @@ local WORD = 4294967296
 local TIME_LIMIT = 15.0
 local CHECK_INTERVAL = 512
 local b32 = bit32
-
 local function add64(alo, ahi, blo, bhi)
     local lo = alo + blo
     local carry = 0
@@ -18535,19 +19406,15 @@ local function add64(alo, ahi, blo, bhi)
     end
     return lo, ahi + bhi + carry
 end
-
 local function band64(alo, ahi, blo, bhi)
     return b32.band(alo, blo), b32.band(ahi, bhi)
 end
-
 local function bor64(alo, ahi, blo, bhi)
     return b32.bor(alo, blo), b32.bor(ahi, bhi)
 end
-
 local function bxor64(alo, ahi, blo, bhi)
     return b32.bxor(alo, blo), b32.bxor(ahi, bhi)
 end
-
 local function shl64(lo, hi, shift)
     if shift == 0 then return lo, hi end
     if shift < 32 then
@@ -18555,7 +19422,6 @@ local function shl64(lo, hi, shift)
     end
     return 0, b32.lshift(lo, shift - 32)
 end
-
 local function shr64(lo, hi, shift)
     if shift == 0 then return lo, hi end
     if shift < 32 then
@@ -18563,39 +19429,32 @@ local function shr64(lo, hi, shift)
     end
     return b32.rshift(hi, shift - 32), 0
 end
-
 local BYTE_POPCOUNT = table.create(256, 0)
 for i = 1, 255 do
     BYTE_POPCOUNT[i + 1] = BYTE_POPCOUNT[math.floor(i / 2) + 1] + (i % 2)
 end
-
 local function popcount32(x)
     return BYTE_POPCOUNT[b32.band(x, 0xFF) + 1]
         + BYTE_POPCOUNT[b32.band(b32.rshift(x, 8), 0xFF) + 1]
         + BYTE_POPCOUNT[b32.band(b32.rshift(x, 16), 0xFF) + 1]
         + BYTE_POPCOUNT[b32.band(b32.rshift(x, 24), 0xFF) + 1]
 end
-
 local function popcount64(lo, hi)
     return popcount32(lo) + popcount32(hi)
 end
-
 local function isZero64(lo, hi)
     return lo == 0 and hi == 0
 end
-
 local function isSingleBit64(lo, hi)
     if hi == 0 then
         return lo ~= 0 and b32.band(lo, lo - 1) == 0
     end
     return lo == 0 and b32.band(hi, hi - 1) == 0
 end
-
 local function div2(v)
     if v >= 0 then return math.floor(v / 2) end
     return math.ceil(v / 2)
 end
-
 local COL_LO = table.create(COLS)
 local COL_HI = table.create(COLS)
 local BOTTOM_LO = 0
@@ -18604,7 +19463,6 @@ local BOARD_LO = 0
 local BOARD_HI = 0
 local CELL_LO = table.create(COLS * ROWS)
 local CELL_HI = table.create(COLS * ROWS)
-
 for col = 0, 6 do
     local baseBit = col * 7
     local bottomLo, bottomHi
@@ -18615,7 +19473,6 @@ for col = 0, 6 do
     end
     BOTTOM_LO = b32.bor(BOTTOM_LO, bottomLo)
     BOTTOM_HI = b32.bor(BOTTOM_HI, bottomHi)
-
     local colLo, colHi = 0, 0
     for row = 0, 5 do
         local bit = baseBit + row
@@ -18630,29 +19487,24 @@ for col = 0, 6 do
         CELL_LO[col * ROWS + row + 1] = lo
         CELL_HI[col * ROWS + row + 1] = hi
     end
-
     COL_LO[col + 1] = colLo
     COL_HI[col + 1] = colHi
     BOARD_LO = b32.bor(BOARD_LO, colLo)
     BOARD_HI = b32.bor(BOARD_HI, colHi)
 end
-
 local function possibleMoves(maskLo, maskHi)
     local lo, hi = add64(maskLo, maskHi, BOTTOM_LO, BOTTOM_HI)
     return band64(lo, hi, BOARD_LO, BOARD_HI)
 end
-
 local function winningPosition(posLo, posHi, maskLo, maskHi)
     local resultLo, resultHi = 0, 0
     local aLo, aHi, bLo, bHi, pLo, pHi, rLo, rHi
-
     aLo, aHi = shl64(posLo, posHi, 1)
     bLo, bHi = shl64(posLo, posHi, 2)
     pLo, pHi = band64(aLo, aHi, bLo, bHi)
     aLo, aHi = shl64(posLo, posHi, 3)
     pLo, pHi = band64(pLo, pHi, aLo, aHi)
     resultLo, resultHi = bor64(resultLo, resultHi, pLo, pHi)
-
     aLo, aHi = shl64(posLo, posHi, 7)
     bLo, bHi = shl64(posLo, posHi, 14)
     pLo, pHi = band64(aLo, aHi, bLo, bHi)
@@ -18662,7 +19514,6 @@ local function winningPosition(posLo, posHi, maskLo, maskHi)
     aLo, aHi = shr64(posLo, posHi, 7)
     rLo, rHi = band64(pLo, pHi, aLo, aHi)
     resultLo, resultHi = bor64(resultLo, resultHi, rLo, rHi)
-
     aLo, aHi = shr64(posLo, posHi, 7)
     bLo, bHi = shr64(posLo, posHi, 14)
     pLo, pHi = band64(aLo, aHi, bLo, bHi)
@@ -18672,7 +19523,6 @@ local function winningPosition(posLo, posHi, maskLo, maskHi)
     aLo, aHi = shr64(posLo, posHi, 21)
     rLo, rHi = band64(pLo, pHi, aLo, aHi)
     resultLo, resultHi = bor64(resultLo, resultHi, rLo, rHi)
-
     aLo, aHi = shl64(posLo, posHi, 6)
     bLo, bHi = shl64(posLo, posHi, 12)
     pLo, pHi = band64(aLo, aHi, bLo, bHi)
@@ -18682,7 +19532,6 @@ local function winningPosition(posLo, posHi, maskLo, maskHi)
     aLo, aHi = shr64(posLo, posHi, 6)
     rLo, rHi = band64(pLo, pHi, aLo, aHi)
     resultLo, resultHi = bor64(resultLo, resultHi, rLo, rHi)
-
     aLo, aHi = shr64(posLo, posHi, 6)
     bLo, bHi = shr64(posLo, posHi, 12)
     pLo, pHi = band64(aLo, aHi, bLo, bHi)
@@ -18692,7 +19541,6 @@ local function winningPosition(posLo, posHi, maskLo, maskHi)
     aLo, aHi = shr64(posLo, posHi, 18)
     rLo, rHi = band64(pLo, pHi, aLo, aHi)
     resultLo, resultHi = bor64(resultLo, resultHi, rLo, rHi)
-
     aLo, aHi = shl64(posLo, posHi, 8)
     bLo, bHi = shl64(posLo, posHi, 16)
     pLo, pHi = band64(aLo, aHi, bLo, bHi)
@@ -18702,7 +19550,6 @@ local function winningPosition(posLo, posHi, maskLo, maskHi)
     aLo, aHi = shr64(posLo, posHi, 8)
     rLo, rHi = band64(pLo, pHi, aLo, aHi)
     resultLo, resultHi = bor64(resultLo, resultHi, rLo, rHi)
-
     aLo, aHi = shr64(posLo, posHi, 8)
     bLo, bHi = shr64(posLo, posHi, 16)
     pLo, pHi = band64(aLo, aHi, bLo, bHi)
@@ -18712,18 +19559,15 @@ local function winningPosition(posLo, posHi, maskLo, maskHi)
     aLo, aHi = shr64(posLo, posHi, 24)
     rLo, rHi = band64(pLo, pHi, aLo, aHi)
     resultLo, resultHi = bor64(resultLo, resultHi, rLo, rHi)
-
     local emptyLo, emptyHi = bxor64(BOARD_LO, BOARD_HI, maskLo, maskHi)
     return band64(resultLo, resultHi, emptyLo, emptyHi)
 end
-
 local function canWinNext(posLo, posHi, maskLo, maskHi)
     local winLo, winHi = winningPosition(posLo, posHi, maskLo, maskHi)
     local possibleLo, possibleHi = possibleMoves(maskLo, maskHi)
     local hitLo, hitHi = band64(winLo, winHi, possibleLo, possibleHi)
     return not isZero64(hitLo, hitHi)
 end
-
 local function possibleNonLosingMoves(posLo, posHi, maskLo, maskHi)
     local possibleLo, possibleHi = possibleMoves(maskLo, maskHi)
     local opponentLo, opponentHi = bxor64(posLo, posHi, maskLo, maskHi)
@@ -18733,18 +19577,14 @@ local function possibleNonLosingMoves(posLo, posHi, maskLo, maskHi)
         if not isSingleBit64(forcedLo, forcedHi) then return 0, 0 end
         possibleLo, possibleHi = forcedLo, forcedHi
     end
-
     local belowThreatLo, belowThreatHi = shr64(opponentWinLo, opponentWinHi, 1)
     local safeMaskLo, safeMaskHi = bxor64(BOARD_LO, BOARD_HI, belowThreatLo, belowThreatHi)
     return band64(possibleLo, possibleHi, safeMaskLo, safeMaskHi)
 end
-
 local COLUMN_ORDER = {3, 4, 2, 5, 1, 6, 0}
-
 local function moveFromPossible(possibleLo, possibleHi, col)
     return band64(possibleLo, possibleHi, COL_LO[col + 1], COL_HI[col + 1])
 end
-
 local function columnFromMove(moveLo, moveHi)
     for col = 0, 6 do
         if b32.band(moveLo, COL_LO[col + 1]) ~= 0 or b32.band(moveHi, COL_HI[col + 1]) ~= 0 then
@@ -18753,19 +19593,16 @@ local function columnFromMove(moveLo, moveHi)
     end
     return nil
 end
-
 local function moveScore(posLo, posHi, maskLo, maskHi, moveLo, moveHi)
     local nextPosLo, nextPosHi = bor64(posLo, posHi, moveLo, moveHi)
     local wLo, wHi = winningPosition(nextPosLo, nextPosHi, maskLo, maskHi)
     return popcount64(wLo, wHi)
 end
-
 local BOOK_PATH = "connect4_solver/7x6.book"
 local BOOK_URLS = {
     "https://github.com/PascalPons/connect4/releases/download/book/7x6.book",
     "https://github.com/bennywong3/connect4solver-cpp/raw/refs/heads/main/7x6.book",
 }
-
 local bookData = nil
 local bookDepth = -1
 local bookKeyBytes = 0
@@ -18775,7 +19612,6 @@ local bookKeysOffset = 0
 local bookValuesOffset = 0
 local bookLoaded = false
 local bookDownloadAttempted = false
-
 local function parseOpeningBook(data)
     if type(data) ~= "string" or #data < 16 then return false end
     local width, height, depth, keyBytes, valueBytes, logSize = string.byte(data, 1, 6)
@@ -18784,14 +19620,11 @@ local function parseOpeningBook(data)
     if keyBytes ~= 1 and keyBytes ~= 2 and keyBytes ~= 4 then return false end
     if valueBytes ~= 1 then return false end
     if not logSize or logSize < 1 or logSize > 30 then return false end
-
     local payload = #data - 6
     local stride = keyBytes + valueBytes
     if payload <= 0 or payload % stride ~= 0 then return false end
-
     local size = payload / stride
     if size < 2 ^ logSize then return false end
-
     bookData = data
     bookDepth = depth
     bookKeyBytes = keyBytes
@@ -18802,7 +19635,6 @@ local function parseOpeningBook(data)
     bookLoaded = true
     return true
 end
-
 local function ensureBookFolder()
     local makefolderFn = envFunction("makefolder")
     local isfolderFn = envFunction("isfolder")
@@ -18814,10 +19646,8 @@ local function ensureBookFolder()
     end
     if shouldCreate then pcall(makefolderFn, "connect4_solver") end
 end
-
 local function loadOpeningBook()
     if bookLoaded then return true end
-
     local isfileFn = envFunction("isfile")
     local readfileFn = envFunction("readfile")
     if isfileFn and readfileFn then
@@ -18827,13 +19657,10 @@ local function loadOpeningBook()
             if okRead and parseOpeningBook(data) then return true end
         end
     end
-
     if bookDownloadAttempted then return false end
     bookDownloadAttempted = true
-
     local requestFn = envFunction("request") or envFunction("http_request")
     if not requestFn then return false end
-
     for _, url in ipairs(BOOK_URLS) do
         local okReq, response = pcall(function()
             return requestFn({
@@ -18868,17 +19695,14 @@ local function loadOpeningBook()
             end
         end
     end
-
     return false
 end
-
 local function bitSet64(lo, hi, bitIndex)
     if bitIndex < 32 then
         return b32.band(lo, 2 ^ bitIndex) ~= 0
     end
     return b32.band(hi, 2 ^ (bitIndex - 32)) ~= 0
 end
-
 local function partialKey3(key, col, posLo, posHi, maskLo, maskHi)
     local baseBit = col * 7
     for row = 0, 5 do
@@ -18893,7 +19717,6 @@ local function partialKey3(key, col, posLo, posHi, maskLo, maskHi)
     end
     return key * 3
 end
-
 local function key3(posLo, posHi, maskLo, maskHi)
     local forward = 0
     for col = 0, 6 do
@@ -18906,7 +19729,6 @@ local function key3(posLo, posHi, maskLo, maskHi)
     local k = (forward < reverse) and forward or reverse
     return math.floor(k / 3)
 end
-
 local function readBookPartialKey(pos)
     local value = 0
     local mul = 1
@@ -18918,7 +19740,6 @@ local function readBookPartialKey(pos)
     end
     return value
 end
-
 local function openingBookValue(posLo, posHi, maskLo, maskHi, played)
     if not bookLoaded or played > bookDepth then return 0 end
     local k = key3(posLo, posHi, maskLo, maskHi)
@@ -18930,25 +19751,19 @@ local function openingBookValue(posLo, posHi, maskLo, maskHi, played)
     if storedKey ~= (k % modulus) then return 0 end
     return string.byte(bookData, bookValuesOffset + index) or 0
 end
-
 local function openingBookScore(posLo, posHi, maskLo, maskHi, played)
     local value = openingBookValue(posLo, posHi, maskLo, maskHi, played)
     if value == 0 then return nil end
     return value - 19
 end
-
 pcall(loadOpeningBook)
-
 local TT_SIZE = 1048576
 local TT_MASK = TT_SIZE - 1
-
-
 local ttKeyLo = buffer.create(TT_SIZE * 4)
 local ttKeyHi = buffer.create(TT_SIZE * 4)
 local ttData = buffer.create(TT_SIZE * 2)
 local TT_LOWER = 1
 local TT_UPPER = 2
-
 local function hashKey(lo, hi)
     local h = b32.bxor(lo, b32.lshift(hi, 15))
     h = b32.bxor(h, b32.rshift(h, 16))
@@ -18956,19 +19771,16 @@ local function hashKey(lo, hi)
     h = b32.bxor(h, b32.rshift(h, 11))
     return b32.band(h, TT_MASK) + 1
 end
-
 local function packTT(score, flag, bestCol)
     return (score + 32) * 32 + flag * 8 + ((bestCol ~= nil) and (bestCol + 1) or 0)
 end
-
 local function unpackTT(data)
     local bestCode = data % 8
     local flag = math.floor(data / 8) % 4
     local score = math.floor(data / 32) - 32
-    local bestCol = (bestCode == 0) and nil or (bestCode - 1)
+    local bestCol = if bestCode == 0 then nil else bestCode - 1
     return score, flag, bestCol
 end
-
 local function ttLookup(keyLo, keyHi)
     local idx = hashKey(keyLo, keyHi)
     local keyOffset = (idx - 1) * 4
@@ -18982,7 +19794,6 @@ local function ttLookup(keyLo, keyHi)
     end
     return nil, nil, nil
 end
-
 local function ttWrite(keyLo, keyHi, score, flag, bestCol)
     local idx = hashKey(keyLo, keyHi)
     local keyOffset = (idx - 1) * 4
@@ -18991,7 +19802,6 @@ local function ttWrite(keyLo, keyHi, score, flag, bestCol)
     buffer.writeu32(ttKeyHi, keyOffset, keyHi)
     buffer.writeu16(ttData, dataOffset, packTT(score, flag, bestCol) + 1)
 end
-
 local MAX_PLY = 43
 local MOVE_LO_POOL = table.create(MAX_PLY)
 local MOVE_HI_POOL = table.create(MAX_PLY)
@@ -19003,47 +19813,43 @@ for i = 1, MAX_PLY do
     MOVE_SCORE_POOL[i] = table.create(7, 0)
     MOVE_COL_POOL[i] = table.create(7, 0)
 end
-
 local nodeCount = 0
 local deadline = 0
+local sliceStarted = 0
 local aborted = false
 local rootWitnessCol = nil
 local lastWeakScore = nil
 local lastExactScore = nil
-
+-- Exact search stays responsive by yielding after a small CPU slice. The wall-clock
+-- deadline is unchanged, so this cannot make a move arrive later than the old solver.
 local function expired()
     if aborted then return true end
-    if nodeCount % CHECK_INTERVAL == 0 and os.clock() >= deadline then
-        aborted = true
-        return true
-    end
+    if nodeCount % CHECK_INTERVAL ~= 0 then return false end
+    local now = os.clock()
+    if now >= deadline then aborted = true; return true end
+    if now - sliceStarted >= 0.004 then task.wait(); sliceStarted = os.clock() end
     return false
 end
-
 local negamax
 negamax = function(posLo, posHi, maskLo, maskHi, alpha, beta, ply)
     nodeCount += 1
     if expired() then return nil end
-
     local played = popcount64(maskLo, maskHi)
     local possibleLo, possibleHi = possibleNonLosingMoves(posLo, posHi, maskLo, maskHi)
     if isZero64(possibleLo, possibleHi) then
         return -div2(CELLS - played)
     end
     if played >= CELLS - 2 then return 0 end
-
     local minScore = -div2(CELLS - 2 - played)
     if alpha < minScore then
         alpha = minScore
         if alpha >= beta then return alpha end
     end
-
     local maxScore = div2(CELLS - 1 - played)
     if beta > maxScore then
         beta = maxScore
         if alpha >= beta then return beta end
     end
-
     local keyLo, keyHi = add64(posLo, posHi, maskLo, maskHi)
     local ttScore, ttFlag, ttBestCol = ttLookup(keyLo, keyHi)
     if ttScore ~= nil then
@@ -19055,10 +19861,8 @@ negamax = function(posLo, posHi, maskLo, maskHi, alpha, beta, ply)
             if alpha >= beta then return beta end
         end
     end
-
     local bookScore = openingBookScore(posLo, posHi, maskLo, maskHi, played)
     if bookScore ~= nil then return bookScore end
-
     local opponentLo, opponentHi = bxor64(posLo, posHi, maskLo, maskHi)
     local poolIndex = math.min(ply + 1, MAX_PLY)
     local moveLoList = MOVE_LO_POOL[poolIndex]
@@ -19066,7 +19870,6 @@ negamax = function(posLo, posHi, maskLo, maskHi, alpha, beta, ply)
     local moveScores = MOVE_SCORE_POOL[poolIndex]
     local moveCols = MOVE_COL_POOL[poolIndex]
     local count = 0
-
     for orderIndex = 1, 7 do
         local col = COLUMN_ORDER[orderIndex]
         local moveLo, moveHi = moveFromPossible(possibleLo, possibleHi, col)
@@ -19088,7 +19891,6 @@ negamax = function(posLo, posHi, maskLo, maskHi, alpha, beta, ply)
             moveCols[j + 1] = col
         end
     end
-
     local bestCol = nil
     for i = 1, count do
         local moveLo = moveLoList[i]
@@ -19098,28 +19900,23 @@ negamax = function(posLo, posHi, maskLo, maskHi, alpha, beta, ply)
         local childScore = negamax(opponentLo, opponentHi, nextMaskLo, nextMaskHi, -beta, -alpha, ply + 1)
         if childScore == nil then return nil end
         local score = -childScore
-
         if score > alpha then
             alpha = score
             bestCol = col
         end
-
         if score >= beta then
             ttWrite(keyLo, keyHi, score, TT_LOWER, col)
             if ply == 0 then rootWitnessCol = col end
             return score
         end
     end
-
     ttWrite(keyLo, keyHi, alpha, TT_UPPER, bestCol or ttBestCol)
     return alpha
 end
-
 local function solveScore(posLo, posHi, maskLo, maskHi, weak)
     if canWinNext(posLo, posHi, maskLo, maskHi) then
         return div2(CELLS + 1 - popcount64(maskLo, maskHi))
     end
-
     local played = popcount64(maskLo, maskHi)
     local minScore = -div2(CELLS - played)
     local maxScore = div2(CELLS + 1 - played)
@@ -19127,44 +19924,35 @@ local function solveScore(posLo, posHi, maskLo, maskHi, weak)
         minScore = -1
         maxScore = 1
     end
-
     while minScore < maxScore do
         if expired() then return nil end
-
         local med = minScore + div2(maxScore - minScore)
         if med <= 0 and div2(minScore) < med then
             med = div2(minScore)
         elseif med >= 0 and div2(maxScore) > med then
             med = div2(maxScore)
         end
-
         local result = negamax(posLo, posHi, maskLo, maskHi, med, med + 1, 0)
         if result == nil then return nil end
-
         if result <= med then
             maxScore = result
         else
             minScore = result
         end
     end
-
     return minScore
 end
-
 local function rootProbe(posLo, posHi, maskLo, maskHi, alpha, beta)
     local possibleLo, possibleHi = possibleNonLosingMoves(posLo, posHi, maskLo, maskHi)
     if isZero64(possibleLo, possibleHi) then return nil end
-
     local keyLo, keyHi = add64(posLo, posHi, maskLo, maskHi)
     local _, _, ttBestCol = ttLookup(keyLo, keyHi)
     local opponentLo, opponentHi = bxor64(posLo, posHi, maskLo, maskHi)
-
     local moveLoList = MOVE_LO_POOL[1]
     local moveHiList = MOVE_HI_POOL[1]
     local moveScores = MOVE_SCORE_POOL[1]
     local moveCols = MOVE_COL_POOL[1]
     local count = 0
-
     for orderIndex = 1, 7 do
         local col = COLUMN_ORDER[orderIndex]
         local moveLo, moveHi = moveFromPossible(possibleLo, possibleHi, col)
@@ -19186,7 +19974,6 @@ local function rootProbe(posLo, posHi, maskLo, maskHi, alpha, beta)
             moveCols[j + 1] = col
         end
     end
-
     local bestCol = nil
     for i = 1, count do
         if expired() then return nil end
@@ -19203,7 +19990,6 @@ local function rootProbe(posLo, posHi, maskLo, maskHi, alpha, beta)
     end
     return bestCol
 end
-
 local function gridToBitboards(grid, player)
     local posLo, posHi = 0, 0
     local maskLo, maskHi = 0, 0
@@ -19226,16 +20012,13 @@ local function gridToBitboards(grid, player)
     end
     return posLo, posHi, maskLo, maskHi
 end
-
 local function chooseCFMove(grid, me, enemy)
     local posLo, posHi, maskLo, maskHi = gridToBitboards(grid, me)
     local played = popcount64(maskLo, maskHi)
     if played >= CELLS then return nil end
     if played == 0 then return 4 end
-
     local possibleLo, possibleHi = possibleMoves(maskLo, maskHi)
     if isZero64(possibleLo, possibleHi) then return nil end
-
     local winningLo, winningHi = winningPosition(posLo, posHi, maskLo, maskHi)
     local immediateLo, immediateHi = band64(winningLo, winningHi, possibleLo, possibleHi)
     if not isZero64(immediateLo, immediateHi) then
@@ -19246,7 +20029,6 @@ local function chooseCFMove(grid, me, enemy)
             end
         end
     end
-
     local safeLo, safeHi = possibleNonLosingMoves(posLo, posHi, maskLo, maskHi)
     if isZero64(safeLo, safeHi) then
         for i = 1, 7 do
@@ -19256,18 +20038,15 @@ local function chooseCFMove(grid, me, enemy)
         end
         return nil
     end
-
     if isSingleBit64(safeLo, safeHi) then
         local forcedCol = columnFromMove(safeLo, safeHi)
         return forcedCol and (forcedCol + 1) or nil
     end
-
     if bookLoaded and played + 1 <= bookDepth then
         local opponentLo, opponentHi = bxor64(posLo, posHi, maskLo, maskHi)
         local allKnown = true
         local bookBestCol = nil
         local bookBestScore = -math.huge
-
         for i = 1, 7 do
             local col = COLUMN_ORDER[i]
             local mLo, mHi = moveFromPossible(possibleLo, possibleHi, col)
@@ -19285,10 +20064,8 @@ local function chooseCFMove(grid, me, enemy)
                 end
             end
         end
-
         if allKnown and bookBestCol ~= nil then return bookBestCol + 1 end
     end
-
     local fallbackCol = nil
     local fallbackScore = -math.huge
     for i = 1, 7 do
@@ -19303,14 +20080,13 @@ local function chooseCFMove(grid, me, enemy)
         end
     end
     local bestMove = fallbackCol and (fallbackCol + 1) or nil
-
     deadline = os.clock() + TIME_LIMIT
+    sliceStarted = os.clock()
     nodeCount = 0
     aborted = false
     rootWitnessCol = nil
     lastWeakScore = nil
     lastExactScore = nil
-
     local weakScore = solveScore(posLo, posHi, maskLo, maskHi, true)
     if weakScore ~= nil then
         lastWeakScore = weakScore
@@ -19326,7 +20102,6 @@ local function chooseCFMove(grid, me, enemy)
             bestMove = rootWitnessCol + 1
         end
     end
-
     if not aborted and os.clock() < deadline then
         rootWitnessCol = nil
         local exactScore = solveScore(posLo, posHi, maskLo, maskHi, false)
@@ -19342,10 +20117,8 @@ local function chooseCFMove(grid, me, enemy)
             bestMove = rootWitnessCol + 1
         end
     end
-
     return bestMove
 end
-
 local function dispose()
     aborted = true
     bookData = nil
@@ -19357,13 +20130,10 @@ local function dispose()
     MOVE_SCORE_POOL = nil
     MOVE_COL_POOL = nil
 end
-
     return chooseCFMove, dispose
 end
-
 local chooseCFMove = nil
 local disposeCFSolver = nil
-
 local function ensureCFSolver()
     if type(chooseCFMove) == "function" then return true end
     local ok, choose, dispose = pcall(createCFSolver)
@@ -19376,13 +20146,11 @@ local function ensureCFSolver()
     disposeCFSolver = type(dispose) == "function" and dispose or nil
     return true
 end
-
 local function releaseCFSolver()
     if disposeCFSolver then pcall(disposeCFSolver) end
     chooseCFMove = nil
     disposeCFSolver = nil
 end
-
 local function cfCopy(grid)
     local board = {}
     for col = 1, 7 do
@@ -19396,21 +20164,17 @@ local function cfCopy(grid)
     end
     return board
 end
-
 local function cfHeight(board, col)
     local c = board[col]
     return c and #c or 0
 end
-
 local function cfPlayable(board, col)
     return cfHeight(board, col) < 6
 end
-
 local function cfCell(board, col, row)
     local c = board[col]
     return c and (c[row] or 0) or 0
 end
-
 local function cfLineCount(board, col, row, dc, dr, player)
     local count = 0
     while true do
@@ -19422,7 +20186,6 @@ local function cfLineCount(board, col, row, dc, dr, player)
     end
     return count
 end
-
 local function cfWon(board, player)
     local dirs = {{1,0},{0,1},{1,1},{1,-1}}
     for col = 1, 7 do
@@ -19439,14 +20202,12 @@ local function cfWon(board, player)
     end
     return false
 end
-
 local function cfFull(board)
     for col = 1, 7 do
         if cfPlayable(board, col) then return false end
     end
     return true
 end
-
 local function cfSignature(grid)
     if type(grid) ~= "table" then return nil end
     local out = {}
@@ -19459,20 +20220,13 @@ local function cfSignature(grid)
     end
     return table.concat(out)
 end
-
-
-
-
-
 local cfRng = Random.new(math.floor(workspace:GetServerTimeNow() * 1000) % 2147483647)
 local lastCFGame = nil
 local lastCFSignature = nil
 local cfBusy = false
-
 local function currentGrid()
     return tryIndex({ "session", "public", "grid" })
 end
-
 local function confirmedDrop(expectedSignature, expectedSeat, move)
     for attempt = 1, 3 do
         if controller.destroyed
@@ -19482,7 +20236,6 @@ local function confirmedDrop(expectedSignature, expectedSeat, move)
         then
             return false
         end
-
         fireAction("DropChip", move)
         local deadline = os.clock() + 1.25
         while os.clock() < deadline do
@@ -19498,7 +20251,6 @@ local function confirmedDrop(expectedSignature, expectedSeat, move)
     end
     return false
 end
-
 while not controller.destroyed do
     task.wait(gameId() == "ConnectFour" and 0.05 or 0.15)
     if gameId() ~= "ConnectFour" then
@@ -19508,7 +20260,6 @@ while not controller.destroyed do
         cfBusy = false
         continue
     end
-
     if not minigameAutoplayEnabled("ConnectFour") then
         if chooseCFMove ~= nil then releaseCFSolver() end
         continue
@@ -19517,26 +20268,21 @@ while not controller.destroyed do
         task.wait(0.10)
         continue
     end
-
     if publicPhase() ~= "Playing" or cfBusy then continue end
     local mine = seatIndex()
     local turn = tonumber(tryIndex({ "session", "public", "currentTurn" }))
     local raw = currentGrid()
     if not mine or turn ~= mine or type(raw) ~= "table" then continue end
-
     local sig = cfSignature(raw)
     if not sig or sig == lastCFSignature then continue end
-
     local board = cfCopy(raw)
     local enemy = mine == 1 and 2 or 1
     if cfWon(board, mine) or cfWon(board, enemy) or cfFull(board) then continue end
-
     cfBusy = true
     task.spawn(function()
         local expectedSig = sig
         local expectedGame = gameId()
         task.wait(randomRange(cfRng, 0.18, 0.42))
-
         if controller.destroyed
             or gameId() ~= expectedGame
             or publicPhase() ~= "Playing"
@@ -19546,7 +20292,6 @@ while not controller.destroyed do
             cfBusy = false
             return
         end
-
         local latest = currentGrid()
         local fresh = cfCopy(latest)
         local move = chooseCFMove(fresh, mine, enemy)
@@ -19560,21 +20305,14 @@ while not controller.destroyed do
         cfBusy = false
     end)
 end
-
 releaseCFSolver()
-
 end)
-
-
-
 task.spawn(function()
     local rng = Random.new(
         (LocalPlayer.UserId * 1103515245
             + math.floor(workspace:GetServerTimeNow() * 1000))
         % 2147483647
     )
-
-
     local combos = {}
     local comboByKey = {}
     for a = 1, 10 do
@@ -19587,7 +20325,6 @@ task.spawn(function()
             end
         end
     end
-
     local function newProfile()
         local p = {
             bombRounds = 0,
@@ -19597,7 +20334,6 @@ task.spawn(function()
             recentBombCombos = {},
             lastBombCombo = nil,
             overlapCounts = { 1, 1, 1, 1 },
-
             eatRounds = 0,
             eatMarginal = table.create(12, 0),
             eatRecent = table.create(12, 0),
@@ -19606,7 +20342,6 @@ task.spawn(function()
             eatFirst = table.create(12, 0),
             placementCounts = {},
         }
-
         for i = 1, 12 do
             p.bombCellCounts[i] = 0
             p.eatMarginal[i] = 0
@@ -19621,7 +20356,6 @@ task.spawn(function()
         end
         return p
     end
-
     local CANDY_LEARNING_PATH = "TuffHub_CandyLearning_v1.json"
     local model = rawget(_G, "__TSUNAMI_CANDY_ULTIMATE_V7")
         or rawget(_G, "__TSUNAMI_CANDY_ULTIMATE_V6")
@@ -19645,7 +20379,6 @@ task.spawn(function()
     rawset(_G, "__TSUNAMI_CANDY_ULTIMATE_V7", model)
     if type(model.profiles) ~= "table" then model.profiles = {} end
     if type(model.global) ~= "table" then model.global = newProfile() end
-
     local function ensureProfile(p)
         if type(p) ~= "table" then p = newProfile() end
         p.comboCounts = type(p.comboCounts) == "table" and p.comboCounts or {}
@@ -19673,15 +20406,13 @@ task.spawn(function()
         end
         return p
     end
-
     model.global = ensureProfile(model.global)
-
     local candyDirty = false
     local lastCandySave = 0
     local function saveCandyLearning(force)
         if not candyDirty then return end
         local now = os.clock()
-        if not force and now - lastCandySave < 0.75 then return end
+        if not force and now - lastCandySave < 2.00 then return end
         local writefileFn = envFunction("writefile")
         if not writefileFn then return end
         local okEncode, body = pcall(HttpService.JSONEncode, HttpService, model)
@@ -19693,17 +20424,14 @@ task.spawn(function()
             end
         end
     end
-
     local function privateState()
         return tryIndex({ "session", "private" })
     end
-
     local function opponentKey(private)
         local opponent = safeIndex(private, "opponent")
         if typeof(opponent) == "Instance" and opponent:IsA("Player") then
             return "uid:" .. tostring(opponent.UserId)
         end
-
         local players = Players:GetPlayers()
         if #players == 2 then
             for _, player in ipairs(players) do
@@ -19712,10 +20440,8 @@ task.spawn(function()
                 end
             end
         end
-
         return "unknown"
     end
-
     local function profileFor(private)
         local key = opponentKey(private)
         local p = model.profiles[key]
@@ -19728,16 +20454,13 @@ task.spawn(function()
         end
         return p
     end
-
     local function boardCells(board)
         return safeIndex(board, "cells")
     end
-
     local function cellValue(cells, i, field)
         local cell = safeIndex(cells, i)
         return safeIndex(cell, field)
     end
-
     local function boardSignature(cells)
         local out = table.create(12)
         for i = 1, 12 do
@@ -19747,11 +20470,9 @@ task.spawn(function()
         end
         return table.concat(out, "")
     end
-
     local function comboContains(combo, idx)
         return combo[1] == idx or combo[2] == idx or combo[3] == idx
     end
-
     local function comboOverlap(a, b)
         if not a or not b then return 0 end
         local n = 0
@@ -19760,16 +20481,11 @@ task.spawn(function()
         end
         return n
     end
-
     local function pairKey(a, b)
         if a > b then a, b = b, a end
         return tostring(a) .. ":" .. tostring(b)
     end
-
     local function completeBombLeak(cells)
-
-
-
         local bombs = {}
         for i = 1, 12 do
             if cellValue(cells, i, "wasBomb") == true then
@@ -19781,7 +20497,6 @@ task.spawn(function()
         for _, idx in ipairs(bombs) do set[idx] = true end
         return set
     end
-
     local function recordBombLayout(profile, bombIds, weight)
         if #bombIds ~= 3 then return end
         weight = weight or 1
@@ -19789,14 +20504,12 @@ task.spawn(function()
         local key = table.concat(bombIds, ",")
         local combo = comboByKey[key]
         if not combo then return end
-
         local previous = profile.lastBombCombo and comboByKey[profile.lastBombCombo] or nil
         if previous then
             local overlap = comboOverlap(previous, combo)
             profile.overlapCounts[overlap + 1] =
                 (tonumber(profile.overlapCounts[overlap + 1]) or 1) + weight
         end
-
         profile.bombRounds = (tonumber(profile.bombRounds) or 0) + weight
         profile.comboCounts[key] = (tonumber(profile.comboCounts[key]) or 0) + weight
         for _, idx in ipairs(bombIds) do
@@ -19809,25 +20522,19 @@ task.spawn(function()
                 profile.pairCounts[pk] = (tonumber(profile.pairCounts[pk]) or 0) + weight
             end
         end
-
         profile.recentBombCombos[#profile.recentBombCombos + 1] = key
         while #profile.recentBombCombos > 36 do
             table.remove(profile.recentBombCombos, 1)
         end
         profile.lastBombCombo = key
     end
-
     local function comboLogPrior(profile, combo)
         local global = model.global
         local rounds = math.max(0, tonumber(profile.bombRounds) or 0)
         local gRounds = math.max(0, tonumber(global.bombRounds) or 0)
-
-
-
         local exact = tonumber(profile.comboCounts[combo.key]) or 0
         local gExact = tonumber(global.comboCounts[combo.key]) or 0
         local logw = math.log(0.65 + exact * 8.0 + gExact * 0.35)
-
         for j = 1, 3 do
             local idx = combo[j]
             local p = ((tonumber(profile.bombCellCounts[idx]) or 0) + 0.8)
@@ -19837,21 +20544,18 @@ task.spawn(function()
             logw += 0.62 * math.log(math.max(1e-8, p * 12))
             logw += 0.10 * math.log(math.max(1e-8, gp * 12))
         end
-
         for i = 1, 2 do
             for j = i + 1, 3 do
                 local count = tonumber(profile.pairCounts[pairKey(combo[i], combo[j])]) or 0
                 logw += 0.18 * math.log(1 + count)
             end
         end
-
         for r = #profile.recentBombCombos, 1, -1 do
             if profile.recentBombCombos[r] == combo.key then
                 local age = #profile.recentBombCombos - r
                 logw += 0.55 * math.exp(-0.22 * age)
             end
         end
-
         local last = profile.lastBombCombo and comboByKey[profile.lastBombCombo] or nil
         if last then
             local overlap = comboOverlap(last, combo)
@@ -19860,10 +20564,8 @@ task.spawn(function()
             local overlapP = (tonumber(profile.overlapCounts[overlap + 1]) or 1) / math.max(total, 1)
             logw += 0.40 * math.log(math.max(1e-8, overlapP * 4))
         end
-
         return logw
     end
-
     local function posteriorWeights(cells, profile)
         local mustBomb = {}
         local mustSafe = {}
@@ -19876,7 +20578,6 @@ task.spawn(function()
                 end
             end
         end
-
         local logs = table.create(#combos)
         local maxLog = -math.huge
         for index, combo in ipairs(combos) do
@@ -19895,7 +20596,6 @@ task.spawn(function()
                     end
                 end
             end
-
             if consistent then
                 local value = comboLogPrior(profile, combo)
                 logs[index] = value
@@ -19904,7 +20604,6 @@ task.spawn(function()
                 logs[index] = nil
             end
         end
-
         local weights = table.create(#combos, 0)
         local total = 0
         if maxLog == -math.huge then return weights, 0 end
@@ -19920,7 +20619,6 @@ task.spawn(function()
         end
         return weights, total
     end
-
     local function bombRiskForCell(cellIndex, weights, total)
         if total <= 0 then return 1 end
         local bomb = 0
@@ -19932,17 +20630,14 @@ task.spawn(function()
         end
         return bomb / total
     end
-
     local function nextEatWeights(profile, stage, lastCell, remaining)
         local global = model.global
         local weights = {}
         local total = 0
         stage = math.clamp(stage, 1, 12)
-
         local stageRow = profile.eatStage[stage]
         local transitionRow = lastCell and profile.eatTransition[lastCell] or nil
         local gStage = global.eatStage[stage]
-
         local stageTotal, transitionTotal, marginalTotal, gStageTotal = 0, 0, 0, 0
         for i = 1, 12 do
             stageTotal += tonumber(stageRow[i]) or 0
@@ -19950,7 +20645,6 @@ task.spawn(function()
             marginalTotal += tonumber(profile.eatMarginal[i]) or 0
             gStageTotal += tonumber(gStage[i]) or 0
         end
-
         for _, idx in ipairs(remaining) do
             local pStage = ((tonumber(stageRow[idx]) or 0) + 0.55) / (stageTotal + 0.55 * 12)
             local pTransition = transitionRow
@@ -19960,29 +20654,23 @@ task.spawn(function()
                 / (marginalTotal + 0.65 * 12)
             local pGlobal = ((tonumber(gStage[idx]) or 0) + 0.75) / (gStageTotal + 0.75 * 12)
             local recency = tonumber(profile.eatRecent[idx]) or 0
-
             local logScore =
                 0.48 * math.log(math.max(pStage, 1e-9))
                 + 0.27 * math.log(math.max(pTransition, 1e-9))
                 + 0.18 * math.log(math.max(pMarginal, 1e-9))
                 + 0.07 * math.log(math.max(pGlobal, 1e-9))
                 + 0.08 * recency
-
             local w = math.exp(logScore)
             weights[idx] = w
             total += w
         end
-
         if total <= 0 then
             for _, idx in ipairs(remaining) do weights[idx] = 1 end
             total = #remaining
         end
         return weights, total
     end
-
     local function chooseBombPlacement(profile)
-
-
         local observedClicks = 0
         for i = 1, 12 do observedClicks += tonumber(profile.eatMarginal[i]) or 0 end
         if observedClicks <= 0 then
@@ -19999,14 +20687,8 @@ task.spawn(function()
             candyDirty = true
             return chosen
         end
-
-
-
-
-
         local scoreByKey = {}
         for _, combo in ipairs(combos) do scoreByKey[combo.key] = 0 end
-
         local states = { [0] = { [0] = 1 } }
         for stage = 1, 12 do
             local nextStates = {}
@@ -20028,7 +20710,6 @@ task.spawn(function()
                                     local row = nextStates[newMask]
                                     if not row then row = {}; nextStates[newMask] = row end
                                     row[chosen] = (row[chosen] or 0) + transitionProb
-
                                     if stage >= 3 then
                                         local prior = {}
                                         for idx = 1, 12 do
@@ -20060,12 +20741,10 @@ task.spawn(function()
             end
             states = nextStates
         end
-
         local bestScore = -math.huge
         local nearBest = {}
         for _, combo in ipairs(combos) do
             local score = scoreByKey[combo.key] or 0
-
             score -= (tonumber(profile.placementCounts[combo.key]) or 0) * 0.006
             if score > bestScore + 1e-10 then
                 bestScore = score
@@ -20075,13 +20754,11 @@ task.spawn(function()
                 nearBest[#nearBest + 1] = combo
             end
         end
-
         local chosen = nearBest[rng:NextInteger(1, #nearBest)]
         profile.placementCounts[chosen.key] = (tonumber(profile.placementCounts[chosen.key]) or 0) + 1
         candyDirty = true
         return { chosen[1], chosen[2], chosen[3] }
     end
-
     local function chooseCandyToEat(cells, profile, attemptedCells)
         local available = {}
         for i = 1, 12 do
@@ -20091,7 +20768,6 @@ task.spawn(function()
                 available[#available + 1] = i
             end
         end
-
         if #available == 0 then
             table.clear(attemptedCells)
             for i = 1, 12 do
@@ -20101,7 +20777,6 @@ task.spawn(function()
             end
         end
         if #available == 0 then return nil end
-
         local leaked = completeBombLeak(cells)
         if leaked then
             local safe = {}
@@ -20112,15 +20787,10 @@ task.spawn(function()
                 return safe[rng:NextInteger(1, #safe)]
             end
         end
-
         local weights, total = posteriorWeights(cells, profile)
         if total <= 0 then
             return available[rng:NextInteger(1, #available)]
         end
-
-
-
-
         local bestRisk = math.huge
         local tied = {}
         for _, idx in ipairs(available) do
@@ -20135,7 +20805,6 @@ task.spawn(function()
         end
         return tied[rng:NextInteger(1, #tied)]
     end
-
     local roundKey = nil
     local placementSentFor = nil
     local recordedBombRound = nil
@@ -20151,7 +20820,6 @@ task.spawn(function()
     local opponentEatOrder = 0
     local previousOpponentEat = nil
     local activeProfile = model.global
-
     local function resetActionState(clearAttempts)
         pendingChoice = nil
         pendingSignature = nil
@@ -20160,13 +20828,11 @@ task.spawn(function()
         previousTurn = nil
         if clearAttempts then table.clear(attemptedCells) end
     end
-
     local function resetRoundLearning()
         table.clear(seenOpponentEaten)
         opponentEatOrder = 0
         previousOpponentEat = nil
     end
-
     local function observeOpponentEating(opponentCells)
         if not opponentCells then return end
         local newly = {}
@@ -20177,19 +20843,14 @@ task.spawn(function()
                 newly[#newly + 1] = i
             end
         end
-
-
-
         for i = #newly, 2, -1 do
             local j = rng:NextInteger(1, i)
             newly[i], newly[j] = newly[j], newly[i]
         end
-
         for _, idx in ipairs(newly) do
             seenOpponentEaten[idx] = true
             opponentEatOrder += 1
             local stage = math.clamp(opponentEatOrder, 1, 12)
-
             for i = 1, 12 do
                 activeProfile.eatRecent[i] = (tonumber(activeProfile.eatRecent[i]) or 0) * 0.94
             end
@@ -20198,7 +20859,6 @@ task.spawn(function()
             activeProfile.eatStage[stage][idx] = (tonumber(activeProfile.eatStage[stage][idx]) or 0) + 1
             model.global.eatMarginal[idx] = (tonumber(model.global.eatMarginal[idx]) or 0) + 0.20
             model.global.eatStage[stage][idx] = (tonumber(model.global.eatStage[stage][idx]) or 0) + 0.20
-
             if stage == 1 then
                 activeProfile.eatFirst[idx] = (tonumber(activeProfile.eatFirst[idx]) or 0) + 1
             end
@@ -20210,7 +20870,6 @@ task.spawn(function()
             candyDirty = true
         end
     end
-
     local function recordCompletedOpponentBombs(cells)
         if recordedBombRound == roundKey or not cells then return end
         local bombs = {}
@@ -20226,7 +20885,6 @@ task.spawn(function()
         candyDirty = true
         saveCandyLearning(true)
     end
-
     local bombConnection = nil
     pcall(function()
         local remote = Remotes.MinigameBombExplosion
@@ -20247,10 +20905,8 @@ task.spawn(function()
             end)
         end
     end)
-
     while not controller.destroyed do
         task.wait(gameId() == "CandyBomb" and 0.032 or 0.15)
-
         if gameId() ~= "CandyBomb" then
             saveCandyLearning(true)
             roundKey = nil
@@ -20262,11 +20918,9 @@ task.spawn(function()
             resetRoundLearning()
             continue
         end
-
         if not minigameAutoplayEnabled("CandyBomb") then
             continue
         end
-
         saveCandyLearning(false)
         local phase = publicPhase()
         local private = privateState()
@@ -20275,7 +20929,6 @@ task.spawn(function()
         local myCells = boardCells(myBoard)
         local opponentBoard = safeIndex(private, "opponentBoard")
         local opponentCells = boardCells(opponentBoard)
-
         if phase ~= previousPhase then
             if phase == "BombPlacement" then
                 roundKey = tostring(workspace:GetServerTimeNow())
@@ -20291,7 +20944,6 @@ task.spawn(function()
             end
             previousPhase = phase
         end
-
         if phase == "BombPlacement" then
             if roundKey and placementSentFor ~= roundKey then
                 placementSentFor = roundKey
@@ -20303,11 +20955,9 @@ task.spawn(function()
             end
             continue
         end
-
         if opponentCells then observeOpponentEating(opponentCells) end
         if myCells then recordCompletedOpponentBombs(myCells) end
         if phase ~= "Playing" or not myCells then continue end
-
         local currentTurn = tonumber(safeIndex(private, "currentTurn"))
         if currentTurn ~= previousTurn then
             if previousTurn ~= nil then
@@ -20318,14 +20968,12 @@ task.spawn(function()
             previousTurn = currentTurn
         end
         if currentTurn ~= 1 then continue end
-
         local sig = boardSignature(myCells)
         if pendingChoice ~= nil then
             local processed =
                 cellValue(myCells, pendingChoice, "eaten") == true
                 or sig ~= pendingSignature
                 or bombEventSerial ~= pendingBombSerial
-
             if processed then
                 pendingChoice = nil
                 pendingSignature = nil
@@ -20338,10 +20986,8 @@ task.spawn(function()
                 pendingSentAt = 0
             end
         end
-
         local choice = chooseCandyToEat(myCells, activeProfile, attemptedCells)
         if not choice then continue end
-
         task.wait(randomRange(rng, 0.045, 0.10))
         local fresh = privateState()
         local freshCells = boardCells(safeIndex(fresh, "myBoard"))
@@ -20362,88 +21008,46 @@ task.spawn(function()
             end
         end
     end
-
     if bombConnection then
         pcall(function() bombConnection:Disconnect() end)
     end
 end)
-
-
-
 task.spawn(function()
     local rng = Random.new(
         (LocalPlayer.UserId * 214013
             + math.floor(workspace:GetServerTimeNow() * 10000))
         % 2147483647
     )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     local function psychologyAlpha(n)
-
-
-
-
-
-
-
         local a = 1.0
-
         if n == 37 then a += 0.80 end
         if n == 73 then a += 0.65 end
         if n == 69 then a += 0.55 end
         if n == 7 or n == 77 then a += 0.35 end
         if n % 10 == 7 then a += 0.12 end
         if n == 50 then a += 0.10 end
-
         return a
     end
-
     local function newProfile()
         local profile = {
             secretAlpha = table.create(100),
             exactSecrets = 0,
             censoredSecrets = 0,
-
-
-
             guessStateCounts = {},
             guessSamples = 0,
-
             firstGuessCounts = table.create(100),
             recentOwnSecrets = {},
         }
-
         for n = 1, 100 do
             profile.secretAlpha[n] = psychologyAlpha(n)
             profile.firstGuessCounts[n] = 0
         end
-
         return profile
     end
-
     local NUMBER_LEARNING_PATH = "TuffHub_NumberGuessLearning_v1.json"
     local model = rawget(_G, "__TSUNAMI_NUMBER_GUESS_OPTIMAL_V9")
         or rawget(_G, "__TSUNAMI_NUMBER_GUESS_OPTIMAL_V8")
         or rawget(_G, "__TSUNAMI_NUMBER_GUESS_OPTIMAL_V7")
-
     if type(model) ~= "table" then
         local readfileFn = envFunction("readfile")
         local isfileFn = envFunction("isfile")
@@ -20458,13 +21062,11 @@ task.spawn(function()
             end
         end
     end
-
     if type(model) ~= "table" then
         model = { profiles = {}, global = newProfile() }
     end
     rawset(_G, "__TSUNAMI_NUMBER_GUESS_OPTIMAL_V9", model)
     if type(model.profiles) ~= "table" then model.profiles = {} end
-
     local function ensureNumberProfile(profile)
         if type(profile) ~= "table" then profile = newProfile() end
         profile.secretAlpha = type(profile.secretAlpha) == "table" and profile.secretAlpha or table.create(100)
@@ -20494,10 +21096,8 @@ task.spawn(function()
         while #profile.recentOwnSecrets > 24 do table.remove(profile.recentOwnSecrets, 1) end
         return profile
     end
-
     model.global = ensureNumberProfile(model.global)
     for key, profile in pairs(model.profiles) do model.profiles[key] = ensureNumberProfile(profile) end
-
     local numberDirty = false
     local lastNumberSave = 0
     local function pruneNumberProfiles()
@@ -20512,7 +21112,7 @@ task.spawn(function()
     local function saveNumberLearning(force)
         if not numberDirty then return end
         local now = os.clock()
-        if not force and now - lastNumberSave < 0.75 then return end
+        if not force and now - lastNumberSave < 2.00 then return end
         local writefileFn = envFunction("writefile")
         if not writefileFn then return end
         pruneNumberProfiles()
@@ -20522,23 +21122,18 @@ task.spawn(function()
             if okWrite then numberDirty = false; lastNumberSave = now end
         end
     end
-
     local function opponentKey(private)
         local opponent = safeIndex(private, "opponent")
-
         if typeof(opponent) == "Instance"
             and opponent:IsA("Player")
         then
             return "uid:" .. tostring(opponent.UserId)
         end
-
         return "obj:" .. tostring(opponent or "unknown")
     end
-
     local function profileFor(private)
         local key = opponentKey(private)
         local profile = model.profiles[key]
-
         if type(profile) ~= "table" then
             profile = newProfile()
             model.profiles[key] = profile
@@ -20550,28 +21145,22 @@ task.spawn(function()
         profile.lastSeen = os.time()
         return profile
     end
-
     local function stateKey(low, high)
         return tostring(low) .. ":" .. tostring(high)
     end
-
     local function addGuessPolicySample(profile, low, high, guess, scale)
         if not profile or not guess then return end
         if guess < low or guess > high then return end
-
         scale = scale or 1
         local key = stateKey(low, high)
         local counts = profile.guessStateCounts[key]
-
         if type(counts) ~= "table" then
             counts = {}
             profile.guessStateCounts[key] = counts
         end
-
         counts[guess] = (tonumber(counts[guess]) or 0) + scale
         profile.guessSamples =
             (tonumber(profile.guessSamples) or 0) + scale
-
         if low == 1 and high == 100 then
             profile.firstGuessCounts[guess] =
                 (tonumber(profile.firstGuessCounts[guess]) or 0)
@@ -20579,13 +21168,11 @@ task.spawn(function()
         end
         numberDirty = true
     end
-
     local function addExactSecret(profile, secret, scale)
         secret = tonumber(secret)
         if not profile or not secret or secret < 1 or secret > 100 then
             return
         end
-
         scale = scale or 1
         profile.secretAlpha[secret] =
             (tonumber(profile.secretAlpha[secret]) or psychologyAlpha(secret))
@@ -20594,19 +21181,12 @@ task.spawn(function()
             (tonumber(profile.exactSecrets) or 0) + scale
         numberDirty = true
     end
-
     local function addCensoredSecret(profile, low, high, scale)
         if not profile then return end
         low = math.clamp(math.floor(tonumber(low) or 1), 1, 100)
         high = math.clamp(math.floor(tonumber(high) or 100), 1, 100)
         if low > high then return end
-
         scale = scale or 0.35
-
-
-
-
-
         local sum = 0
         for n = low, high do
             sum += math.max(
@@ -20615,7 +21195,6 @@ task.spawn(function()
             )
         end
         if sum <= 0 then return end
-
         for n = low, high do
             local current =
                 math.max(
@@ -20624,16 +21203,13 @@ task.spawn(function()
                 )
             profile.secretAlpha[n] = current + scale * current / sum
         end
-
         profile.censoredSecrets =
             (tonumber(profile.censoredSecrets) or 0) + scale
         numberDirty = true
     end
-
     local function guessLogArray()
         local log = tryIndex({ "session", "public", "guessLog" })
         local out = {}
-
         if log ~= nil then
             pcall(function()
                 for i, entry in log do
@@ -20643,17 +21219,13 @@ task.spawn(function()
                 end
             end)
         end
-
         return out
     end
-
     local function logSignature(log)
         local out = {}
-
         for i = 1, 256 do
             local entry = log[i]
             if entry == nil then break end
-
             out[#out + 1] =
                 tostring(entry.guesserIndex)
                 .. ":"
@@ -20661,22 +21233,17 @@ task.spawn(function()
                 .. ":"
                 .. tostring(entry.response)
         end
-
         return table.concat(out, "|")
     end
-
     local function boundsForSeat(log, seat)
         local low, high = 1, 100
         local foundCorrect = nil
-
         for i = 1, 256 do
             local entry = log[i]
             if entry == nil then break end
-
             if tonumber(entry.guesserIndex) == seat then
                 local guess = tonumber(entry.guess)
                 local response = entry.response
-
                 if guess then
                     if response == "Higher" then
                         low = math.max(low, guess + 1)
@@ -20689,10 +21256,8 @@ task.spawn(function()
                 end
             end
         end
-
         return low, high, foundCorrect
     end
-
     local function recordOpponentGuessPolicy(
         log,
         mine,
@@ -20701,18 +21266,14 @@ task.spawn(function()
     )
         local opponentLow, opponentHigh = 1, 100
         local opponentOrder = 0
-
         for i = 1, 256 do
             local entry = log[i]
             if entry == nil then break end
-
             local guesser = tonumber(entry.guesserIndex)
             local guess = tonumber(entry.guess)
             local response = entry.response
-
             if guesser and guess and guesser ~= mine then
                 opponentOrder += 1
-
                 local entryKey =
                     tostring(i)
                     .. ":"
@@ -20721,10 +21282,8 @@ task.spawn(function()
                     .. tostring(guess)
                     .. ":"
                     .. tostring(response)
-
                 if not processedPolicyEntries[entryKey] then
                     processedPolicyEntries[entryKey] = true
-
                     addGuessPolicySample(
                         profile,
                         opponentLow,
@@ -20740,7 +21299,6 @@ task.spawn(function()
                         0.20
                     )
                 end
-
                 if response == "Higher" then
                     opponentLow = math.max(opponentLow, guess + 1)
                 elseif response == "Lower" then
@@ -20751,20 +21309,13 @@ task.spawn(function()
             end
         end
     end
-
     local function combinedSecretWeights(profile, low, high)
         local weights = table.create(100, 0)
-
         local specificEvidence =
             (tonumber(profile.exactSecrets) or 0)
             + (tonumber(profile.censoredSecrets) or 0)
-
-
-
-
         local specificMix =
             math.clamp(specificEvidence / 10, 0, 1)
-
         for n = low, high do
             local specific =
                 tonumber(profile.secretAlpha[n]) or psychologyAlpha(n)
@@ -20772,42 +21323,28 @@ task.spawn(function()
                 tonumber(model.global.secretAlpha[n])
                 or psychologyAlpha(n)
             local baseline = psychologyAlpha(n)
-
             weights[n] =
                 baseline * (1 - specificMix) * 0.85
                 + global * (1 - specificMix) * 0.15
                 + specific * specificMix
         end
-
         return weights
     end
-
     local function exactOptimalGuess(weights, low, high)
         if low >= high then return low end
-
-
-
-
         local dp = {}
         local height = {}
         local root = {}
-
-
-
-
         local prefix = { [0] = 0 }
-
         for n = 1, 100 do
             prefix[n] =
                 (prefix[n - 1] or 0)
                 + math.max(0, tonumber(weights[n]) or 0)
         end
-
         local function intervalWeight(l, r)
             if l > r then return 0 end
             return (prefix[r] or 0) - (prefix[l - 1] or 0)
         end
-
         for l = low, high + 1 do
             dp[l] = {}
             height[l] = {}
@@ -20815,31 +21352,25 @@ task.spawn(function()
             dp[l][l - 1] = 0
             height[l][l - 1] = 0
         end
-
         for length = 1, high - low + 1 do
             for l = low, high - length + 1 do
                 local r = l + length - 1
                 local w = intervalWeight(l, r)
-
                 local bestCost = math.huge
                 local bestHeight = math.huge
                 local bestRoot = l
-
                 for k = l, r do
                     local leftCost =
                         (k > l) and dp[l][k - 1] or 0
                     local rightCost =
                         (k < r) and dp[k + 1][r] or 0
-
                     local cost = leftCost + rightCost + w
-
                     local leftHeight =
                         (k > l) and height[l][k - 1] or 0
                     local rightHeight =
                         (k < r) and height[k + 1][r] or 0
                     local candidateHeight =
                         1 + math.max(leftHeight, rightHeight)
-
                     if cost < bestCost - 1e-9
                         or (
                             math.abs(cost - bestCost) <= 1e-9
@@ -20861,39 +21392,29 @@ task.spawn(function()
                         bestRoot = k
                     end
                 end
-
                 dp[l][r] = bestCost
                 height[l][r] = bestHeight
                 root[l][r] = bestRoot
             end
         end
-
         return root[low][high]
     end
-
     local function humanGuessBaseWeight(guess, low, high)
         local count = high - low + 1
         local center = (low + high) * 0.5
         local lowerMid = math.floor(center)
         local upperMid = math.ceil(center)
-
         local normalized =
             math.abs(guess - center)
             / math.max(1, count * 0.5)
-
-
         local weight =
             0.04
             + math.exp(-normalized * 5.5) * 1.6
-
         if guess == lowerMid or guess == upperMid then
             weight += 5.5
         end
-
-
         if guess % 10 == 0 then weight += 0.34 end
         if guess % 5 == 0 then weight += 0.18 end
-
         if low == 1 and high == 100 then
             if guess == 50 then weight += 5.0 end
             if guess == 51 then weight += 1.2 end
@@ -20901,29 +21422,23 @@ task.spawn(function()
             if guess == 69 then weight += 0.32 end
             if guess == 73 then weight += 0.30 end
         end
-
         return weight
     end
-
     local function policyChoices(profile, low, high)
         local specific =
             profile.guessStateCounts[stateKey(low, high)]
         local global =
             model.global.guessStateCounts[stateKey(low, high)]
-
         local evidence = 0
         if type(specific) == "table" then
             for _, count in pairs(specific) do
                 evidence += tonumber(count) or 0
             end
         end
-
         local specificTrust =
             math.clamp(evidence / 6, 0, 1)
-
         local choices = {}
         local total = 0
-
         for guess = low, high do
             local base =
                 humanGuessBaseWeight(guess, low, high)
@@ -20935,12 +21450,10 @@ task.spawn(function()
                 type(global) == "table"
                 and (tonumber(global[guess]) or 0)
                 or 0
-
             local weight =
                 base * (1 - specificTrust)
                 + specificCount * 7.0 * specificTrust
                 + globalCount * 0.65
-
             if weight > 0 then
                 choices[#choices + 1] = {
                     guess = guess,
@@ -20949,7 +21462,6 @@ task.spawn(function()
                 total += weight
             end
         end
-
         if total <= 0 then
             return {
                 {
@@ -20958,36 +21470,24 @@ task.spawn(function()
                 },
             }
         end
-
-
-
-
-
         for _, choice in ipairs(choices) do
             choice.probability = choice.weight / total
         end
-
         return choices
     end
-
     local function expectedOpponentSteps(profile, secret)
         local memo = {}
-
         local function solve(low, high)
             if low > high then return 0 end
             if low == high then return 1 end
-
             local key = stateKey(low, high)
             local cached = memo[key]
             if cached ~= nil then return cached end
-
             local choices = policyChoices(profile, low, high)
             local expected = 0
-
             for _, choice in ipairs(choices) do
                 local guess = choice.guess
                 local branch
-
                 if guess == secret then
                     branch = 1
                 elseif secret > guess then
@@ -20995,31 +21495,24 @@ task.spawn(function()
                 else
                     branch = 1 + solve(low, guess - 1)
                 end
-
                 expected += choice.probability * branch
             end
-
             memo[key] = expected
             return expected
         end
-
         return solve(1, 100)
     end
-
     local function canonicalDepth(secret, upperMedian)
         local low, high = 1, 100
         local depth = 0
-
         while low <= high and depth < 100 do
             depth += 1
             local guess
-
             if upperMedian then
                 guess = math.floor((low + high + 1) * 0.5)
             else
                 guess = math.floor((low + high) * 0.5)
             end
-
             if guess == secret then
                 return depth
             elseif secret > guess then
@@ -21028,32 +21521,17 @@ task.spawn(function()
                 high = guess - 1
             end
         end
-
         return depth
     end
-
     local function chooseStrongSecret(profile)
-
-
-
-
-
-
-
-
-
-
-
         local maxRobustDepth = -math.huge
         local deepest = {}
-
         for secret = 1, 100 do
             local robustDepth =
                 math.min(
                     canonicalDepth(secret, false),
                     canonicalDepth(secret, true)
                 )
-
             if robustDepth > maxRobustDepth then
                 maxRobustDepth = robustDepth
                 table.clear(deepest)
@@ -21062,7 +21540,6 @@ task.spawn(function()
                 deepest[#deepest + 1] = secret
             end
         end
-
         local recentPenalty = {}
         for i, n in ipairs(profile.recentOwnSecrets) do
             local age = #profile.recentOwnSecrets - i
@@ -21070,38 +21547,26 @@ task.spawn(function()
                 (recentPenalty[n] or 0)
                 + math.exp(-0.36 * age)
         end
-
         local policyEvidence = tonumber(profile.guessSamples) or 0
         local scored = table.create(#deepest)
         local bestScore = -math.huge
-
         for _, secret in ipairs(deepest) do
-
-
-
-
             local learnedDifficulty = expectedOpponentSteps(profile, secret)
             local score =
                 learnedDifficulty
                 - (recentPenalty[secret] or 0) * 0.55
-
             scored[#scored + 1] = {
                 secret = secret,
                 score = score,
             }
             if score > bestScore then bestScore = score end
         end
-
         table.sort(scored, function(a, b)
             if math.abs(a.score - b.score) > 1e-9 then
                 return a.score > b.score
             end
             return a.secret < b.secret
         end)
-
-
-
-
         local pool = {}
         if policyEvidence >= 8 then
             local tolerance = 0.08
@@ -21117,7 +21582,6 @@ task.spawn(function()
                 pool[#pool + 1] = item
             end
         end
-
         local chosen
         if policyEvidence >= 8 and #pool > 1 then
             local temperature =
@@ -21132,7 +21596,6 @@ task.spawn(function()
                     math.exp((item.score - bestScore) / temperature)
                 total += item.weight
             end
-
             local roll = rng:NextNumber() * math.max(total, 1e-9)
             chosen = pool[#pool].secret
             for _, item in ipairs(pool) do
@@ -21145,16 +21608,13 @@ task.spawn(function()
         else
             chosen = pool[rng:NextInteger(1, #pool)].secret
         end
-
         profile.recentOwnSecrets[#profile.recentOwnSecrets + 1] = chosen
         while #profile.recentOwnSecrets > 20 do
             table.remove(profile.recentOwnSecrets, 1)
         end
         numberDirty = true
-
         return chosen
     end
-
     local currentSessionKey = nil
     local previousPhase = nil
     local roundSerial = 0
@@ -21166,7 +21626,6 @@ task.spawn(function()
     local activeProfile = nil
     local lastMyBoundsLow = 1
     local lastMyBoundsHigh = 100
-
     local function resetRoundState()
         pickSentFor = nil
         lastGuessSignature = nil
@@ -21176,11 +21635,9 @@ task.spawn(function()
         lastMyBoundsLow = 1
         lastMyBoundsHigh = 100
     end
-
     while not controller.destroyed do
         task.wait(gameId() == "NumberGuess" and 0.025 or 0.15)
         saveNumberLearning(false)
-
         if gameId() ~= "NumberGuess" then
             saveNumberLearning(true)
             currentSessionKey = nil
@@ -21189,18 +21646,14 @@ task.spawn(function()
             resetRoundState()
             continue
         end
-
         if not minigameAutoplayEnabled("NumberGuess") then
             continue
         end
-
         local phase = publicPhase()
         local mine = seatIndex()
         if not mine then continue end
-
         local private = tryIndex({ "session", "private" })
         activeProfile = profileFor(private)
-
         if phase == "Picking" and previousPhase ~= "Picking" then
             roundSerial += 1
             currentSessionKey =
@@ -21214,29 +21667,23 @@ task.spawn(function()
                 .. ":"
                 .. tostring(rng:NextInteger(1, 1000000000))
         end
-
         previousPhase = phase
-
         local log = guessLogArray()
         local signature = logSignature(log)
-
         recordOpponentGuessPolicy(
             log,
             mine,
             activeProfile,
             processedPolicyEntries
         )
-
         local myLow, myHigh, exactSecret =
             boundsForSeat(log, mine)
         lastMyBoundsLow, lastMyBoundsHigh = myLow, myHigh
-
         if exactSecret and not learnedSecretForRound then
             learnedSecretForRound = true
             addExactSecret(activeProfile, exactSecret, 1)
             addExactSecret(model.global, exactSecret, 0.20)
         end
-
         if phase == "Picking" then
             local mySecret =
                 tryIndex({
@@ -21251,29 +21698,22 @@ task.spawn(function()
                     "pickedStatus",
                     mine,
                 })
-
             if mySecret == nil
                 and picked ~= true
                 and pickSentFor ~= currentSessionKey
             then
                 pickSentFor = currentSessionKey
                 local secret = chooseStrongSecret(activeProfile)
-
-
-
                 if gameId() == "NumberGuess"
                     and publicPhase() == "Picking"
                 then
                     fireAction("PickNumber", secret)
                 end
             end
-
             continue
         end
-
         if phase == "Finished" and not finalizedRound then
             finalizedRound = true
-
             if not learnedSecretForRound then
                 addCensoredSecret(
                     activeProfile,
@@ -21289,11 +21729,9 @@ task.spawn(function()
                 )
             end
         end
-
         if phase ~= "Guessing" then
             continue
         end
-
         if tonumber(
             tryIndex({
                 "session",
@@ -21304,7 +21742,6 @@ task.spawn(function()
         then
             continue
         end
-
         if tryIndex({
             "session",
             "public",
@@ -21313,22 +21750,18 @@ task.spawn(function()
         then
             continue
         end
-
         if signature == lastGuessSignature then
             continue
         end
-
         if myLow > myHigh then
             continue
         end
-
         local weights =
             combinedSecretWeights(
                 activeProfile,
                 myLow,
                 myHigh
             )
-
         local guess
         local optimizerOk, optimizerResult = pcall(
             exactOptimalGuess,
@@ -21336,7 +21769,6 @@ task.spawn(function()
             myLow,
             myHigh
         )
-
         if optimizerOk
             and type(optimizerResult) == "number"
             and optimizerResult >= myLow
@@ -21344,15 +21776,9 @@ task.spawn(function()
         then
             guess = math.floor(optimizerResult)
         else
-
-
-
             guess = math.floor((myLow + myHigh) * 0.5)
         end
-
         lastGuessSignature = signature
-
-
         if gameId() == "NumberGuess"
             and publicPhase() == "Guessing"
             and tonumber(
@@ -21369,9 +21795,6 @@ task.spawn(function()
             }) ~= true
         then
             local sent = fireAction("Guess", guess)
-
-
-
             if not sent then
                 lastGuessSignature = nil
             end
@@ -21381,33 +21804,18 @@ task.spawn(function()
     end
     saveNumberLearning(true)
 end)
-
-
-
 task.spawn(function()
     local FootballDraft = require(ReplicatedStorage.Shared.Config.FootballDraft)
     local rng = Random.new((LocalPlayer.UserId * 1664525 + math.floor(workspace:GetServerTimeNow() * 1000)) % 2147483647)
     local seenCandidates = nil
     local candidatesSeenAt = 0
     local actionBusy = false
-
-
-
-
-
-
-
-
-
-
-
     local LINES = { "Front", "Mid", "Back", "GK" }
     local LINE_BIT = { Front = 1, Mid = 2, Back = 4, GK = 8 }
     local LINE_TOTAL = { Front = 3, Mid = 3, Back = 4, GK = 1 }
     local valueCache = {}
     local maskStats = {}
     local generatedSinceYield = 0
-
     local function toArray(proxy)
         local out = {}
         if proxy ~= nil then
@@ -21423,11 +21831,9 @@ task.spawn(function()
         end
         return compact
     end
-
     local function candidateSignature(candidates)
         return table.concat(candidates, "\0")
     end
-
     local function stateFromLineup(lineup)
         local state = { Front = 0, Mid = 0, Back = 0, GK = 0 }
         for _, slot in ipairs(FootballDraft.Formation) do
@@ -21441,7 +21847,6 @@ task.spawn(function()
         end
         return state
     end
-
     local function copyState(state)
         return {
             Front = state.Front,
@@ -21450,11 +21855,9 @@ task.spawn(function()
             GK = state.GK,
         }
     end
-
     local function remainingSlots(state)
         return state.Front + state.Mid + state.Back + state.GK
     end
-
     local function openMask(state)
         local mask = 0
         for _, line in ipairs(LINES) do
@@ -21464,7 +21867,6 @@ task.spawn(function()
         end
         return mask
     end
-
     local function stateKey(state, rerolls)
         return table.concat({
             tostring(state.Front),
@@ -21474,7 +21876,6 @@ task.spawn(function()
             tostring(rerolls),
         }, ":")
     end
-
     local function syntheticLineup(state)
         local lineup = {}
         local filledNeeded = {
@@ -21484,19 +21885,15 @@ task.spawn(function()
             GK = LINE_TOTAL.GK - state.GK,
         }
         local filled = { Front = 0, Mid = 0, Back = 0, GK = 0 }
-
         for _, slot in ipairs(FootballDraft.Formation) do
             local line = slot.Line
             if filled[line] < filledNeeded[line] then
-
-
                 lineup[slot.SlotId] = "__TSUNAMI_FILLED__"
                 filled[line] += 1
             end
         end
         return lineup
     end
-
     local function generatedOffer(state)
         local sim = {
             Lineup = syntheticLineup(state),
@@ -21510,7 +21907,6 @@ task.spawn(function()
         end
         return {}
     end
-
     local function maybeYield(deadline)
         if generatedSinceYield >= 24 then
             generatedSinceYield = 0
@@ -21519,7 +21915,6 @@ task.spawn(function()
             end
         end
     end
-
     local function cardLine(card)
         if type(card) ~= "table" then return nil end
         if type(card.line) == "string" then return card.line end
@@ -21529,7 +21924,6 @@ task.spawn(function()
         end
         return nil
     end
-
     local function cardOVR(card)
         if type(card) ~= "table" then return 0 end
         local value = tonumber(card.ovr)
@@ -21540,28 +21934,23 @@ task.spawn(function()
         end
         return 0
     end
-
     local function nameLine(name)
         local ok, line = pcall(FootballDraft.GetLine, name)
         return ok and line or nil
     end
-
     local function nameOVR(name)
         local ok, ovr = pcall(FootballDraft.GetOVR, name)
         return ok and (tonumber(ovr) or 0) or 0
     end
-
     local function afterPickingLine(state, line)
         if not line or (state[line] or 0) <= 0 then return nil end
         local nextState = copyState(state)
         nextState[line] -= 1
         return nextState
     end
-
     local function buildMaskStats(mask, deadline)
         local cached = maskStats[mask]
         if cached then return cached end
-
         local state = {
             Front = bit32.band(mask, LINE_BIT.Front) ~= 0 and 1 or 0,
             Mid = bit32.band(mask, LINE_BIT.Mid) ~= 0 and 1 or 0,
@@ -21570,7 +21959,6 @@ task.spawn(function()
         }
         local values = {}
         local targetSamples = 96
-
         for _ = 1, targetSamples do
             if os.clock() >= deadline then break end
             local cards = generatedOffer(state)
@@ -21581,7 +21969,6 @@ task.spawn(function()
             if best > 0 then values[#values + 1] = best end
             maybeYield(deadline)
         end
-
         if #values == 0 then
             return {
                 mean = 82,
@@ -21589,14 +21976,12 @@ task.spawn(function()
                 provisional = true,
             }
         end
-
         table.sort(values)
         local n = #values
         local sum = 0
         for _, value in ipairs(values) do sum += value end
         local mean = sum / n
         local expectedMax = { [1] = mean }
-
         for draws = 2, 4 do
             local expectation = 0
             for i, value in ipairs(values) do
@@ -21606,7 +21991,6 @@ task.spawn(function()
             end
             expectedMax[draws] = expectation
         end
-
         local stats = {
             mean = mean,
             marginal = {
@@ -21621,11 +22005,9 @@ task.spawn(function()
         end
         return stats
     end
-
     local function tailEstimate(state, rerolls, deadline)
         local remaining = remainingSlots(state)
         if remaining <= 0 then return 0 end
-
         local mask = openMask(state)
         local stats = maskStats[mask]
         if not stats and os.clock() < deadline then
@@ -21635,14 +22017,8 @@ task.spawn(function()
             mean = 82,
             marginal = { 3.5, 2.0, 1.0 },
         }
-
         local value = remaining * stats.mean
         if rerolls <= 0 then return value end
-
-
-
-
-
         local increments = {}
         for _ = 1, remaining do
             for k = 1, math.min(3, rerolls) do
@@ -21655,24 +22031,17 @@ task.spawn(function()
         end
         return value
     end
-
     local estimateFuture
     estimateFuture = function(state, rerolls, deadline)
         local remaining = remainingSlots(state)
         if remaining <= 0 then return 0, true end
-
         rerolls = math.max(0, math.floor(tonumber(rerolls) or 0))
         local key = stateKey(state, rerolls)
         local cached = valueCache[key]
         if cached ~= nil then return cached, true end
-
         if os.clock() >= deadline then
             return tailEstimate(state, rerolls, deadline), false
         end
-
-
-
-
         local futureByLine = {}
         local complete = true
         for _, line in ipairs(LINES) do
@@ -21687,21 +22056,15 @@ task.spawn(function()
                 end
             end
         end
-
         local rerollValue = -math.huge
         if rerolls > 0 then
             local rerollComplete
             rerollValue, rerollComplete = estimateFuture(state, rerolls - 1, deadline)
             if not rerollComplete then complete = false end
         end
-
         if os.clock() >= deadline then
             return tailEstimate(state, rerolls, deadline), false
         end
-
-
-
-
         local targetSamples
         if remaining <= 2 then
             targetSamples = 44
@@ -21712,7 +22075,6 @@ task.spawn(function()
         else
             targetSamples = 10
         end
-
         local sum = 0
         local samples = 0
         for _ = 1, targetSamples do
@@ -21720,7 +22082,6 @@ task.spawn(function()
                 complete = false
                 break
             end
-
             local cards = generatedOffer(state)
             local best = rerollValue
             for _, card in ipairs(cards) do
@@ -21730,43 +22091,31 @@ task.spawn(function()
                     best = math.max(best, cardOVR(card) + continuation)
                 end
             end
-
             if best > -math.huge then
                 sum += best
                 samples += 1
             end
             maybeYield(deadline)
         end
-
         if samples == 0 then
             return tailEstimate(state, rerolls, deadline), false
         end
-
         local value = sum / samples
         if complete and samples == targetSamples then
             valueCache[key] = value
         end
         return value, complete and samples == targetSamples
     end
-
     local function chooseOptimalAction(lineup, candidates, rerolls, budgetSeconds)
         local state = stateFromLineup(lineup)
         local deadline = os.clock() + math.max(0.05, budgetSeconds)
         local futureByLine = {}
-
-
-
         for _, line in ipairs(LINES) do
             if state[line] > 0 then
                 local child = afterPickingLine(state, line)
                 futureByLine[line] = select(1, estimateFuture(child, rerolls, deadline))
             end
         end
-
-
-
-
-
         local bestIndex = nil
         local bestImmediateOVR = -math.huge
         local bestPickValue = -math.huge
@@ -21788,26 +22137,15 @@ task.spawn(function()
                 end
             end
         end
-
         local rerollValue = -math.huge
         if rerolls > 0 and os.clock() < deadline then
             rerollValue = select(1, estimateFuture(state, rerolls - 1, deadline))
         elseif rerolls > 0 then
-
-
             rerollValue = tailEstimate(state, rerolls - 1, deadline)
         end
-
-
-
-
         local reroll = rerolls > 0 and rerollValue > bestPickValue + 0.05
         return reroll, bestIndex
     end
-
-
-
-
     task.spawn(function()
         while not controller.destroyed do
             if minigameAutoplayEnabled("FootballDraft") and gameId() == "FootballDraft" then
@@ -21828,7 +22166,6 @@ task.spawn(function()
             task.wait(0.35)
         end
     end)
-
     while not controller.destroyed do
         task.wait(0.07)
         if gameId() ~= "FootballDraft" or publicPhase() ~= "Drafting" then
@@ -21844,38 +22181,28 @@ task.spawn(function()
             continue
         end
         if actionBusy or tryIndex({ "session", "private", "finished" }) == true then continue end
-
         local lineup = tryIndex({ "session", "private", "lineup" }) or {}
         local candidates = toArray(tryIndex({ "session", "private", "candidates" }))
         local rerolls = tonumber(tryIndex({ "session", "private", "rerolls" })) or 0
         local signature = candidateSignature(candidates)
-
         if signature ~= seenCandidates then
             seenCandidates = signature
             candidatesSeenAt = os.clock()
         end
-
         if #candidates == 0 then
             actionBusy = true
             fireAction("GetOffer")
             task.delay(0.18, function() actionBusy = false end)
             continue
         end
-
         local revealWait = math.max(0.12, (FootballDraft.RevealTime(#candidates) or 0) - (FootballDraft.PickTolerance or 0) + 0.03)
         local deadline = tonumber(tryIndex({ "session", "public", "deadline" }))
         local remainingTime = deadline and (deadline - workspace:GetServerTimeNow()) or math.huge
-
-
-
-
-
         local elapsedReveal = os.clock() - candidatesSeenAt
         local revealBudgetLeft = math.max(0.05, revealWait - elapsedReveal - 0.10)
         local actionBudgetLeft = remainingTime == math.huge and 0.90 or math.max(0.05, remainingTime - 0.60)
         local thinkBudget = math.min(0.90, revealBudgetLeft, actionBudgetLeft)
         local reroll, pickIndex = chooseOptimalAction(lineup, candidates, rerolls, thinkBudget)
-
         if reroll and remainingTime > 0.65 then
             actionBusy = true
             task.wait(randomRange(rng, 0.04, 0.08))
@@ -21885,20 +22212,14 @@ task.spawn(function()
             task.delay(0.16, function() actionBusy = false end)
             continue
         end
-
         elapsedReveal = os.clock() - candidatesSeenAt
         if elapsedReveal < revealWait and remainingTime > 0.55 then
             task.wait(math.min(revealWait - elapsedReveal, math.max(0, remainingTime - 0.50)))
         end
-
-
-
-
         local liveCandidates = toArray(tryIndex({ "session", "private", "candidates" }))
         if candidateSignature(liveCandidates) ~= signature then
             continue
         end
-
         if pickIndex then
             actionBusy = true
             task.wait(randomRange(rng, 0.03, 0.06))
@@ -21909,17 +22230,12 @@ task.spawn(function()
         end
     end
 end)
-
-
-
 task.spawn(function()
     local rng = Random.new(
         (LocalPlayer.UserId * 22695477
             + math.floor(workspace:GetServerTimeNow() * 1000))
         % 2147483647
     )
-
-
     local physics = rawget(_G, "__TSUNAMI_KNOCKOUT_ULTIMATE_PHYSICS_V6")
     if type(physics) ~= "table" then
         physics = {
@@ -21937,7 +22253,6 @@ task.spawn(function()
         rawset(_G, "__TSUNAMI_KNOCKOUT_ULTIMATE_PHYSICS_V6", physics)
     end
     physics.powerSpeed = type(physics.powerSpeed) == "table" and physics.powerSpeed or {}
-
     local function newOpponentProfile()
         local p = {
             rounds = 0,
@@ -21955,7 +22270,6 @@ task.spawn(function()
         for i = 1, 10 do p.powerCounts[i] = 0 end
         return p
     end
-
     local KNOCKOUT_LEARNING_PATH = "TuffHub_KnockoutLearning_v1.json"
     local opponentModel = rawget(_G, "__TSUNAMI_KNOCKOUT_OPPONENT_V7")
         or rawget(_G, "__TSUNAMI_KNOCKOUT_OPPONENT_V6")
@@ -21979,7 +22293,6 @@ task.spawn(function()
     rawset(_G, "__TSUNAMI_KNOCKOUT_OPPONENT_V7", opponentModel)
     if type(opponentModel.profiles) ~= "table" then opponentModel.profiles = {} end
     if type(opponentModel.global) ~= "table" then opponentModel.global = newOpponentProfile() end
-
     local function ensureOpponentProfile(p)
         if type(p) ~= "table" then p = newOpponentProfile() end
         p.powerCounts = type(p.powerCounts) == "table" and p.powerCounts or table.create(10, 0)
@@ -22002,7 +22315,7 @@ task.spawn(function()
     local function saveKnockoutLearning(force)
         if not knockoutDirty then return end
         local now = os.clock()
-        if not force and now - lastKnockoutSave < 0.75 then return end
+        if not force and now - lastKnockoutSave < 2.00 then return end
         local writefileFn = envFunction("writefile")
         if not writefileFn then return end
         local okEncode, body = pcall(HttpService.JSONEncode, HttpService, opponentModel)
@@ -22014,7 +22327,6 @@ task.spawn(function()
             end
         end
     end
-
     local function knockoutOpponentKey()
         local opponent = tryIndex({ "session", "private", "opponent" })
         if typeof(opponent) == "Instance" and opponent:IsA("Player") then
@@ -22028,7 +22340,6 @@ task.spawn(function()
         end
         return "unknown"
     end
-
     local function opponentProfile()
         local key = knockoutOpponentKey()
         local p = opponentModel.profiles[key]
@@ -22041,7 +22352,6 @@ task.spawn(function()
         end
         return p
     end
-
     local previousPhase = nil
     local aimingKey = nil
     local planned = {}
@@ -22050,11 +22360,9 @@ task.spawn(function()
     local commitStarted = false
     local launchSnapshot = nil
     local lastResolutionKey = nil
-
     local function publicPucks()
         return tryIndex({ "session", "public", "pucks" })
     end
-
     local function puckInstance(id)
         for _, instance in ipairs(CollectionService:GetTagged("KnockoutPuck")) do
             if instance:GetAttribute("PuckId") == id then
@@ -22063,31 +22371,26 @@ task.spawn(function()
         end
         return nil
     end
-
     local function worldPosition(instance)
         if not instance then return nil end
         if instance:IsA("BasePart") then return instance.Position end
         if instance:IsA("Model") then return instance:GetPivot().Position end
         return nil
     end
-
     local function innerPart()
         local tableModel = tryIndex({ "session", "public", "tableModel" })
         if typeof(tableModel) ~= "Instance" then return nil end
         local board = tableModel:FindFirstChild("KnockoutBoard")
         return board and board:FindFirstChild("InnerPart") or nil
     end
-
     local function localXZ(inner, worldPos)
         local p = inner.CFrame:PointToObjectSpace(worldPos)
         return Vector2.new(p.X, p.Z)
     end
-
     local function collectPucks(mine, inner)
         local own, enemy = {}, {}
         local pucks = publicPucks()
         if pucks == nil then return own, enemy end
-
         pcall(function()
             for _, data in pucks do
                 if data.alive == true then
@@ -22117,21 +22420,17 @@ task.spawn(function()
                 end
             end
         end)
-
         table.sort(own, function(a, b) return tostring(a.id) < tostring(b.id) end)
         table.sort(enemy, function(a, b) return tostring(a.id) < tostring(b.id) end)
         return own, enemy
     end
-
     local function boardHalf(inner)
         return inner.Size.X * 0.5, inner.Size.Z * 0.5
     end
-
     local function edgeDistance(inner, p)
         local hx, hz = boardHalf(inner)
         return math.min(hx - math.abs(p.X), hz - math.abs(p.Y))
     end
-
     local function nearestOutward(inner, p)
         local hx, hz = boardHalf(inner)
         local xr = hx - math.abs(p.X)
@@ -22141,11 +22440,9 @@ task.spawn(function()
         end
         return Vector2.new(0, p.Y >= 0 and 1 or -1), zr
     end
-
     local function angleForDirection(dir)
         return math.atan2(dir.X, dir.Y)
     end
-
     local function rotate2(dir, radians)
         local c, s = math.cos(radians), math.sin(radians)
         return Vector2.new(
@@ -22153,14 +22450,12 @@ task.spawn(function()
             dir.X * s + dir.Y * c
         )
     end
-
     local function rayDistanceToBoundary(inner, origin, dir, radius)
         local hx, hz = boardHalf(inner)
         local margin = tonumber(physics.sinkMargin) or 0
         hx += margin - (radius or 0) * 0.05
         hz += margin - (radius or 0) * 0.05
         local best = math.huge
-
         if math.abs(dir.X) > 1e-8 then
             local a = (hx - origin.X) / dir.X
             local b = (-hx - origin.X) / dir.X
@@ -22175,18 +22470,15 @@ task.spawn(function()
         end
         return best
     end
-
     local function defaultTravel(inner, power)
         local r = math.max(0.2, math.min(inner.Size.X, inner.Size.Z) * 0.5)
         return r * (0.08 + 0.145 * math.clamp(power, 1, 10))
     end
-
     local function fittedPowerSpeed(inner, power)
         local direct = physics.powerSpeed[power]
         if type(direct) == "table" and (tonumber(direct.n) or 0) > 0 then
             return tonumber(direct.mean) or 0
         end
-
         local xs, ys = {}, {}
         for p = 1, 10 do
             local sample = physics.powerSpeed[p]
@@ -22195,7 +22487,6 @@ task.spawn(function()
                 ys[#ys + 1] = tonumber(sample.mean) or 0
             end
         end
-
         if #xs >= 2 then
             local sx, sy, sxx, sxy = 0, 0, 0, 0
             for i = 1, #xs do
@@ -22214,13 +22505,9 @@ task.spawn(function()
         elseif #xs == 1 then
             return math.max(0.01, ys[1] * power / xs[1])
         end
-
-
-
         local lambda = math.max(0.35, tonumber(physics.dragLambda) or 3)
         return defaultTravel(inner, power) * lambda
     end
-
     local function nearestPowerForSpeed(inner, speed)
         local bestP, bestErr = 5, math.huge
         for p = 1, 10 do
@@ -22232,7 +22519,6 @@ task.spawn(function()
         end
         return bestP
     end
-
     local function addPowerSample(power, speed)
         if power < 1 or power > 10 or speed <= 0 then return end
         local slot = physics.powerSpeed[power]
@@ -22247,7 +22533,6 @@ task.spawn(function()
         slot.mean = mean * (1 - alpha) + speed * alpha
         slot.n = n + 1
     end
-
     local function trajectoryPoint(sample)
         if sample == nil then return nil end
         local x = tonumber(safeIndex(sample, "x"))
@@ -22255,20 +22540,17 @@ task.spawn(function()
         if x == nil or z == nil then return nil end
         return Vector2.new(x, z)
     end
-
     local function trajectoryLength(trajectory)
         local n = 0
         pcall(function() n = #trajectory end)
         return n
     end
-
     local function velocityAt(trajectory, i, dt)
         local a = trajectoryPoint(safeIndex(trajectory, i))
         local b = trajectoryPoint(safeIndex(trajectory, i + 1))
         if not a or not b or dt <= 0 then return nil end
         return (b - a) / dt
     end
-
     local function snapshotLaunch(inner, own, enemy)
         local snap = {
             own = {},
@@ -22297,7 +22579,6 @@ task.spawn(function()
         end
         return snap
     end
-
     local function estimateFreeSegment(trajectories, id, i, snap, dt)
         local trajectory = safeIndex(trajectories, id)
         if not trajectory then return false end
@@ -22308,7 +22589,6 @@ task.spawn(function()
             return false
         end
         if v1.Unit:Dot(v2.Unit) < 0.996 then return false end
-
         local selfData = snap.all[id]
         local radius = selfData and selfData.radius or 0.19
         for otherId, other in pairs(snap.all) do
@@ -22322,20 +22602,17 @@ task.spawn(function()
         end
         return true, v1, v2
     end
-
     local function updateOpponentBehavior(inner, trajectories, dt, snap)
         local profile = opponentProfile()
         local global = opponentModel.global
         profile.rounds += 1
         global.rounds += 0.18
         knockoutDirty = true
-
         local edgeMinId, edgeMin = nil, math.huge
         for _, target in ipairs(snap.own) do
             local e = edgeDistance(inner, target.p)
             if e < edgeMin then edgeMin, edgeMinId = e, target.id end
         end
-
         for _, enemy in ipairs(snap.enemy) do
             local trajectory = safeIndex(trajectories, enemy.id)
             local v = trajectory and velocityAt(trajectory, 1, dt) or nil
@@ -22345,7 +22622,6 @@ task.spawn(function()
                 profile.powerCounts[power] += 1
                 global.powerCounts[power] += 0.18
                 profile.recentPower = profile.recentPower * 0.75 + power * 0.25
-
                 local bestTarget, bestMiss, bestForward = nil, math.huge, math.huge
                 local nearestTarget, nearestDistance = nil, math.huge
                 for _, target in ipairs(snap.own) do
@@ -22367,14 +22643,12 @@ task.spawn(function()
                         end
                     end
                 end
-
                 local attackThreshold = enemy.radius + (bestTarget and bestTarget.radius or 0.19) + 0.34
                 if bestTarget and bestMiss <= attackThreshold then
                     profile.attackCount += 1
                     global.attackCount += 0.18
                     if bestTarget.id == edgeMinId then profile.targetEdgeCount += 1 end
                     if nearestTarget and bestTarget.id == nearestTarget.id then profile.targetNearestCount += 1 end
-
                     local direct = (bestTarget.p - enemy.p).Unit
                     local cross = direct.X * dir.Y - direct.Y * dir.X
                     local dot = math.clamp(direct:Dot(dir), -1, 1)
@@ -22392,7 +22666,6 @@ task.spawn(function()
             end
         end
     end
-
     local function learnResolution(inner)
         local resolution = tryIndex({ "session", "public", "resolution" })
         if resolution == nil or launchSnapshot == nil then return end
@@ -22402,9 +22675,7 @@ task.spawn(function()
         local dt = tonumber(safeIndex(resolution, "dt"))
         if trajectories == nil or not dt or dt <= 0 then return end
         lastResolutionKey = key
-
         physics.dt = physics.dt * 0.75 + dt * 0.25
-
         local maxSteps = 0
         for id in pairs(launchSnapshot.all) do
             local trajectory = safeIndex(trajectories, id)
@@ -22413,9 +22684,6 @@ task.spawn(function()
         if maxSteps > 2 then
             physics.steps = math.floor((tonumber(physics.steps) or maxSteps) * 0.80 + maxSteps * 0.20 + 0.5)
         end
-
-
-
         for id, plan in pairs(launchSnapshot.plans) do
             local trajectory = safeIndex(trajectories, id)
             local v = trajectory and velocityAt(trajectory, 1, dt) or nil
@@ -22425,8 +22693,6 @@ task.spawn(function()
                 end
             end
         end
-
-
         local lambdaSum, lambdaN = 0, 0
         for id in pairs(launchSnapshot.all) do
             local trajectory = safeIndex(trajectories, id)
@@ -22450,8 +22716,6 @@ task.spawn(function()
             physics.dragLambda = math.clamp((tonumber(physics.dragLambda) or observed) * 0.86 + observed * 0.14, 0.05, 20)
             physics.dragSamples = (tonumber(physics.dragSamples) or 0) + lambdaN
         end
-
-
         local eSum, eN = 0, 0
         local ids = {}
         for id in pairs(launchSnapshot.all) do ids[#ids + 1] = id end
@@ -22494,8 +22758,6 @@ task.spawn(function()
             physics.restitution = math.clamp((tonumber(physics.restitution) or observed) * 0.82 + observed * 0.18, 0.10, 1.20)
             physics.collisionSamples = (tonumber(physics.collisionSamples) or 0) + eN
         end
-
-
         local marginSum, marginN = 0, 0
         local hx, hz = boardHalf(inner)
         for id in pairs(launchSnapshot.all) do
@@ -22519,12 +22781,10 @@ task.spawn(function()
             physics.sinkMargin = (tonumber(physics.sinkMargin) or observed) * 0.82 + observed * 0.18
             physics.sinkSamples = (tonumber(physics.sinkSamples) or 0) + marginN
         end
-
         physics.samples = (tonumber(physics.samples) or 0) + 1
         updateOpponentBehavior(inner, trajectories, dt, launchSnapshot)
         saveKnockoutLearning(true)
     end
-
     local function pointSegmentDistance(p, a, b)
         local ab = b - a
         local denom = ab:Dot(ab)
@@ -22532,7 +22792,6 @@ task.spawn(function()
         local t = math.clamp((p - a):Dot(ab) / denom, 0, 1)
         return (p - (a + ab * t)).Magnitude, t
     end
-
     local function clearApproach(shooter, target, contact, own, enemy)
         local clearance = (shooter.radius + target.radius) * 0.86
         for _, other in ipairs(own) do
@@ -22553,13 +22812,11 @@ task.spawn(function()
         end
         return true
     end
-
     local function actionStaticScore(inner, shooter, action, target)
         local travel = fittedPowerSpeed(inner, action.power) / math.max(0.2, tonumber(physics.dragLambda) or 3)
         local boundary = rayDistanceToBoundary(inner, shooter.p, action.dir, shooter.radius)
         local missRisk = math.max(0, travel - boundary)
         local score = -missRisk * 35
-
         if action.kind == "defense" then
             local predicted = shooter.p + action.dir * math.min(travel, boundary * 0.90)
             score += edgeDistance(inner, predicted) * 10
@@ -22573,18 +22830,15 @@ task.spawn(function()
         end
         return score
     end
-
     local function candidateActions(inner, shooter, own, enemy, ownIndex, ownCount)
         local candidates = {}
         local hx, hz = boardHalf(inner)
         local lane = ownIndex - (ownCount + 1) * 0.5
-
         local anchors = {
             Vector2.new(0, 0),
             Vector2.new(math.clamp(lane * hx * 0.15, -hx * 0.22, hx * 0.22), math.clamp(-lane * hz * 0.08, -hz * 0.18, hz * 0.18)),
             Vector2.new(math.clamp(lane * hx * 0.10, -hx * 0.18, hx * 0.18), math.clamp(lane * hz * 0.14, -hz * 0.20, hz * 0.20)),
         }
-
         for _, anchor in ipairs(anchors) do
             local delta = anchor - shooter.p
             if delta.Magnitude > 0.02 then
@@ -22596,14 +22850,9 @@ task.spawn(function()
                 end
             end
         end
-
         for _, target in ipairs(enemy) do
             local outward = select(1, nearestOutward(inner, target.p))
             local contactRadius = shooter.radius + target.radius
-
-
-
-
             for offset = -54, 54, 3 do
                 local normal = rotate2(outward, math.rad(offset)).Unit
                 local contact = target.p - normal * contactRadius
@@ -22630,7 +22879,6 @@ task.spawn(function()
                 end
             end
         end
-
         table.sort(candidates, function(a, b) return a.staticScore > b.staticScore end)
         local out, seen = {}, {}
         for _, action in ipairs(candidates) do
@@ -22643,7 +22891,6 @@ task.spawn(function()
         end
         return out
     end
-
     local function enumeratePlans(own, options)
         local states = { { plan = {}, static = 0 } }
         for _, puck in ipairs(own) do
@@ -22666,7 +22913,6 @@ task.spawn(function()
         end
         return states
     end
-
     local function powerDistribution(profile)
         local global = opponentModel.global
         local weights, total = {}, 0
@@ -22684,7 +22930,6 @@ task.spawn(function()
         end
         return weights, total
     end
-
     local function chooseWeightedPower(profile)
         local weights, total = powerDistribution(profile)
         local x = rng:NextNumber() * total
@@ -22695,12 +22940,10 @@ task.spawn(function()
         end
         return 7
     end
-
     local function sampledOpponentAction(inner, puck, targets, profile)
         local attackTotal = profile.attackCount + profile.defendCount + 2
         local attackP = (profile.attackCount + 1.1) / attackTotal
         attackP = math.clamp(attackP * 0.78 + 0.16, 0.18, 0.94)
-
         if #targets > 0 and rng:NextNumber() < attackP then
             local edgeRate = (profile.targetEdgeCount + 1) / (profile.attackCount + 2)
             local nearRate = (profile.targetNearestCount + 1) / (profile.attackCount + 2)
@@ -22730,12 +22973,10 @@ task.spawn(function()
                 running += scored[candidate.id]
                 if x <= running then target = candidate break end
             end
-
             local direct = (target.p - puck.p).Unit
             local mean = profile.offsetN > 0 and profile.offsetSum / profile.offsetN or 0
             local variance = profile.offsetN > 1 and math.max(0, profile.offsetSq / profile.offsetN - mean * mean) or math.rad(12) ^ 2
             local sd = math.clamp(math.sqrt(variance), math.rad(4), math.rad(28))
-
             local u1 = math.max(1e-6, rng:NextNumber())
             local u2 = rng:NextNumber()
             local z = math.sqrt(-2 * math.log(u1)) * math.cos(2 * math.pi * u2)
@@ -22743,7 +22984,6 @@ task.spawn(function()
             local power = chooseWeightedPower(profile)
             return { kind = "attack", targetId = target.id, dir = dir, angle = angleForDirection(dir), power = power }
         end
-
         local inward = -puck.p
         if inward.Magnitude < 0.02 then inward = Vector2.new(0, 1) end
         inward = inward.Unit
@@ -22751,7 +22991,6 @@ task.spawn(function()
         local dir = rotate2(inward, jitter).Unit
         return { kind = "defense", targetId = nil, dir = dir, angle = angleForDirection(dir), power = math.clamp(math.floor(chooseWeightedPower(profile) * 0.55 + 0.5), 1, 6) }
     end
-
     local function adversarialOpponentPlan(inner, enemy, own)
         local plan = {}
         for index, puck in ipairs(enemy) do
@@ -22761,12 +23000,10 @@ task.spawn(function()
         end
         return plan
     end
-
     local function opponentScenarios(inner, own, enemy)
         local profile = opponentProfile()
         local scenarios = {}
         scenarios[#scenarios + 1] = { plan = adversarialOpponentPlan(inner, enemy, own), weight = 0.18 }
-
         local sampleN = math.clamp(12 + math.floor(profile.rounds * 0.9), 12, 22)
         for _ = 1, sampleN do
             local plan = {}
@@ -22777,11 +23014,9 @@ task.spawn(function()
         end
         return scenarios
     end
-
     local function simulate(inner, own, enemy, ownPlan, enemyPlan)
         local bodies = {}
         local byId = {}
-
         local function add(puck, mine, action)
             local speed = action and fittedPowerSpeed(inner, action.power) or 0
             local body = {
@@ -22797,17 +23032,12 @@ task.spawn(function()
         end
         for _, puck in ipairs(own) do add(puck, true, ownPlan[puck.id]) end
         for _, puck in ipairs(enemy) do add(puck, false, enemyPlan[puck.id]) end
-
         local dt = math.clamp(tonumber(physics.dt) or (1 / 30), 1 / 120, 0.12)
         local steps = math.clamp(math.floor(tonumber(physics.steps) or 90), 35, 180)
         local lambda = math.clamp(tonumber(physics.dragLambda) or 3, 0.05, 20)
         local restitution = math.clamp(tonumber(physics.restitution) or 0.88, 0.10, 1.20)
         local hx, hz = boardHalf(inner)
         local sinkMargin = tonumber(physics.sinkMargin) or 0
-
-
-
-
         local minDiameter = math.huge
         local maxInitialSpeed = 0
         for _, body in ipairs(bodies) do
@@ -22822,7 +23052,6 @@ task.spawn(function()
         )
         local subDt = dt / substeps
         local damping = math.exp(-lambda * subDt)
-
         for _ = 1, steps do
             local maxSpeed = 0
             for _sub = 1, substeps do
@@ -22838,7 +23067,6 @@ task.spawn(function()
                         end
                     end
                 end
-
                 for i = 1, #bodies - 1 do
                     local a = bodies[i]
                     if a.alive then
@@ -22864,14 +23092,12 @@ task.spawn(function()
                         end
                     end
                 end
-
                 for _, body in ipairs(bodies) do
                     if body.alive then body.v *= damping end
                 end
             end
             if maxSpeed < 0.025 then break end
         end
-
         local myAlive, enemyAlive = 0, 0
         local mySafety, enemySafety = 0, 0
         for _, body in ipairs(bodies) do
@@ -22886,7 +23112,6 @@ task.spawn(function()
                 end
             end
         end
-
         if enemyAlive == 0 and myAlive > 0 then
             return 2000 + myAlive * 140 + mySafety * 10
         end
@@ -22896,12 +23121,8 @@ task.spawn(function()
         if myAlive == 0 and enemyAlive == 0 then
             return -120
         end
-
-
-
         return (myAlive - enemyAlive) * 260 + mySafety * 18 - enemySafety * 7
     end
-
     local function robustPlan(inner, own, enemy)
         local options = {}
         for i, puck in ipairs(own) do
@@ -22912,13 +23133,11 @@ task.spawn(function()
         local plans = enumeratePlans(own, options)
         if #plans == 0 then return {} end
         local scenarios = opponentScenarios(inner, own, enemy)
-
         local profile = opponentProfile()
         local confidence = math.clamp(profile.rounds / 12, 0, 1)
         local tailWeight = 0.36 - confidence * 0.12
         local worstWeight = 0.12 - confidence * 0.05
         local meanWeight = 1 - tailWeight - worstWeight
-
         local bestObjective, bestPlan = -math.huge, plans[1].plan
         for _, candidate in ipairs(plans) do
             local values = {}
@@ -22945,7 +23164,6 @@ task.spawn(function()
         end
         return bestPlan
     end
-
     local function allOpponentLocked(enemy)
         if #enemy == 0 then return true end
         for _, puck in ipairs(enemy) do
@@ -22953,7 +23171,6 @@ task.spawn(function()
         end
         return true
     end
-
     local function resetAiming(clearSnapshot)
         aimingKey = nil
         table.clear(planned)
@@ -22962,33 +23179,27 @@ task.spawn(function()
         commitStarted = false
         if clearSnapshot ~= false then launchSnapshot = nil end
     end
-
     while not controller.destroyed do
         task.wait(gameId() == "Knockout" and 0.028 or 0.15)
-
         if gameId() ~= "Knockout" then
             saveKnockoutLearning(true)
             previousPhase = nil
             resetAiming(true)
             continue
         end
-
         if not minigameAutoplayEnabled("Knockout") then
             previousPhase = nil
             resetAiming(true)
             continue
         end
-
         saveKnockoutLearning(false)
         local phase = publicPhase()
         if phase == "Resolving" then
             local inner = innerPart()
             if inner then learnResolution(inner) end
         end
-
         if phase ~= "Aiming" then
             if previousPhase == "Aiming" and phase == "Resolving" then
-
             elseif phase ~= "Resolving" then
                 resetAiming(true)
             end
@@ -22996,16 +23207,13 @@ task.spawn(function()
             continue
         end
         previousPhase = phase
-
         local inner = innerPart()
         local mine = seatIndex()
         if not inner or not mine then continue end
         local own, enemy = collectPucks(mine, inner)
         if #own == 0 then continue end
-
         local deadline = tonumber(tryIndex({ "session", "public", "deadline" }))
         local key = tostring(deadline or "nodeadline") .. ":" .. tostring(#own) .. ":" .. tostring(#enemy)
-
         if aimingKey ~= key then
             resetAiming(true)
             aimingKey = key
@@ -23013,7 +23221,6 @@ task.spawn(function()
             for id, action in pairs(selected) do planned[id] = action end
             launchSnapshot = snapshotLaunch(inner, own, enemy)
         end
-
         for _, puck in ipairs(own) do
             local action = planned[puck.id]
             if action and not puck.locked and not aimSent[puck.id] then
@@ -23022,12 +23229,10 @@ task.spawn(function()
                 task.wait(0.030)
             end
         end
-
         local remaining = deadline and (deadline - workspace:GetServerTimeNow()) or math.huge
         if not commitStarted and (allOpponentLocked(enemy) or remaining <= 3.1) then
             commitStarted = true
         end
-
         if commitStarted then
             for _, puck in ipairs(own) do
                 if not puck.locked and not lockedByUs[puck.id] then
@@ -23046,13 +23251,9 @@ task.spawn(function()
         end
     end
 end)
-
-
-
 task.spawn(function()
     local BattleshipUtils =
         require(ReplicatedStorage.SharedModules.BattleshipUtils)
-
     local GRID_SIZE = BattleshipUtils.GRID_SIZE
     local SHIPS = BattleshipUtils.SHIPS
     local coordKey = BattleshipUtils.coordKey
@@ -23062,88 +23263,54 @@ task.spawn(function()
             + math.floor(workspace:GetServerTimeNow() * 1000))
         % 2147483647
     )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     local bit = bit32
     local FULL32 = 0xFFFFFFFF
-
     local function cellIndex(r, c)
         return (r - 1) * GRID_SIZE + c
     end
-
     local function indexToRowCol(index)
         return (index - 1) // GRID_SIZE + 1,
             (index - 1) % GRID_SIZE + 1
     end
-
     local function cellBit(index)
         if index <= 32 then
             return bit.lshift(1, index - 1), 0
         end
         return 0, bit.lshift(1, index - 33)
     end
-
     local function maskHas(lo, hi, index)
         if index <= 32 then
             return bit.band(lo, bit.lshift(1, index - 1)) ~= 0
         end
         return bit.band(hi, bit.lshift(1, index - 33)) ~= 0
     end
-
     local function masksOverlap(aLo, aHi, bLo, bHi)
         return
             bit.band(aLo, bLo) ~= 0
             or bit.band(aHi, bHi) ~= 0
     end
-
     local function popcount32(value)
         value = bit.band(value, FULL32)
         local count = 0
-
         while value ~= 0 do
             value = bit.band(value, value - 1)
             count += 1
         end
-
         return count
     end
-
     local function maskIntersectionCount(aLo, aHi, bLo, bHi)
         return
             popcount32(bit.band(aLo, bLo))
             + popcount32(bit.band(aHi, bHi))
     end
-
     local function maskContainsAll(lo, hi, wantedLo, wantedHi)
         return
             bit.band(lo, wantedLo) == wantedLo
             and bit.band(hi, wantedHi) == wantedHi
     end
-
     local function maskKey(lo, hi)
         return tostring(lo) .. ":" .. tostring(hi)
     end
-
     local function cellsMask(cells)
         local lo, hi = 0, 0
         if cells ~= nil then
@@ -23165,15 +23332,12 @@ task.spawn(function()
         end
         return lo, hi
     end
-
     local function makePlacements(shipIndex, size)
         local out = {}
-
         for r = 1, GRID_SIZE do
             for c = 1, GRID_SIZE - size + 1 do
                 local cells = {}
                 local lo, hi = 0, 0
-
                 for k = 0, size - 1 do
                     local rr, cc = r, c + k
                     local idx = cellIndex(rr, cc)
@@ -23186,7 +23350,6 @@ task.spawn(function()
                         index = idx,
                     }
                 end
-
                 out[#out + 1] = {
                     shipIndex = shipIndex,
                     horizontal = true,
@@ -23197,12 +23360,10 @@ task.spawn(function()
                 }
             end
         end
-
         for c = 1, GRID_SIZE do
             for r = 1, GRID_SIZE - size + 1 do
                 local cells = {}
                 local lo, hi = 0, 0
-
                 for k = 0, size - 1 do
                     local rr, cc = r + k, c
                     local idx = cellIndex(rr, cc)
@@ -23215,7 +23376,6 @@ task.spawn(function()
                         index = idx,
                     }
                 end
-
                 out[#out + 1] = {
                     shipIndex = shipIndex,
                     horizontal = false,
@@ -23226,55 +23386,41 @@ task.spawn(function()
                 }
             end
         end
-
         return out
     end
-
     local placements = {}
     local placementIndexByMask = {}
     local cellExposure = table.create(64, 0)
-
     for shipIndex, ship in ipairs(SHIPS) do
         placements[shipIndex] =
             makePlacements(shipIndex, ship.size)
         placementIndexByMask[shipIndex] = {}
-
         for pIndex, placement in ipairs(placements[shipIndex]) do
             placementIndexByMask[shipIndex][placement.key] = pIndex
-
             for _, cell in ipairs(placement.cells) do
                 cellExposure[cell.index] += 1
             end
         end
     end
-
     local maxExposure = 1
     for i = 1, 64 do
         maxExposure = math.max(maxExposure, cellExposure[i])
     end
-
-
-
-
-
     local EXPECTED_FLEET_COUNT = 270000
     local fleetBuffers = {}
     local fleetCount = 0
     local fleetReady = false
-
     local function fleetAt(slot, i)
         if slot <= 3 then
             return buffer.readu8(fleetBuffers[slot], i - 1)
         end
         return buffer.readu32(fleetBuffers[slot], (i - 1) * 4)
     end
-
     local function releaseFleetIndex()
         table.clear(fleetBuffers)
         fleetCount = 0
         fleetReady = false
     end
-
     local function buildFleetIndex()
         if fleetReady then return true end
         releaseFleetIndex()
@@ -23283,7 +23429,6 @@ task.spawn(function()
         fleetBuffers[3] = buffer.create(EXPECTED_FLEET_COUNT)
         fleetBuffers[4] = buffer.create(EXPECTED_FLEET_COUNT * 4)
         fleetBuffers[5] = buffer.create(EXPECTED_FLEET_COUNT * 4)
-
         local p1List, p2List, p3List = placements[1], placements[2], placements[3]
         local sliceStarted = os.clock()
         for p1i, p1 in ipairs(p1List) do
@@ -23322,8 +23467,6 @@ task.spawn(function()
         if not fleetReady then releaseFleetIndex() end
         return fleetReady
     end
-
-
     local function newBattleProfile()
         local p = {
             completedFleets = 0,
@@ -23331,17 +23474,13 @@ task.spawn(function()
             shipPlacementCounts = {
                 {}, {}, {},
             },
-
             gamesObserved = 0,
             shotSamples = 0,
             cellShots = table.create(64, 0),
             firstShots = table.create(64, 0),
             earlyShots = table.create(64, 0),
-
-
             afterHitDelta = {},
             afterMissDelta = {},
-
             recentOurFleets = {},
             lastOurFleetKey = nil,
             lastOurFleetLo = nil,
@@ -23350,22 +23489,18 @@ task.spawn(function()
             lastOurP2 = nil,
             lastOurP3 = nil,
         }
-
         for i = 1, 64 do
             p.cellShots[i] = 0
             p.firstShots[i] = 0
             p.earlyShots[i] = 0
         end
-
         return p
     end
-
     local BATTLE_LEARNING_PATH = "TuffHub_BattleshipLearning_v1.json"
     local battleModel =
         rawget(_G, "__TSUNAMI_BATTLESHIP_EXACT_V12")
         or rawget(_G, "__TSUNAMI_BATTLESHIP_EXACT_V11")
         or rawget(_G, "__TSUNAMI_BATTLESHIP_EXACT_V9")
-
     if type(battleModel) ~= "table" then
         local readfileFn = envFunction("readfile")
         local isfileFn = envFunction("isfile")
@@ -23380,11 +23515,9 @@ task.spawn(function()
             end
         end
     end
-
     if type(battleModel) ~= "table" then battleModel = { profiles = {}, global = newBattleProfile() } end
     rawset(_G, "__TSUNAMI_BATTLESHIP_EXACT_V12", battleModel)
     if type(battleModel.profiles) ~= "table" then battleModel.profiles = {} end
-
     local function ensureBattleProfile(profile)
         if type(profile) ~= "table" then profile = newBattleProfile() end
         profile.exactFleetCounts = type(profile.exactFleetCounts) == "table" and profile.exactFleetCounts or {}
@@ -23416,10 +23549,8 @@ task.spawn(function()
         profile.lastSeen = tonumber(profile.lastSeen) or 0
         return profile
     end
-
     battleModel.global = ensureBattleProfile(battleModel.global)
     for key, profile in pairs(battleModel.profiles) do battleModel.profiles[key] = ensureBattleProfile(profile) end
-
     local battleDirty = false
     local lastBattleSave = 0
     local function pruneBattleProfiles()
@@ -23441,7 +23572,7 @@ task.spawn(function()
     local function saveBattleLearning(force)
         if not battleDirty then return end
         local now = os.clock()
-        if not force and now - lastBattleSave < 0.85 then return end
+        if not force and now - lastBattleSave < 2.00 then return end
         local writefileFn = envFunction("writefile")
         if not writefileFn then return end
         pruneBattleProfiles()
@@ -23453,24 +23584,19 @@ task.spawn(function()
             if okWrite then battleDirty = false; lastBattleSave = now end
         end
     end
-
     local function opponentKey()
         local opponent =
             tryIndex({ "session", "private", "opponent" })
-
         if typeof(opponent) == "Instance"
             and opponent:IsA("Player")
         then
             return "uid:" .. tostring(opponent.UserId)
         end
-
         return "obj:" .. tostring(opponent or "unknown")
     end
-
     local function profileForOpponent()
         local key = opponentKey()
         local profile = battleModel.profiles[key]
-
         if type(profile) ~= "table" then
             profile = newBattleProfile()
             battleModel.profiles[key] = profile
@@ -23482,7 +23608,6 @@ task.spawn(function()
         profile.lastSeen = os.time()
         return profile
     end
-
     local function fleetKey(p1, p2, p3)
         return tostring(p1)
             .. ":"
@@ -23490,14 +23615,12 @@ task.spawn(function()
             .. ":"
             .. tostring(p3)
     end
-
     local function fleetStructureStats(p1, p2, p3)
         local horizontalCount = 0
         local edgeShips = 0
         local occupiedOwner = {}
         local adjacency = 0
         local nearParallel = 0
-
         for shipIndex = 1, 3 do
             local placementIndex =
                 shipIndex == 1 and p1
@@ -23505,15 +23628,12 @@ task.spawn(function()
                 or p3
             local placement =
                 placements[shipIndex][placementIndex]
-
             if placement.horizontal then
                 horizontalCount += 1
             end
-
             local touchesEdge = false
             for _, cell in ipairs(placement.cells) do
                 occupiedOwner[cell.index] = shipIndex
-
                 if cell.row == 1
                     or cell.row == GRID_SIZE
                     or cell.col == 1
@@ -23522,58 +23642,48 @@ task.spawn(function()
                     touchesEdge = true
                 end
             end
-
             if touchesEdge then
                 edgeShips += 1
             end
         end
-
         for idx, owner in pairs(occupiedOwner) do
             local r, c = indexToRowCol(idx)
-
             for _, d in ipairs({
                 { 1, 0 },
                 { 0, 1 },
             }) do
                 local rr = r + d[1]
                 local cc = c + d[2]
-
                 if rr <= GRID_SIZE and cc <= GRID_SIZE then
                     local other =
                         occupiedOwner[cellIndex(rr, cc)]
-
                     if other and other ~= owner then
                         adjacency += 1
                     end
                 end
             end
         end
-
         for a = 1, 2 do
             local paIndex =
                 a == 1 and p1
                 or a == 2 and p2
                 or p3
             local pa = placements[a][paIndex]
-
             for b = a + 1, 3 do
                 local pbIndex =
                     b == 1 and p1
                     or b == 2 and p2
                     or p3
                 local pb = placements[b][pbIndex]
-
                 if pa.horizontal == pb.horizontal then
                     if pa.horizontal then
                         local rowA = pa.cells[1].row
                         local rowB = pb.cells[1].row
-
                         if math.abs(rowA - rowB) <= 1 then
                             local minA = pa.cells[1].col
                             local maxA = pa.cells[#pa.cells].col
                             local minB = pb.cells[1].col
                             local maxB = pb.cells[#pb.cells].col
-
                             if math.max(minA, minB)
                                 <= math.min(maxA, maxB) + 1
                             then
@@ -23583,13 +23693,11 @@ task.spawn(function()
                     else
                         local colA = pa.cells[1].col
                         local colB = pb.cells[1].col
-
                         if math.abs(colA - colB) <= 1 then
                             local minA = pa.cells[1].row
                             local maxA = pa.cells[#pa.cells].row
                             local minB = pb.cells[1].row
                             local maxB = pb.cells[#pb.cells].row
-
                             if math.max(minA, minB)
                                 <= math.min(maxA, maxB) + 1
                             then
@@ -23600,20 +23708,17 @@ task.spawn(function()
                 end
             end
         end
-
         return
             horizontalCount,
             edgeShips,
             adjacency,
             nearParallel
     end
-
     local function fleetPriorWeight(profile, p1, p2, p3)
         local specificCompleted =
             tonumber(profile.completedFleets) or 0
         local globalCompleted =
             tonumber(battleModel.global.completedFleets) or 0
-
         local key = fleetKey(p1, p2, p3)
         local specificExact =
             tonumber(profile.exactFleetCounts[key]) or 0
@@ -23621,19 +23726,16 @@ task.spawn(function()
             tonumber(
                 battleModel.global.exactFleetCounts[key]
             ) or 0
-
         local weight =
             1
             + specificExact * 18
             + globalExact * 1.15
-
         for shipIndex = 1, 3 do
             local possible = #placements[shipIndex]
             local placementIndex =
                 shipIndex == 1 and p1
                 or shipIndex == 2 and p2
                 or p3
-
             if specificCompleted > 0 then
                 local count =
                     tonumber(
@@ -23641,16 +23743,13 @@ task.spawn(function()
                             placementIndex
                         ]
                     ) or 0
-
                 local normalized =
                     (count + 0.65)
                     / (specificCompleted + 0.65 * possible)
                     * possible
-
                 weight *=
                     math.max(0.12, normalized) ^ 0.58
             end
-
             if globalCompleted > 0 then
                 local count =
                     tonumber(
@@ -23658,20 +23757,16 @@ task.spawn(function()
                             shipIndex
                         ][placementIndex]
                     ) or 0
-
                 local normalized =
                     (count + 0.80)
                     / (globalCompleted + 0.80 * possible)
                     * possible
-
                 weight *=
                     math.max(0.25, normalized) ^ 0.10
             end
         end
-
         return math.clamp(weight, 0.015, 350)
     end
-
     local function recordCompletedOpponentFleet(
         profile,
         opponentSeat,
@@ -23681,7 +23776,6 @@ task.spawn(function()
         if profile._lastCompletedSession == sessionKey then
             return
         end
-
         local details =
             tryIndex({
                 "session",
@@ -23689,9 +23783,7 @@ task.spawn(function()
                 "sunkShipDetails",
                 opponentSeat,
             })
-
         if details == nil then return end
-
         local exact = {}
         pcall(function()
             for _, detail in details do
@@ -23709,23 +23801,18 @@ task.spawn(function()
                 end
             end
         end)
-
         if not (exact[1] and exact[2] and exact[3]) then
             return
         end
-
         local function record(target, scale)
             target.completedFleets =
                 (tonumber(target.completedFleets) or 0)
                 + scale
-
             local key =
                 fleetKey(exact[1], exact[2], exact[3])
-
             target.exactFleetCounts[key] =
                 (tonumber(target.exactFleetCounts[key]) or 0)
                 + scale
-
             for shipIndex = 1, 3 do
                 local counts =
                     target.shipPlacementCounts[shipIndex]
@@ -23735,26 +23822,20 @@ task.spawn(function()
                     + scale
             end
         end
-
         record(profile, 1)
         record(battleModel.global, 0.18)
         battleDirty = true
-
         profile._lastCompletedSession = sessionKey
     end
-
     local function myShips()
         return tryIndex({ "session", "private", "myShips" })
     end
-
     local function shipIsPlaced(index)
         return safeIndex(myShips(), index) ~= nil
     end
-
     local function ownFleetOccupancyMask()
         local lo, hi = 0, 0
         local ships = myShips()
-
         if ships ~= nil then
             pcall(function()
                 for _, ship in ships do
@@ -23764,39 +23845,30 @@ task.spawn(function()
                 end
             end)
         end
-
         return lo, hi
     end
-
     local function ownShootGrid(mine)
         local tableModel =
             tryIndex({ "session", "public", "tableModel" })
-
         if typeof(tableModel) ~= "Instance" then
             return nil
         end
-
         local board =
             tableModel:FindFirstChild(
                 "BattleshipBoard" .. tostring(mine)
             )
         local grids = board and board:FindFirstChild("Grids")
         local shoot = grids and grids:FindFirstChild("Shoot")
-
         if not shoot then return nil end
-
         local ok, result = pcall(resolveGrid, shoot)
         return ok and result or nil
     end
-
     local function shotValueToHit(value)
         if type(value) == "boolean" then
             return value
         end
-
         if type(value) == "string" then
             local lower = string.lower(value)
-
             if string.find(lower, "hit", 1, true) then
                 return true
             end
@@ -23804,7 +23876,6 @@ task.spawn(function()
                 return false
             end
         end
-
         if value ~= nil then
             for _, field in ipairs({
                 "hit",
@@ -23816,14 +23887,11 @@ task.spawn(function()
                     return v
                 end
             end
-
             local result =
                 safeIndex(value, "result")
                 or safeIndex(value, "response")
-
             if type(result) == "string" then
                 local lower = string.lower(result)
-
                 if string.find(lower, "hit", 1, true) then
                     return true
                 end
@@ -23832,18 +23900,14 @@ task.spawn(function()
                 end
             end
         end
-
         return nil
     end
-
     local function pegHitAt(grid, r, c)
         local cell =
             grid
             and grid.cells[r]
             and grid.cells[r][c]
-
         if not cell then return nil end
-
         for _, desc in ipairs(cell:GetDescendants()) do
             if CollectionService:HasTag(
                 desc,
@@ -23851,18 +23915,14 @@ task.spawn(function()
             ) then
                 local value =
                     desc:GetAttribute("IsHit")
-
                 if type(value) == "boolean" then
                     return value
                 end
             end
         end
-
         return nil
     end
-
     local localShotOutcomeCache = {}
-
     local posteriorCache = {
         valid = nil,
         hitLo = 0,
@@ -23871,7 +23931,6 @@ task.spawn(function()
         missHi = 0,
         sunkPlacement = {},
     }
-
     local function resetPosteriorCache()
         posteriorCache.valid = nil
         posteriorCache.hitLo = 0
@@ -23880,12 +23939,10 @@ task.spawn(function()
         posteriorCache.missHi = 0
         posteriorCache.sunkPlacement = {}
     end
-
     local function cacheCanFilter(knowledge)
         if posteriorCache.valid == nil then
             return false
         end
-
         if not maskContainsAll(
             knowledge.hitLo,
             knowledge.hitHi,
@@ -23894,7 +23951,6 @@ task.spawn(function()
         ) then
             return false
         end
-
         if not maskContainsAll(
             knowledge.missLo,
             knowledge.missHi,
@@ -23903,26 +23959,21 @@ task.spawn(function()
         ) then
             return false
         end
-
         for shipIndex = 1, 3 do
             local old =
                 posteriorCache.sunkPlacement[shipIndex]
-
             if old
                 and knowledge.sunkPlacement[shipIndex] ~= old
             then
                 return false
             end
         end
-
         return true
     end
-
     local function addMaskCell(lo, hi, index)
         local bLo, bHi = cellBit(index)
         return bit.bor(lo, bLo), bit.bor(hi, bHi)
     end
-
     local function collectShotKnowledge(mine, opponent)
         local shotMap =
             tryIndex({
@@ -23931,38 +23982,30 @@ task.spawn(function()
                 "shots",
                 mine,
             })
-
         local grid = ownShootGrid(mine)
-
         local firedLo, firedHi = 0, 0
         local hitLo, hitHi = 0, 0
         local missLo, missHi = 0, 0
-
         local firedSet = {}
         local hitSet = {}
         local missSet = {}
-
         for r = 1, GRID_SIZE do
             for c = 1, GRID_SIZE do
                 local key = coordKey(r, c)
                 local value = safeIndex(shotMap, key)
-
                 if value ~= nil then
                     local idx = cellIndex(r, c)
                     firedSet[idx] = true
                     firedLo, firedHi =
                         addMaskCell(firedLo, firedHi, idx)
-
                     local hit =
                         localShotOutcomeCache[key]
-
                     if hit == nil then
                         hit = shotValueToHit(value)
                     end
                     if hit == nil then
                         hit = pegHitAt(grid, r, c)
                     end
-
                     if hit == true then
                         hitSet[idx] = true
                         hitLo, hitHi =
@@ -23975,10 +24018,8 @@ task.spawn(function()
                 end
             end
         end
-
         local sunkPlacement = {}
         local sunkCells = {}
-
         local details =
             tryIndex({
                 "session",
@@ -23986,24 +24027,20 @@ task.spawn(function()
                 "sunkShipDetails",
                 opponent,
             })
-
         if details ~= nil then
             pcall(function()
                 for _, detail in details do
                     local shipIndex =
                         tonumber(detail.shipIndex)
-
                     if shipIndex
                         and detail.cells
                     then
                         local sLo, sHi =
                             cellsMask(detail.cells)
-
                         sunkPlacement[shipIndex] =
                             placementIndexByMask[shipIndex][
                                 maskKey(sLo, sHi)
                             ]
-
                         for _, cell in detail.cells do
                             local idx =
                                 cellIndex(
@@ -24013,7 +24050,6 @@ task.spawn(function()
                             sunkCells[idx] = true
                             firedSet[idx] = true
                             hitSet[idx] = true
-
                             firedLo, firedHi =
                                 addMaskCell(
                                     firedLo,
@@ -24031,7 +24067,6 @@ task.spawn(function()
                 end
             end)
         end
-
         return {
             firedLo = firedLo,
             firedHi = firedHi,
@@ -24046,11 +24081,9 @@ task.spawn(function()
             sunkCells = sunkCells,
         }
     end
-
     local function fleetMatchesKnowledge(i, knowledge)
         local lo = fleetAt(4, i)
         local hi = fleetAt(5, i)
-
         if masksOverlap(
             lo, hi,
             knowledge.missLo,
@@ -24058,7 +24091,6 @@ task.spawn(function()
         ) then
             return false
         end
-
         if not maskContainsAll(
             lo, hi,
             knowledge.hitLo,
@@ -24066,9 +24098,7 @@ task.spawn(function()
         ) then
             return false
         end
-
         local sunk = knowledge.sunkPlacement
-
         if sunk[1] and fleetAt(1, i) ~= sunk[1] then
             return false
         end
@@ -24078,17 +24108,14 @@ task.spawn(function()
         if sunk[3] and fleetAt(3, i) ~= sunk[3] then
             return false
         end
-
         return true
     end
-
     local function remainingUnhitCell(
         placement,
         knowledge
     )
         local remaining = nil
         local count = 0
-
         for _, cell in ipairs(placement.cells) do
             if not knowledge.hitSet[cell.index] then
                 count += 1
@@ -24098,14 +24125,11 @@ task.spawn(function()
                 end
             end
         end
-
         if count == 1 then
             return remaining
         end
-
         return nil
     end
-
     local function posteriorSummary(
         knowledge,
         profile
@@ -24114,16 +24138,13 @@ task.spawn(function()
         local occ = table.create(64, 0)
         local sink = table.create(64, 0)
         local targetOcc = table.create(64, 0)
-
         for i = 1, 64 do
             occ[i] = 0
             sink[i] = 0
             targetOcc[i] = 0
         end
-
         local unresolvedHitLo, unresolvedHitHi = 0, 0
         local unresolvedHitCount = 0
-
         for idx in pairs(knowledge.hitSet) do
             if not knowledge.sunkCells[idx] then
                 unresolvedHitCount += 1
@@ -24135,11 +24156,9 @@ task.spawn(function()
                     )
             end
         end
-
         local totalWeight = 0
         local validCount = 0
         local canFilter = cacheCanFilter(knowledge)
-
         local function accumulatePlacement(
             shipIndex,
             pIndex,
@@ -24150,7 +24169,6 @@ task.spawn(function()
             local isSunk =
                 knowledge.sunkPlacement[shipIndex]
                     ~= nil
-
             local connectsToLiveHit =
                 not isSunk
                 and unresolvedHitCount > 0
@@ -24160,24 +24178,20 @@ task.spawn(function()
                     unresolvedHitLo,
                     unresolvedHitHi
                 )
-
             for _, cell in ipairs(placement.cells) do
                 if not knowledge.firedSet[cell.index] then
                     occ[cell.index] += weight
-
                     if connectsToLiveHit then
                         targetOcc[cell.index] += weight
                     end
                 end
             end
-
             if not isSunk then
                 local cell =
                     remainingUnhitCell(
                         placement,
                         knowledge
                     )
-
                 if cell
                     and not knowledge.firedSet[cell]
                 then
@@ -24185,16 +24199,13 @@ task.spawn(function()
                 end
             end
         end
-
         local function processFleet(i)
             if not fleetMatchesKnowledge(i, knowledge) then
                 return
             end
-
             local p1 = fleetAt(1, i)
             local p2 = fleetAt(2, i)
             local p3 = fleetAt(3, i)
-
             local weight =
                 fleetPriorWeight(
                     profile,
@@ -24202,22 +24213,17 @@ task.spawn(function()
                     p2,
                     p3
                 )
-
             validCount += 1
             valid[validCount] = i
             totalWeight += weight
-
             accumulatePlacement(1, p1, weight)
             accumulatePlacement(2, p2, weight)
             accumulatePlacement(3, p3, weight)
         end
-
         if canFilter then
             local source = posteriorCache.valid
-
             for n = 1, #source do
                 processFleet(source[n])
-
                 if n % 50000 == 0 then
                     task.wait()
                 end
@@ -24225,13 +24231,11 @@ task.spawn(function()
         else
             for i = 1, fleetCount do
                 processFleet(i)
-
                 if i % 60000 == 0 then
                     task.wait()
                 end
             end
         end
-
         posteriorCache.valid = valid
         posteriorCache.hitLo = knowledge.hitLo
         posteriorCache.hitHi = knowledge.hitHi
@@ -24242,7 +24246,6 @@ task.spawn(function()
             knowledge.sunkPlacement[2],
             knowledge.sunkPlacement[3],
         }
-
         return {
             valid = valid,
             count = validCount,
@@ -24253,17 +24256,14 @@ task.spawn(function()
             unresolvedHitCount = unresolvedHitCount,
         }
     end
-
     local function binaryEntropy(p)
         if p <= 1e-12 or p >= 1 - 1e-12 then
             return 0
         end
-
         return
             -p * math.log(p)
             - (1 - p) * math.log(1 - p)
     end
-
     local function chooseExactShot(
         knowledge,
         profile
@@ -24273,17 +24273,14 @@ task.spawn(function()
                 knowledge,
                 profile
             )
-
         if summary.count <= 0
             or summary.totalWeight <= 0
         then
             local bestExposure = -math.huge
             local fallback = {}
-
             for idx = 1, 64 do
                 if not knowledge.firedSet[idx] then
                     local value = cellExposure[idx]
-
                     if value > bestExposure then
                         bestExposure = value
                         table.clear(fallback)
@@ -24293,9 +24290,7 @@ task.spawn(function()
                     end
                 end
             end
-
             if #fallback == 0 then return nil end
-
             local idx =
                 fallback[
                     rng:NextInteger(1, #fallback)
@@ -24303,11 +24298,9 @@ task.spawn(function()
             local r, c = indexToRowCol(idx)
             return { row = r, col = c }
         end
-
         local targetMode =
             summary.unresolvedHitCount > 0
         local ranked = {}
-
         for idx = 1, 64 do
             if not knowledge.firedSet[idx] then
                 ranked[#ranked + 1] = {
@@ -24324,44 +24317,32 @@ task.spawn(function()
                 }
             end
         end
-
         if #ranked == 0 then return nil end
-
         table.sort(ranked, function(a, b)
             if targetMode
                 and math.abs(a.targetP - b.targetP) > 1e-12
             then
                 return a.targetP > b.targetP
             end
-
             if math.abs(a.p - b.p) > 1e-12 then
                 return a.p > b.p
             end
-
             if math.abs(a.sinkP - b.sinkP) > 1e-12 then
                 return a.sinkP > b.sinkP
             end
-
             return a.idx < b.idx
         end)
-
-
-
-
         if not targetMode then
             local bestObjective = -math.huge
             local best = {}
-
             for rank = 1, math.min(12, #ranked) do
                 local item = ranked[rank]
                 local information =
                     binaryEntropy(item.p)
-
                 local objective =
                     item.p
                     + item.sinkP * 0.025
                     + information * 0.0025
-
                 if objective > bestObjective + 1e-11 then
                     bestObjective = objective
                     table.clear(best)
@@ -24372,74 +24353,53 @@ task.spawn(function()
                     best[#best + 1] = item.idx
                 end
             end
-
             local chosen =
                 best[
                     rng:NextInteger(1, #best)
                 ]
-
             local row, col = indexToRowCol(chosen)
             return { row = row, col = col }
         end
-
-
-
-
-
         local candidate = {}
         local seen = {}
-
         for _, item in ipairs(ranked) do
             if item.targetP > 0 then
                 candidate[#candidate + 1] = item
                 seen[item.idx] = true
-
                 if #candidate >= 12 then
                     break
                 end
             end
         end
-
         for _, item in ipairs(ranked) do
             if #candidate >= 12 then break end
-
             if not seen[item.idx] then
                 candidate[#candidate + 1] = item
                 seen[item.idx] = true
             end
         end
-
         local N = #candidate
-
         if N == 0 then
             local row, col =
                 indexToRowCol(ranked[1].idx)
             return { row = row, col = col }
         end
-
         local singletonWeight = {}
-
         for rank = 1, N do
             singletonWeight[rank] =
                 summary.occ[
                     candidate[rank].idx
                 ]
         end
-
-
-
         local subsetWeight = {}
-
         local function addPresentSubsets(
             presentRanks,
             weight
         )
             local count = #presentRanks
-
             if count < 2 then
                 return
             end
-
             local function rec(
                 startAt,
                 remaining,
@@ -24451,10 +24411,8 @@ task.spawn(function()
                         + weight
                     return
                 end
-
                 local maxStart =
                     count - remaining + 1
-
                 for pos = startAt, maxStart do
                     local rank = presentRanks[pos]
                     rec(
@@ -24467,16 +24425,13 @@ task.spawn(function()
                     )
                 end
             end
-
             for size = 2, math.min(5, count) do
                 rec(1, size, 0)
             end
         end
-
         for n = 1, summary.count do
             local fleetIndex =
                 summary.valid[n]
-
             local weight =
                 fleetPriorWeight(
                     profile,
@@ -24484,13 +24439,10 @@ task.spawn(function()
                     fleetAt(2, fleetIndex),
                     fleetAt(3, fleetIndex)
                 )
-
             local present = {}
-
             for rank = 1, N do
                 local idx =
                     candidate[rank].idx
-
                 if maskHas(
                     fleetAt(4, fleetIndex),
                     fleetAt(5, fleetIndex),
@@ -24499,17 +24451,14 @@ task.spawn(function()
                     present[#present + 1] = rank
                 end
             end
-
             addPresentSubsets(
                 present,
                 weight
             )
-
             if n % 35000 == 0 then
                 task.wait()
             end
         end
-
         local function jointWeight(mask)
             if bit.band(mask, mask - 1) == 0 then
                 for rank = 1, N do
@@ -24521,15 +24470,11 @@ task.spawn(function()
                         return singletonWeight[rank] or 0
                     end
                 end
-
                 return 0
             end
-
             return subsetWeight[mask] or 0
         end
-
         local continuationMemo = {}
-
         local function bestContinuation(
             mask,
             depth
@@ -24537,31 +24482,24 @@ task.spawn(function()
             if depth <= 0 then
                 return 0
             end
-
             local memoKey =
                 tostring(mask)
                 .. ":"
                 .. tostring(depth)
-
             local cached =
                 continuationMemo[memoKey]
-
             if cached ~= nil then
                 return cached
             end
-
             local best = 0
-
             for rank = 1, N do
                 local bitValue =
                     bit.lshift(1, rank - 1)
-
                 if bit.band(mask, bitValue) == 0 then
                     local nextMask =
                         bit.bor(mask, bitValue)
                     local weight =
                         jointWeight(nextMask)
-
                     if weight > 0 then
                         local value =
                             weight
@@ -24569,48 +24507,40 @@ task.spawn(function()
                                 nextMask,
                                 depth - 1
                             )
-
                         if value > best then
                             best = value
                         end
                     end
                 end
             end
-
             continuationMemo[memoKey] = best
             return best
         end
-
         local bestObjective = -math.huge
         local bestSink = -math.huge
         local choices = {}
-
         for rank = 1, N do
             local item = candidate[rank]
             local firstWeight =
                 singletonWeight[rank] or 0
             local firstMask =
                 bit.lshift(1, rank - 1)
-
             local chainWeight =
                 firstWeight
                 + bestContinuation(
                     firstMask,
                     4
                 )
-
             local chainValue =
                 chainWeight
                 / summary.totalWeight
             local information =
                 binaryEntropy(item.p)
-
             local objective =
                 chainValue
                 + item.sinkP * 0.085
                 + item.targetP * 0.035
                 + information * 0.003
-
             if objective > bestObjective + 1e-10
                 or (
                     math.abs(objective - bestObjective) <= 1e-10
@@ -24628,30 +24558,24 @@ task.spawn(function()
                 choices[#choices + 1] = item.idx
             end
         end
-
         if #choices == 0 then
             choices[1] =
                 candidate[1].idx
         end
-
         local chosen =
             choices[
                 rng:NextInteger(1, #choices)
             ]
-
         local row, col =
             indexToRowCol(chosen)
-
         return {
             row = row,
             col = col,
         }
     end
-
     local function deltaKey(dr, dc)
         return tostring(dr) .. "," .. tostring(dc)
     end
-
     local function addShotObservation(
         profile,
         idx,
@@ -24662,7 +24586,6 @@ task.spawn(function()
     )
         if not profile then return end
         scale = scale or 1
-
         profile.shotSamples =
             (tonumber(profile.shotSamples) or 0)
             + scale
@@ -24670,36 +24593,30 @@ task.spawn(function()
         profile.cellShots[idx] =
             (tonumber(profile.cellShots[idx]) or 0)
             + scale
-
         if order == 1 then
             profile.firstShots[idx] =
                 (tonumber(profile.firstShots[idx]) or 0)
                 + scale
         end
-
         profile.earlyShots[idx] =
             (tonumber(profile.earlyShots[idx]) or 0)
             + scale
                 * math.exp(-0.16 * math.max(0, order - 1))
-
         if previousIdx then
             local pr, pc = indexToRowCol(previousIdx)
             local r, c = indexToRowCol(idx)
             local dr = math.clamp(r - pr, -2, 2)
             local dc = math.clamp(c - pc, -2, 2)
             local key = deltaKey(dr, dc)
-
             local bucket =
                 previousWasHit
                 and profile.afterHitDelta
                 or profile.afterMissDelta
-
             bucket[key] =
                 (tonumber(bucket[key]) or 0)
                 + scale
         end
     end
-
     local function shotMapIndices(seat)
         local map =
             tryIndex({
@@ -24708,9 +24625,7 @@ task.spawn(function()
                 "shots",
                 seat,
             })
-
         local out = {}
-
         for r = 1, GRID_SIZE do
             for c = 1, GRID_SIZE do
                 if safeIndex(
@@ -24723,50 +24638,36 @@ task.spawn(function()
                 end
             end
         end
-
         return out
     end
-
     local observedOpponentShots = {}
     local opponentShotOrder = 0
     local previousOpponentShot = nil
     local previousOpponentWasHit = nil
-
     local function seedExistingOpponentShots(opponent)
         table.clear(observedOpponentShots)
-
         local current =
             shotMapIndices(opponent)
-
         for _, idx in ipairs(current) do
             observedOpponentShots[idx] = true
         end
-
         opponentShotOrder = #current
         previousOpponentShot = nil
         previousOpponentWasHit = nil
     end
-
     local function observeOpponentShots(
         opponent,
         profile
     )
         local current =
             shotMapIndices(opponent)
-
         local new = {}
-
         for _, idx in ipairs(current) do
             if not observedOpponentShots[idx] then
                 new[#new + 1] = idx
             end
         end
-
         if #new == 0 then return end
-
-
-
-
         if #new > 1 then
             for _, idx in ipairs(new) do
                 observedOpponentShots[idx] = true
@@ -24776,16 +24677,13 @@ task.spawn(function()
             previousOpponentWasHit = nil
             return
         end
-
         local idx = new[1]
         observedOpponentShots[idx] = true
         opponentShotOrder += 1
-
         local ownLo, ownHi =
             ownFleetOccupancyMask()
         local wasHit =
             maskHas(ownLo, ownHi, idx)
-
         addShotObservation(
             profile,
             idx,
@@ -24802,11 +24700,9 @@ task.spawn(function()
             previousOpponentWasHit,
             0.18
         )
-
         previousOpponentShot = idx
         previousOpponentWasHit = wasHit
     end
-
     local function fleetDefensiveScore(
         profile,
         p1,
@@ -24818,17 +24714,13 @@ task.spawn(function()
             tonumber(profile.shotSamples) or 0
         local globalEvidence =
             tonumber(battleModel.global.shotSamples) or 0
-
         local trust =
             math.clamp(evidence / 22, 0, 1)
-
         local score = 0
         local placementIndexes = {
             p1, p2, p3,
         }
-
         local occupiedOwner = {}
-
         local horizontalCount,
             edgeShips,
             adjacencyCount,
@@ -24838,10 +24730,6 @@ task.spawn(function()
                     p2,
                     p3
                 )
-
-
-
-
         if horizontalCount == 0
             or horizontalCount == 3
         then
@@ -24849,36 +24737,21 @@ task.spawn(function()
         else
             score -= (1 - trust) * 0.18
         end
-
-
-
-
         score -=
             edgeShips
             * (1 - trust)
             * 0.16
-
-
-
         score += adjacencyCount * 1.45
         score += nearParallelCount * 0.72
-
         for shipIndex = 1, 3 do
             local placement =
                 placements[shipIndex][
                     placementIndexes[shipIndex]
                 ]
-
             for _, cell in ipairs(placement.cells) do
                 local idx = cell.index
-
-
-
-
-
                 local generic =
                     cellExposure[idx] / maxExposure
-
                 local specificCell =
                     (tonumber(profile.cellShots[idx]) or 0)
                     / math.max(1, evidence)
@@ -24887,13 +24760,11 @@ task.spawn(function()
                     / math.max(1, profile.gamesObserved)
                 local specificEarly =
                     tonumber(profile.earlyShots[idx]) or 0
-
                 local globalCell =
                     (tonumber(
                         battleModel.global.cellShots[idx]
                     ) or 0)
                     / math.max(1, globalEvidence)
-
                 local hazard =
                     generic * (1 - trust) * 1.35
                     + globalCell * (1 - trust) * 3.0
@@ -24903,14 +24774,9 @@ task.spawn(function()
                         / math.max(1, evidence)
                         * trust
                         * 5.5
-
                 score += hazard
                 occupiedOwner[idx] = shipIndex
             end
-
-
-
-
             local horizontalFollow =
                 (tonumber(
                     profile.afterHitDelta[
@@ -24922,7 +24788,6 @@ task.spawn(function()
                         deltaKey(0, -1)
                     ]
                 ) or 0)
-
             local verticalFollow =
                 (tonumber(
                     profile.afterHitDelta[
@@ -24934,25 +24799,18 @@ task.spawn(function()
                         deltaKey(-1, 0)
                     ]
                 ) or 0)
-
             local followTotal =
                 horizontalFollow + verticalFollow
-
             if followTotal > 0 then
                 local orientationRisk =
                     placement.horizontal
                     and horizontalFollow / followTotal
                     or verticalFollow / followTotal
-
                 score += orientationRisk * trust * 2.7
             end
         end
-
-
-
         for idx, owner in pairs(occupiedOwner) do
             local r, c = indexToRowCol(idx)
-
             for _, d in ipairs({
                 { 1, 0 },
                 { -1, 0 },
@@ -24961,7 +24819,6 @@ task.spawn(function()
             }) do
                 local rr = r + d[1]
                 local cc = c + d[2]
-
                 if rr >= 1 and rr <= GRID_SIZE
                     and cc >= 1 and cc <= GRID_SIZE
                 then
@@ -24969,16 +24826,13 @@ task.spawn(function()
                         occupiedOwner[
                             cellIndex(rr, cc)
                         ]
-
                     if other and other ~= owner then
                         score += 0.30
                     end
                 end
             end
         end
-
         local key = fleetKey(p1, p2, p3)
-
         for i, recent in ipairs(profile.recentOurFleets) do
             if recent == key then
                 local age =
@@ -24987,10 +24841,6 @@ task.spawn(function()
                     2.2 * math.exp(-0.34 * age)
             end
         end
-
-
-
-
         if profile.lastOurFleetLo ~= nil
             and profile.lastOurFleetHi ~= nil
         then
@@ -25001,24 +24851,18 @@ task.spawn(function()
                     profile.lastOurFleetLo,
                     profile.lastOurFleetHi
                 )
-
             score += overlap * 0.20
-
             local sameShips = 0
             if p1 == profile.lastOurP1 then sameShips += 1 end
             if p2 == profile.lastOurP2 then sameShips += 1 end
             if p3 == profile.lastOurP3 then sameShips += 1 end
-
             score += sameShips * 0.95
         end
-
         return score, horizontalCount
     end
-
     local function generateDefensiveLayout(profile)
         local TOP_KEEP = 128
         local best = {}
-
         local horizontalFollow =
             (tonumber(
                 profile.afterHitDelta[
@@ -25030,7 +24874,6 @@ task.spawn(function()
                     deltaKey(0, -1)
                 ]
             ) or 0)
-
         local verticalFollow =
             (tonumber(
                 profile.afterHitDelta[
@@ -25042,7 +24885,6 @@ task.spawn(function()
                     deltaKey(-1, 0)
                 ]
             ) or 0)
-
         local followTotal =
             horizontalFollow + verticalFollow
         local directionalConfidence =
@@ -25051,15 +24893,12 @@ task.spawn(function()
                 horizontalFollow - verticalFollow
             ) / followTotal
             or 0
-
         local allowAllParallel =
             (tonumber(profile.shotSamples) or 0) >= 18
             and followTotal >= 6
             and directionalConfidence >= 0.62
-
         local function insertCandidate(candidate)
             local inserted = false
-
             for i = 1, #best do
                 if candidate.score < best[i].score then
                     table.insert(best, i, candidate)
@@ -25067,21 +24906,17 @@ task.spawn(function()
                     break
                 end
             end
-
             if not inserted then
                 best[#best + 1] = candidate
             end
-
             if #best > TOP_KEEP then
                 table.remove(best)
             end
         end
-
         for i = 1, fleetCount do
             local p1 = fleetAt(1, i)
             local p2 = fleetAt(2, i)
             local p3 = fleetAt(3, i)
-
             local score, horizontalCount =
                 fleetDefensiveScore(
                     profile,
@@ -25090,7 +24925,6 @@ task.spawn(function()
                     p3,
                     i
                 )
-
             if allowAllParallel
                 or horizontalCount == 1
                 or horizontalCount == 2
@@ -25104,26 +24938,18 @@ task.spawn(function()
                     score = score,
                 })
             end
-
             if i % 50000 == 0 then
                 task.wait()
             end
         end
-
         if #best == 0 then return nil end
-
         local previousKey =
             profile.lastOurFleetKey
             or profile.recentOurFleets[
                 #profile.recentOurFleets
             ]
-
-
-
-
         if previousKey ~= nil and #best > 1 then
             local filtered = {}
-
             for _, candidate in ipairs(best) do
                 local candidateKey =
                     fleetKey(
@@ -25131,22 +24957,16 @@ task.spawn(function()
                         candidate.p2,
                         candidate.p3
                     )
-
                 if candidateKey ~= previousKey then
                     filtered[#filtered + 1] = candidate
                 end
             end
-
             if #filtered > 0 then
                 best = filtered
             end
         end
-
         local evidence =
             tonumber(profile.shotSamples) or 0
-
-
-
         local poolSize =
             math.min(
                 #best,
@@ -25154,13 +24974,11 @@ task.spawn(function()
                     or evidence >= 16 and 32
                     or 64
             )
-
         local bestScore = best[1].score
         local temperature =
             evidence >= 40 and 0.16
                 or evidence >= 16 and 0.28
                 or 0.55
-
         local total = 0
         for i = 1, poolSize do
             local delta =
@@ -25169,11 +24987,9 @@ task.spawn(function()
                 math.exp(-delta / temperature)
             total += best[i].weight
         end
-
         local roll =
             rng:NextNumber() * math.max(total, 1e-9)
         local chosen = best[poolSize]
-
         for i = 1, poolSize do
             roll -= best[i].weight
             if roll <= 0 then
@@ -25181,22 +24997,18 @@ task.spawn(function()
                 break
             end
         end
-
         local key =
             fleetKey(
                 chosen.p1,
                 chosen.p2,
                 chosen.p3
             )
-
         profile.recentOurFleets[
             #profile.recentOurFleets + 1
         ] = key
-
         while #profile.recentOurFleets > 24 do
             table.remove(profile.recentOurFleets, 1)
         end
-
         profile.lastOurFleetKey = key
         profile.lastOurFleetLo =
             fleetAt(4, chosen.fleetIndex)
@@ -25206,14 +25018,12 @@ task.spawn(function()
         profile.lastOurP2 = chosen.p2
         profile.lastOurP3 = chosen.p3
         battleDirty = true
-
         return {
             placements[1][chosen.p1].cells,
             placements[2][chosen.p2].cells,
             placements[3][chosen.p3].cells,
         }
     end
-
     local plannedLayout = nil
     local placementSession = nil
     local firingBusy = false
@@ -25223,7 +25033,6 @@ task.spawn(function()
     local battleGameSerial = 0
     local previousBattlePhase = nil
     local activeProfile = nil
-
     local function shotSignature(seat)
         local map =
             tryIndex({
@@ -25232,9 +25041,7 @@ task.spawn(function()
                 "shots",
                 seat,
             })
-
         local out = {}
-
         for r = 1, GRID_SIZE do
             for c = 1, GRID_SIZE do
                 if safeIndex(
@@ -25249,22 +25056,17 @@ task.spawn(function()
                 end
             end
         end
-
         return table.concat(out, "|")
     end
-
     local function buildGameKey()
         local tableModel =
             tryIndex({ "session", "public", "tableModel" })
-
         return
             tostring(tableModel)
             .. ":"
             .. opponentKey()
     end
-
     local shotVFXConnection = nil
-
     pcall(function()
         shotVFXConnection =
             CollectionService:GetInstanceAddedSignal(
@@ -25275,34 +25077,26 @@ task.spawn(function()
                 then
                     return
                 end
-
                 local mine = seatIndex()
                 if not mine or not minigameAutoplayEnabled("Battleship") then return end
-
                 local grid = ownShootGrid(mine)
                 if not grid or not grid.partToCoord then
                     return
                 end
-
                 local node = instance
                 local coord = nil
-
                 while node do
                     coord = grid.partToCoord[node]
                     if coord then break end
                     node = node.Parent
                 end
-
                 if not coord then return end
-
                 task.spawn(function()
                     local deadline =
                         os.clock() + 0.12
-
                     repeat
                         local isHit =
                             instance:GetAttribute("IsHit")
-
                         if type(isHit) == "boolean" then
                             localShotOutcomeCache[
                                 coordKey(
@@ -25312,18 +25106,15 @@ task.spawn(function()
                             ] = isHit
                             return
                         end
-
                         task.wait()
                     until os.clock() >= deadline
                         or controller.destroyed
                 end)
             end)
     end)
-
     while not controller.destroyed do
         task.wait(gameId() == "Battleship" and 0.012 or 0.15)
         saveBattleLearning(false)
-
         if gameId() ~= "Battleship" then
             saveBattleLearning(true)
             if fleetReady then releaseFleetIndex() end
@@ -25340,33 +25131,22 @@ task.spawn(function()
             table.clear(observedOpponentShots)
             continue
         end
-
         if not minigameAutoplayEnabled("Battleship") then
             firingBusy = false
             lastShotSignature = nil
             continue
         end
-
         local mine = seatIndex()
         if not mine then continue end
-
         local opponent =
             mine == 1 and 2 or 1
-
         local phase = publicPhase()
         local matchKey = buildGameKey()
-
-
-
-
-
         local enteredPlacement =
             phase == "Placement"
             and previousBattlePhase ~= "Placement"
-
         local changedMatch =
             currentMatchKey ~= matchKey
-
         if changedMatch
             or currentGameKey == nil
             or enteredPlacement
@@ -25379,14 +25159,12 @@ task.spawn(function()
                 .. tostring(battleGameSerial)
                 .. ":"
                 .. tostring(workspace:GetServerTimeNow())
-
             plannedLayout = nil
             placementSession = nil
             firingBusy = false
             lastShotSignature = nil
             table.clear(localShotOutcomeCache)
             resetPosteriorCache()
-
             activeProfile = profileForOpponent()
             activeProfile.gamesObserved =
                 (tonumber(activeProfile.gamesObserved) or 0) + 1
@@ -25394,28 +25172,20 @@ task.spawn(function()
                 (tonumber(battleModel.global.gamesObserved) or 0)
                 + 0.18
             battleDirty = true
-
             seedExistingOpponentShots(opponent)
         end
-
         previousBattlePhase = phase
-
         activeProfile =
             activeProfile or profileForOpponent()
-
         observeOpponentShots(
             opponent,
             activeProfile
         )
-
         recordCompletedOpponentFleet(
             activeProfile,
             opponent,
             currentGameKey
         )
-
-
-
         if not minigameAutoplayEnabled("Battleship") then
             if fleetReady then releaseFleetIndex() end
             continue
@@ -25424,7 +25194,6 @@ task.spawn(function()
             task.wait(0.10)
             continue
         end
-
         if phase == "Placement" then
             if not plannedLayout then
                 plannedLayout =
@@ -25436,7 +25205,6 @@ task.spawn(function()
                         workspace:GetServerTimeNow()
                     )
             end
-
             if plannedLayout then
                 for shipIndex = 1, #SHIPS do
                     if not shipIsPlaced(shipIndex) then
@@ -25447,7 +25215,6 @@ task.spawn(function()
                                 "placingShipIndex",
                                 mine,
                             })
-
                         if placing == nil
                             or tonumber(placing) == shipIndex
                         then
@@ -25460,7 +25227,6 @@ task.spawn(function()
                                     col = cell.col,
                                 }
                             end
-
                             fireAction(
                                 "PlaceShip",
                                 {
@@ -25468,31 +25234,25 @@ task.spawn(function()
                                     cells = cells,
                                 }
                             )
-
                             local deadline =
                                 os.clock() + 1.0
-
                             while os.clock() < deadline
                                 and not shipIsPlaced(shipIndex)
                             do
                                 task.wait(0.035)
                             end
                         end
-
                         break
                     end
                 end
             end
-
             continue
         end
-
         if phase ~= "Firing"
             or firingBusy
         then
             continue
         end
-
         if tonumber(
             tryIndex({
                 "session",
@@ -25503,31 +25263,24 @@ task.spawn(function()
         then
             continue
         end
-
         local signature =
             shotSignature(mine)
-
         if signature == lastShotSignature then
             continue
         end
-
         firingBusy = true
-
         task.spawn(function()
             local expectedSignature = signature
-
             local knowledge =
                 collectShotKnowledge(
                     mine,
                     opponent
                 )
-
             local shot =
                 chooseExactShot(
                     knowledge,
                     activeProfile
                 )
-
             if shot then
                 if gameId() == "Battleship"
                     and publicPhase() == "Firing"
@@ -25546,7 +25299,6 @@ task.spawn(function()
                             shot.row,
                             shot.col
                         )
-
                     local sent =
                         fireAction(
                             "Fire",
@@ -25555,15 +25307,12 @@ task.spawn(function()
                                 col = shot.col,
                             }
                         )
-
                     if sent then
                         local processed = false
                         local processDeadline =
                             os.clock() + 0.85
-
                         while os.clock() < processDeadline do
                             task.wait(0.010)
-
                             if shotSignature(mine)
                                 ~= expectedSignature
                             then
@@ -25571,17 +25320,11 @@ task.spawn(function()
                                 break
                             end
                         end
-
                         if processed then
-
-
-
-
                             local outcome =
                                 localShotOutcomeCache[key]
                             local resolveDeadline =
                                 os.clock() + 0.075
-
                             while os.clock() < resolveDeadline
                                 and outcome == nil
                             do
@@ -25592,7 +25335,6 @@ task.spawn(function()
                                         "shots",
                                         mine,
                                     })
-
                                 outcome =
                                     shotValueToHit(
                                         safeIndex(
@@ -25600,7 +25342,6 @@ task.spawn(function()
                                             key
                                         )
                                     )
-
                                 if outcome == nil then
                                     local grid =
                                         ownShootGrid(mine)
@@ -25611,20 +25352,16 @@ task.spawn(function()
                                             shot.col
                                         )
                                 end
-
                                 if outcome == nil then
                                     outcome =
                                         localShotOutcomeCache[key]
                                 end
-
                                 if outcome == nil then
                                     task.wait(0.008)
                                 end
                             end
-
                             if outcome == nil then
                                 RunService.Heartbeat:Wait()
-
                                 local first =
                                     tonumber(
                                         tryIndex({
@@ -25633,9 +25370,7 @@ task.spawn(function()
                                             "currentTurn",
                                         })
                                     )
-
                                 RunService.Heartbeat:Wait()
-
                                 local second =
                                     tonumber(
                                         tryIndex({
@@ -25644,12 +25379,10 @@ task.spawn(function()
                                             "currentTurn",
                                         })
                                     )
-
                                 if first == second then
                                     outcome = second == mine
                                 else
                                     RunService.Heartbeat:Wait()
-
                                     outcome =
                                         tonumber(
                                             tryIndex({
@@ -25660,19 +25393,16 @@ task.spawn(function()
                                         ) == mine
                                 end
                             end
-
                             localShotOutcomeCache[key] =
                                 outcome == true
                         end
                     end
                 end
             end
-
             lastShotSignature = nil
             firingBusy = false
         end)
     end
-
     if shotVFXConnection then
         pcall(function()
             shotVFXConnection:Disconnect()
@@ -25681,51 +25411,18 @@ task.spawn(function()
     releaseFleetIndex()
     saveBattleLearning(true)
 end)
-
 end)
 end
-
-
-
-
-
-
-
 task.spawn(function()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 if not game:IsLoaded() then
     game.Loaded:Wait()
 end
-
-local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
 local CollectionService = game:GetService("CollectionService")
-local TeleportService = game:GetService("TeleportService")
-local HttpService = game:GetService("HttpService")
-
 local LocalPlayer = Players.LocalPlayer
 if not LocalPlayer then
     Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
     LocalPlayer = Players.LocalPlayer
 end
-
 local function requireWhenReadyLOSS(moduleScript)
     while screenGui.Parent do
         local ok, result = pcall(require, moduleScript)
@@ -25733,7 +25430,6 @@ local function requireWhenReadyLOSS(moduleScript)
         task.wait(0.25)
     end
 end
-
 local ClientGlobals = requireWhenReadyLOSS(
     ReplicatedStorage:WaitForChild("Client")
         :WaitForChild("Modules")
@@ -25744,14 +25440,11 @@ local Remotes = requireWhenReadyLOSS(
         :WaitForChild("Remotes")
 )
 if not (ClientGlobals and Remotes) then return end
-
 local ActiveMinigame = ClientGlobals.ActiveMinigame
 local MinigameBombExplosion = Remotes.MinigameBombExplosion
-
 local BattleshipUtils = nil
 local FootballDraftConfig = nil
 local BrainrotsConfig = nil
-
 pcall(function()
     BattleshipUtils = require(ReplicatedStorage.SharedModules.BattleshipUtils)
 end)
@@ -25761,19 +25454,16 @@ end)
 pcall(function()
     BrainrotsConfig = require(ReplicatedStorage.Shared.Config.Brainrots)
 end)
-
 local BATTLESHIP_SHIP_COUNT = 3
 if type(BattleshipUtils) == "table" and type(BattleshipUtils.SHIPS) == "table" then
     BATTLESHIP_SHIP_COUNT = math.max(1, #BattleshipUtils.SHIPS)
 end
-
 local FOOTBALL_MAX_OVR_BY_LINE = {}
 if type(FootballDraftConfig) == "table" and type(BrainrotsConfig) == "table" then
     for name in pairs(BrainrotsConfig.BrainrotRarities or {}) do
         if not (BrainrotsConfig.UnobtainableBrainrots or {})[name] then
             local okLine, line = pcall(FootballDraftConfig.GetLine, name)
             local okOVR, ovr = pcall(FootballDraftConfig.GetOVR, name)
-
             if okLine and okOVR and type(line) == "string" and type(ovr) == "number" then
                 FOOTBALL_MAX_OVR_BY_LINE[line] = math.max(
                     FOOTBALL_MAX_OVR_BY_LINE[line] or 0,
@@ -25783,7 +25473,6 @@ if type(FootballDraftConfig) == "table" and type(BrainrotsConfig) == "table" the
         end
     end
 end
-
 local GLOBAL_KEY = "__TSUNAMI_CLINCH_LOSS_HOP_V27"
 local LEGACY_GLOBAL_KEYS = {
     "__TSUNAMI_CLINCH_LOSS_HOP_V1",
@@ -25814,7 +25503,6 @@ local LEGACY_GLOBAL_KEYS = {
     "__TSUNAMI_CLINCH_LOSS_HOP_V26",
     GLOBAL_KEY,
 }
-
 for _, key in ipairs(LEGACY_GLOBAL_KEYS) do
     local oldController = rawget(_G, key)
     if oldController and type(oldController.Destroy) == "function" then
@@ -25824,7 +25512,6 @@ for _, key in ipairs(LEGACY_GLOBAL_KEYS) do
     end
     rawset(_G, key, nil)
 end
-
 local controller = {
     destroyed = false,
     triggered = false,
@@ -25857,24 +25544,20 @@ local controller = {
     disconnectors = {},
 }
 rawset(_G, GLOBAL_KEY, controller)
-
 local SERVER_PAGE_LIMIT = 100
-local SERVER_MAX_PAGES = 1
-local DESTINATION_REFRESH_INTERVAL = 12
+local SERVER_MAX_PAGES = 5
+local DESTINATION_REFRESH_INTERVAL = 2
 local Randomizer = Random.new()
-
 local NORMALIZED_SCORE_GAMES = {
     CandyBomb = true,
     PopcornBurst = true,
     NumberGuess = true,
 }
-
 local SEAT_SCORE_GAMES = {
     ConnectFour = true,
     Battleship = true,
     Knockout = true,
 }
-
 local SUPPORTED_GAMES = {
     CandyBomb = true,
     PopcornBurst = true,
@@ -25884,7 +25567,6 @@ local SUPPORTED_GAMES = {
     Knockout = true,
     FootballDraft = true,
 }
-
 local KICK_GAME_DISPLAY_NAMES = {
     CandyBomb = "Candy Bomb",
     PopcornBurst = "Popcorn",
@@ -25894,12 +25576,6 @@ local KICK_GAME_DISPLAY_NAMES = {
     Knockout = "Knockout",
     FootballDraft = "Football Draft",
 }
-
-
-
-
-
-
 local ROUND_START_PHASES = {
     CandyBomb = {
         BombPlacement = true,
@@ -25925,7 +25601,6 @@ local ROUND_START_PHASES = {
         Drafting = true,
     },
 }
-
 local tracker = {
     gameId = nil,
     initialized = false,
@@ -25973,11 +25648,6 @@ local tracker = {
     popcornAwaitingFreshRound = false,
     popcornPendingRoundLocalWins = nil,
     popcornPendingRoundOpponentWins = nil,
-
-
-
-
-
     popcornRoundInitialized = false,
     popcornMyCurrentResultKey = nil,
     popcornOpponentCurrentResultKey = nil,
@@ -25997,18 +25667,15 @@ local tracker = {
     battleshipRoundArmed = false,
     gameIdTeardownSeen = false,
 }
-
 local evaluateState
 local executePendingLossIfReady
 local scheduleUrgentDeparture
 local cachedClinchRoundReady
-
 local function addConnection(connection)
     if typeof(connection) == "RBXScriptConnection" then
         controller.connections[#controller.connections + 1] = connection
     end
 end
-
 local function addDisconnector(value)
     if type(value) == "function" then
         controller.disconnectors[#controller.disconnectors + 1] = value
@@ -26016,7 +25683,6 @@ local function addDisconnector(value)
         addConnection(value)
     end
 end
-
 local function tryIndex(path)
     local ok, value = pcall(ActiveMinigame.TryIndex, ActiveMinigame, path)
     if ok then
@@ -26024,7 +25690,6 @@ local function tryIndex(path)
     end
     return nil
 end
-
 local function numeric(value, fallback)
     local n = tonumber(value)
     if n == nil then
@@ -26032,43 +25697,31 @@ local function numeric(value, fallback)
     end
     return n
 end
-
-
-
-
 local function safeIndex(value, key)
     if value == nil then
         return nil
     end
-
     local ok, result = pcall(function()
         return value[key]
     end)
-
     if ok then
         return result
     end
-
     return nil
 end
-
 local function safeSequenceLength(value, maxScan)
     if value == nil then
         return 0
     end
-
     local okLength, length = pcall(function()
         return #value
     end)
-
     if okLength and type(length) == "number" and length > 0 then
         return math.floor(length)
     end
-
     local highest = 0
     local consecutiveMisses = 0
     local limit = math.max(1, math.floor(maxScan or 256))
-
     for index = 1, limit do
         if safeIndex(value, index) ~= nil then
             highest = index
@@ -26080,23 +25733,18 @@ local function safeSequenceLength(value, maxScan)
             end
         end
     end
-
     return highest
 end
-
 local function readIndexed(pathPrefix, index)
     local path = table.clone(pathPrefix)
     path[#path + 1] = index
-
     local direct = tryIndex(path)
     if direct ~= nil then
         return direct
     end
-
     local parent = tryIndex(pathPrefix)
     return safeIndex(parent, index)
 end
-
 local function currentGameId()
     local gameId = tryIndex({ "session", "gameId" })
     if type(gameId) == "string" then
@@ -26104,7 +25752,6 @@ local function currentGameId()
     end
     return nil
 end
-
 local function currentPhase()
     local phase = tryIndex({ "session", "public", "phase" })
     if type(phase) == "string" then
@@ -26112,11 +25759,9 @@ local function currentPhase()
     end
     return nil
 end
-
 local function currentSeatIndex()
     return numeric(tryIndex({ "session", "private", "seatIndex" }), nil)
 end
-
 local function opponentSeatIndex(seatIndex)
     if seatIndex == 1 then
         return 2
@@ -26126,7 +25771,6 @@ local function opponentSeatIndex(seatIndex)
     end
     return nil
 end
-
 local function currentOpponent()
     local opponent = tryIndex({ "session", "private", "opponent" })
     if typeof(opponent) == "Instance" and opponent:IsA("Player") then
@@ -26134,25 +25778,18 @@ local function currentOpponent()
     end
     return nil
 end
-
 local function validBestOf(value)
     local n = numeric(value, nil)
     if n == nil then
         return nil
     end
-
     n = math.floor(n)
     if n == 1 or n == 3 or n == 5 then
         return n
     end
-
     return nil
 end
-
 local function readRoundVoteEvidence()
-
-
-
     local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
     if type(utility) == "table" and utility.AutoChooseRounds == true then
         local configured = validBestOf(utility.RoundsToChoose)
@@ -26163,33 +25800,17 @@ local function readRoundVoteEvidence()
             end
         end
     end
-
     local voting = tryIndex({ "voting" })
     if voting ~= nil then
         local votePhase = safeIndex(voting, "votePhase") or "game"
-
-
-
-
-
         if votePhase == "game" and currentGameId() == nil then
-
-
-
-
-
             tracker.votedBestOfRounds = nil
             tracker.seriesBestOfRounds = nil
             tracker.bestOfOneCandidateSince = nil
         end
-
         local opponentVote = safeIndex(voting, "opponentVote")
         local opponentBestOf = validBestOf(safeIndex(opponentVote, "bestOf"))
         if opponentBestOf ~= nil then
-
-
-
-
             if opponentBestOf > 1 then
                 tracker.votedBestOfRounds = opponentBestOf
             elseif tracker.votedBestOfRounds == nil then
@@ -26197,22 +25818,17 @@ local function readRoundVoteEvidence()
             end
         end
     end
-
-
-
     local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
     local minigameGui = playerGui and playerGui:FindFirstChild("MinigameGui")
     local votingGui = minigameGui and minigameGui:FindFirstChild("Voting")
     local bestOfGui = votingGui and votingGui:FindFirstChild("BestofGamemode")
     local list = bestOfGui and bestOfGui:FindFirstChild("List")
-
     if list then
         local choices = {
             { name = "One", value = 1 },
             { name = "Three", value = 3 },
             { name = "Five", value = 5 },
         }
-
         for _, choice in ipairs(choices) do
             local button = list:FindFirstChild(choice.name)
             if button and button:FindFirstChild("SelectionStroke") then
@@ -26222,83 +25838,58 @@ local function readRoundVoteEvidence()
         end
     end
 end
-
 local function currentBestOfRounds()
     readRoundVoteEvidence()
-
     local observed = validBestOf(tryIndex({ "bestOfRounds" }))
     local phase = currentPhase()
-
     if observed == 3 or observed == 5 then
         tracker.seriesBestOfRounds = observed
         tracker.bestOfOneCandidateSince = nil
         return observed
     end
-
-
-
     if tracker.seriesBestOfRounds == 3 or tracker.seriesBestOfRounds == 5 then
         return tracker.seriesBestOfRounds
     end
-
     if tracker.votedBestOfRounds == 3 or tracker.votedBestOfRounds == 5 then
         tracker.seriesBestOfRounds = tracker.votedBestOfRounds
         tracker.bestOfOneCandidateSince = nil
         return tracker.seriesBestOfRounds
     end
-
     if observed ~= 1 then
         tracker.bestOfOneCandidateSince = nil
         return tracker.seriesBestOfRounds
     end
-
-
-
-
     if tracker.votedBestOfRounds == 1 then
         tracker.seriesBestOfRounds = 1
         tracker.bestOfOneCandidateSince = nil
         return 1
     end
-
-
-
-
-
     local gameplayPhase = phase ~= nil
         and phase ~= "Voting"
         and phase ~= "Finished"
-
     if not gameplayPhase then
         tracker.bestOfOneCandidateSince = nil
         return tracker.seriesBestOfRounds
     end
-
     if tracker.bestOfOneCandidateSince == nil then
         tracker.bestOfOneCandidateSince = os.clock()
         return tracker.seriesBestOfRounds
     end
-
     if os.clock() - tracker.bestOfOneCandidateSince >= 1.0 then
         tracker.seriesBestOfRounds = 1
         return 1
     end
-
     return tracker.seriesBestOfRounds
 end
-
 local function winsRequired(bestOfRounds)
     return math.floor(bestOfRounds / 2) + 1
 end
-
 local function readSeriesScores(gameId, seatIndex)
     local localWins
     local opponentWins
-
     if NORMALIZED_SCORE_GAMES[gameId] then
         localWins = numeric(readIndexed({ "playerWins" }, 1), nil)
         opponentWins = numeric(readIndexed({ "playerWins" }, 2), nil)
-
         if localWins == nil or opponentWins == nil then
             localWins = numeric(readIndexed({ "session", "public", "playerWins" }, 1), localWins)
             opponentWins = numeric(readIndexed({ "session", "public", "playerWins" }, 2), opponentWins)
@@ -26314,15 +25905,12 @@ local function readSeriesScores(gameId, seatIndex)
                 readIndexed({ "session", "public", "playerWins" }, opponentSeat),
                 nil
             )
-
             if localWins == nil or opponentWins == nil then
                 localWins = numeric(readIndexed({ "playerWins" }, seatIndex), localWins)
                 opponentWins = numeric(readIndexed({ "playerWins" }, opponentSeat), opponentWins)
             end
         end
     else
-
-
         local opponentSeat = opponentSeatIndex(seatIndex)
         if seatIndex and opponentSeat then
             localWins = numeric(
@@ -26334,18 +25922,11 @@ local function readSeriesScores(gameId, seatIndex)
                 nil
             )
         end
-
         if localWins == nil or opponentWins == nil then
             localWins = numeric(readIndexed({ "playerWins" }, 1), localWins)
             opponentWins = numeric(readIndexed({ "playerWins" }, 2), opponentWins)
         end
     end
-
-
-
-
-
-
     if gameId == tracker.gameId then
         if localWins == nil then
             localWins = tracker.localWins
@@ -26354,11 +25935,9 @@ local function readSeriesScores(gameId, seatIndex)
             opponentWins = tracker.opponentWins
         end
     end
-
     return math.max(0, math.floor(localWins or 0)),
         math.max(0, math.floor(opponentWins or 0))
 end
-
 local function getEnvironmentTable()
     local env = _G
     local ok, genv = pcall(function()
@@ -26367,116 +25946,166 @@ local function getEnvironmentTable()
         end
         return nil
     end)
-
     if ok and type(genv) == "table" then
         env = genv
     end
-
     return env
 end
-
 local function environmentFunction(name)
     local env = getEnvironmentTable()
     local value = env and env[name]
-
     if type(value) ~= "function" and env ~= _G then
         value = _G[name]
     end
-
     if type(value) == "function" then
         return value
     end
-
     return nil
 end
-
 local function getRequestFunction()
     local env = getEnvironmentTable()
-
     local direct = environmentFunction("request")
         or environmentFunction("http_request")
     if direct then
         return direct
     end
-
     local synTable = env and env.syn or rawget(_G, "syn")
     if type(synTable) == "table" and type(synTable.request) == "function" then
         return synTable.request
     end
-
     local httpTable = env and env.http or rawget(_G, "http")
     if type(httpTable) == "table" and type(httpTable.request) == "function" then
         return httpTable.request
     end
-
     return nil
 end
-
 local function fetchServerPage(requestFn, cursor)
     local url = "https://games.roblox.com/v1/games/"
         .. tostring(game.PlaceId)
         .. "/servers/Public?sortOrder=Desc&limit="
         .. tostring(SERVER_PAGE_LIMIT)
         .. "&excludeFullGames=true"
-
     if type(cursor) == "string" and cursor ~= "" then
         url ..= "&cursor=" .. HttpService:UrlEncode(cursor)
     end
-
-    local ok, response = pcall(requestFn, {
-        Url = url,
-        Method = "GET",
-        Headers = {
-            ["Accept"] = "application/json",
-        },
-    })
-
-    if not ok or type(response) ~= "table" then
+    local body
+    if type(requestFn) == "function" then
+        local ok, response = pcall(requestFn, {
+            Url = url,
+            Method = "GET",
+            Headers = {
+                ["Accept"] = "application/json",
+            },
+        })
+        if ok then
+            if type(response) == "string" then
+                body = response
+            elseif type(response) == "table" then
+                body = response.Body or response.body
+            end
+        end
+    end
+    if type(body) ~= "string" or body == "" then
+        local okHttpGet, httpBody = pcall(function()
+            return game:HttpGet(url)
+        end)
+        if okHttpGet and type(httpBody) == "string" then
+            body = httpBody
+        end
+    end
+    if type(body) ~= "string" or body == "" then
         return nil
     end
-
-    local body = response.Body or response.body
-    if type(body) ~= "string" then
-        return nil
-    end
-
     local decodedOk, decoded = pcall(HttpService.JSONDecode, HttpService, body)
     if not decodedOk or type(decoded) ~= "table" then
         return nil
     end
-
     return decoded
 end
-
+local function autoleaveServerBlacklisted(serverId)
+    if type(serverId) ~= "string" or serverId == "" then
+        return true
+    end
+    local state = autoServerHopState
+    if type(state) ~= "table" then
+        return serverId == game.JobId
+    end
+    local blacklist = state.JoinedServerBlacklist
+    if type(blacklist) ~= "table" then
+        blacklist = {}
+        state.JoinedServerBlacklist = blacklist
+    end
+    local nowUnix = DateTime.now().UnixTimestamp
+    for id, expiresAt in pairs(blacklist) do
+        if type(id) ~= "string"
+            or tonumber(expiresAt) == nil
+            or tonumber(expiresAt) <= nowUnix
+        then
+            blacklist[id] = nil
+        end
+    end
+    if serverId == game.JobId or tonumber(blacklist[serverId]) ~= nil then
+        return true
+    end
+    local occupied = autoServerHopState.RuntimeScriptUserServerIds
+    if autoServerHopState.LeaveIfScriptUserInServer == true
+        and type(occupied) == "table"
+    then
+        local expiresAt = tonumber(occupied[serverId])
+        if expiresAt and expiresAt > os.clock() then return true end
+        if expiresAt then occupied[serverId] = nil end
+    end
+    return false
+end
+local function rememberAutoleaveDestination(serverId)
+    if type(serverId) ~= "string" or serverId == "" then return end
+    if type(autoServerHopState) ~= "table" then return end
+    local blacklist = autoServerHopState.JoinedServerBlacklist
+    if type(blacklist) ~= "table" then
+        blacklist = {}
+        autoServerHopState.JoinedServerBlacklist = blacklist
+    end
+    local minutes = math.clamp(
+        math.floor(tonumber(autoServerHopState.ServerBlacklistMinutes) or 10),
+        1,
+        60
+    )
+    blacklist[serverId] = DateTime.now().UnixTimestamp + minutes * 60
+    local recent = autoServerHopState.RecentServerIds
+    if type(recent) ~= "table" then
+        recent = {}
+        autoServerHopState.RecentServerIds = recent
+    end
+    for index = #recent, 1, -1 do
+        if recent[index] == serverId then table.remove(recent, index) end
+    end
+    recent[#recent + 1] = serverId
+    while #recent > 50 do table.remove(recent, 1) end
+    local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
+    if type(saver) == "function" then pcall(saver, true) end
+end
 local function resolveDestinationServer()
     local requestFn = getRequestFunction()
-    if not requestFn then
-        return nil
-    end
-
     local originJobId = game.JobId
     local candidates = {}
     local seen = {}
     local cursor = nil
-
     for _ = 1, SERVER_MAX_PAGES do
         if controller.destroyed or controller.triggered then
             break
         end
-
         local page = fetchServerPage(requestFn, cursor)
         if not page then
             break
         end
-
         for _, server in ipairs(page.data or {}) do
             local serverId = server.id
             local playing = numeric(server.playing, nil)
             local maxPlayers = numeric(server.maxPlayers, nil)
-
             if type(serverId) == "string"
                 and serverId ~= ""
                 and serverId ~= originJobId
+                and not autoleaveServerBlacklisted(serverId)
                 and not seen[serverId]
                 and playing ~= nil
                 and maxPlayers ~= nil
@@ -26493,17 +26122,14 @@ local function resolveDestinationServer()
                 }
             end
         end
-
         cursor = page.nextPageCursor
         if type(cursor) ~= "string" or cursor == "" then
             break
         end
     end
-
     if #candidates == 0 then
         return nil
     end
-
     table.sort(candidates, function(a, b)
         if a.playing ~= b.playing then
             return a.playing > b.playing
@@ -26516,32 +26142,32 @@ local function resolveDestinationServer()
         end
         return a.id < b.id
     end)
-
     local topCount = math.min(10, #candidates)
     local selected = candidates[Randomizer:NextInteger(1, topCount)]
     return selected and selected.id or nil
 end
-
 local function refreshDestinationServer(force)
     if controller.destroyed or controller.triggered then
         return controller.destinationServerId
     end
-
     if controller.destinationLookupBusy then
         return controller.destinationServerId
     end
-
+    if controller.destinationServerId
+        and autoleaveServerBlacklisted(controller.destinationServerId)
+    then
+        controller.destinationServerId = nil
+        controller.destinationResolvedAt = 0
+    end
     if not force
         and controller.destinationServerId
         and os.clock() - controller.destinationResolvedAt < DESTINATION_REFRESH_INTERVAL
     then
         return controller.destinationServerId
     end
-
     controller.destinationLookupBusy = true
     local destination = resolveDestinationServer()
     controller.destinationLookupBusy = false
-
     if type(destination) == "string"
         and destination ~= ""
         and destination ~= game.JobId
@@ -26549,14 +26175,11 @@ local function refreshDestinationServer(force)
         controller.destinationServerId = destination
         controller.destinationResolvedAt = os.clock()
     end
-
     if executePendingLossIfReady then
         executePendingLossIfReady()
     end
-
     return controller.destinationServerId
 end
-
 local function performDisconnectAndTeleport(destinationServerId, reason)
     local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
     if type(utility) ~= "table"
@@ -26570,31 +26193,22 @@ local function performDisconnectAndTeleport(destinationServerId, reason)
     if controller.destroyed then
         return false
     end
-
-
-
-
-
-
     local now = os.clock()
     if now - numeric(controller.lastDepartureAttemptAt, 0) < 0.05 then
         return false
     end
     controller.lastDepartureAttemptAt = now
     controller.departureAttemptCount = numeric(controller.departureAttemptCount, 0) + 1
-
     local triggerReason = reason or controller.pendingLossReason or "clinching-loss"
     controller.triggerReason = triggerReason
     controller.triggerObservedAt = controller.triggerObservedAt or now
     controller.kickIssuedAt = now
-
     local kickedGameId = currentGameId()
     if type(kickedGameId) ~= "string" or kickedGameId == "" then
         if type(triggerReason) == "string" then
             kickedGameId = string.match(triggerReason, "^([^:]+)")
         end
     end
-
     local kickedGameName = KICK_GAME_DISPLAY_NAMES[kickedGameId]
         or (type(kickedGameId) == "string" and kickedGameId ~= "" and kickedGameId)
         or "Unknown"
@@ -26608,20 +26222,17 @@ local function performDisconnectAndTeleport(destinationServerId, reason)
         print("KICKED | Game: " .. tostring(kickedGameName))
         print(kickLogSeparator)
     end
-
-
-
-
-
     local kickAccepted = pcall(function()
         LocalPlayer:Kick("Lost Duel")
     end)
-
     local teleportAccepted = false
     if type(destinationServerId) == "string"
         and destinationServerId ~= ""
         and destinationServerId ~= game.JobId
+        and not autoleaveServerBlacklisted(destinationServerId)
     then
+        rememberAutoleaveDestination(game.JobId)
+        rememberAutoleaveDestination(destinationServerId)
         controller.teleportAttemptedAt = os.clock()
         teleportAccepted = pcall(function()
             TeleportService:TeleportToPlaceInstance(
@@ -26631,34 +26242,24 @@ local function performDisconnectAndTeleport(destinationServerId, reason)
             )
         end)
     end
-
-
-
-
-
-
     local accepted = kickAccepted or teleportAccepted
     if not accepted then
         controller.lastDepartureAttemptAt = 0
     end
     return accepted
 end
-
 executePendingLossIfReady = function()
     if controller.destroyed then
         return
     end
-
     if controller.pendingLossReason == nil then
         return
     end
-
     performDisconnectAndTeleport(
         controller.destinationServerId,
         controller.pendingLossReason
     )
 end
-
 scheduleUrgentDeparture = function()
     if controller.destroyed
         or controller.pendingLossReason == nil
@@ -26666,13 +26267,7 @@ scheduleUrgentDeparture = function()
     then
         return
     end
-
     controller.urgentDepartureScheduled = true
-
-
-
-
-
     task.spawn(function()
         controller.urgentDepartureScheduled = false
         if not controller.destroyed and controller.pendingLossReason ~= nil then
@@ -26680,7 +26275,6 @@ scheduleUrgentDeparture = function()
         end
     end)
 end
-
 local function latchClinchingLoss(reason)
     local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
     if type(utility) ~= "table"
@@ -26693,16 +26287,10 @@ local function latchClinchingLoss(reason)
     if controller.destroyed then
         return false
     end
-
     controller.triggerObservedAt = controller.triggerObservedAt or os.clock()
     if controller.pendingLossReason == nil then
         controller.pendingLossReason = reason or "clinching-loss"
     end
-
-
-
-
-
     performDisconnectAndTeleport(
         controller.destinationServerId,
         controller.pendingLossReason
@@ -26710,19 +26298,15 @@ local function latchClinchingLoss(reason)
     scheduleUrgentDeparture()
     return true
 end
-
 local function isOpponentPlayer(value, opponent)
     if typeof(value) ~= "Instance" or not value:IsA("Player") then
         return false
     end
-
     if opponent and value == opponent then
         return true
     end
-
     return value ~= LocalPlayer
 end
-
 local function publicWinnerIdentity(value)
     if typeof(value) == "Instance" and value:IsA("Player") then
         return "P:" .. tostring(value.UserId)
@@ -26732,7 +26316,6 @@ local function publicWinnerIdentity(value)
     end
     return typeof(value) .. ":" .. tostring(value)
 end
-
 local function resetTracker(gameId)
     tracker.gameId = gameId
     tracker.initialized = false
@@ -26755,8 +26338,6 @@ local function resetTracker(gameId)
     tracker.roundStartOpponentWins = nil
     tracker.seriesBestOfRounds = nil
     tracker.bestOfOneCandidateSince = nil
-
-
     tracker.candyBombsHit = 0
     tracker.candyBombEvents = 0
     tracker.candyLastObservedBoardBombs = nil
@@ -26802,24 +26383,20 @@ local function resetTracker(gameId)
     tracker.battleshipRoundArmed = false
     tracker.gameIdTeardownSeen = false
 end
-
 local function hasConnectFourWin(grid, targetSeat)
     if grid == nil or targetSeat == nil then
         return false
     end
-
     local function ownerAt(col, row)
         local column = safeIndex(grid, col)
         if column == nil then
             return nil
         end
-
         local value = safeIndex(column, row)
         local direct = numeric(value, nil)
         if direct ~= nil then
             return direct
         end
-
         if value ~= nil then
             return numeric(
                 safeIndex(value, "seatIndex")
@@ -26830,17 +26407,14 @@ local function hasConnectFourWin(grid, targetSeat)
                 nil
             )
         end
-
         return nil
     end
-
     local directions = {
         { 1, 0 },
         { 0, 1 },
         { 1, 1 },
         { 1, -1 },
     }
-
     for col = 1, 7 do
         for row = 1, 6 do
             if ownerAt(col, row) == targetSeat then
@@ -26848,11 +26422,9 @@ local function hasConnectFourWin(grid, targetSeat)
                     local dc = direction[1]
                     local dr = direction[2]
                     local complete = true
-
                     for step = 1, 3 do
                         local nextCol = col + dc * step
                         local nextRow = row + dr * step
-
                         if nextCol < 1
                             or nextCol > 7
                             or nextRow < 1
@@ -26863,7 +26435,6 @@ local function hasConnectFourWin(grid, targetSeat)
                             break
                         end
                     end
-
                     if complete then
                         return true
                     end
@@ -26871,93 +26442,70 @@ local function hasConnectFourWin(grid, targetSeat)
             end
         end
     end
-
     return false
 end
-
 local function ownBattleshipsAllSunk(seatIndex)
     if seatIndex == nil then
         return false
     end
-
     local sunk = readIndexed(
         { "session", "public", "sunkShipDetails" },
         seatIndex
     )
-
     if sunk == nil then
         return false
     end
-
     return safeSequenceLength(sunk, 16) >= BATTLESHIP_SHIP_COUNT
 end
-
 local function ownBattleshipsAllHitByOpponentShots(seatIndex)
     local opponentSeat = opponentSeatIndex(seatIndex)
     if seatIndex == nil or opponentSeat == nil then
         return false
     end
-
     local ships = tryIndex({ "session", "private", "myShips" })
     local opponentShots = readIndexed(
         { "session", "public", "shots" },
         opponentSeat
     )
-
     if ships == nil or opponentShots == nil then
         return false
     end
-
     local seenShips = 0
     local seenCells = 0
-
     for shipIndex = 1, BATTLESHIP_SHIP_COUNT do
         local ship = safeIndex(ships, shipIndex)
         if ship == nil then
             return false
         end
-
         local cells = safeIndex(ship, "cells")
         if cells == nil then
             return false
         end
-
         local cellCount = safeSequenceLength(cells, 16)
         if cellCount <= 0 then
             return false
         end
-
         seenShips += 1
-
         for cellIndex = 1, cellCount do
             local cell = safeIndex(cells, cellIndex)
             local row = numeric(safeIndex(cell, "row"), nil)
             local col = numeric(safeIndex(cell, "col"), nil)
-
             if row == nil or col == nil then
                 return false
             end
-
             seenCells += 1
             local key = tostring(row) .. "," .. tostring(col)
-
-
-
-
             if safeIndex(opponentShots, key) == nil then
                 return false
             end
         end
     end
-
     return seenShips == BATTLESHIP_SHIP_COUNT and seenCells > 0
 end
-
 local function readPopcornStateTotal(state)
     if state == nil then
         return nil
     end
-
     local exactKeys = {
         "totalPoints",
         "totalScore",
@@ -26966,14 +26514,12 @@ local function readPopcornStateTotal(state)
         "score",
         "points",
     }
-
     for _, key in ipairs(exactKeys) do
         local value = numeric(safeIndex(state, key), nil)
         if value ~= nil then
             return value
         end
     end
-
     local discovered = nil
     pcall(function()
         for key, value in state do
@@ -26982,7 +26528,6 @@ local function readPopcornStateTotal(state)
                 local mentionsScore = string.find(lower, "score", 1, true) ~= nil
                     or string.find(lower, "point", 1, true) ~= nil
                 local mentionsTotal = string.find(lower, "total", 1, true) ~= nil
-
                 if mentionsScore and mentionsTotal then
                     discovered = value
                     break
@@ -26990,18 +26535,14 @@ local function readPopcornStateTotal(state)
             end
         end
     end)
-
     return discovered
 end
-
 local function parsePointNumber(text)
     if type(text) ~= "string" then
         return nil
     end
-
     local cleaned = string.gsub(text, ",", "")
     local best = nil
-
     for token in string.gmatch(cleaned, "[-+]?%d+%.?%d*") do
         local value = tonumber(token)
         if value ~= nil then
@@ -27010,15 +26551,12 @@ local function parsePointNumber(text)
             end
         end
     end
-
     return best
 end
-
 local function readPointsFromGuiObject(root)
     if not root then
         return nil
     end
-
     local best = nil
     for _, descendant in ipairs(root:GetDescendants()) do
         if descendant:IsA("TextLabel") or descendant:IsA("TextButton") then
@@ -27030,83 +26568,66 @@ local function readPointsFromGuiObject(root)
             end
         end
     end
-
     return best
 end
-
 local function readPopcornBoardPoints(seatIndex)
     local opponentSeat = opponentSeatIndex(seatIndex)
     if seatIndex == nil or opponentSeat == nil then
         return nil, nil
     end
-
     local tableModel = tryIndex({ "session", "public", "tableModel" })
     if typeof(tableModel) ~= "Instance" then
         return nil, nil
     end
-
     local board = tableModel:FindFirstChild("PopcornBurstBoard")
     if not board then
         return nil, nil
     end
-
     local function pointsForSeat(seat)
         local part = board:FindFirstChild("Side" .. tostring(seat) .. "PointsPart")
         if not part then
             return nil
         end
-
         local gui = part:FindFirstChild("SurfaceGui")
         return readPointsFromGuiObject(gui or part)
     end
-
     return pointsForSeat(seatIndex), pointsForSeat(opponentSeat)
 end
-
 local function readPopcornKernelLayout(seatIndex)
     if seatIndex == nil then
         return nil
     end
-
     local tableModel = tryIndex({ "session", "public", "tableModel" })
     if typeof(tableModel) ~= "Instance" then
         return nil
     end
-
     local board = tableModel:FindFirstChild("PopcornBurstBoard")
     if not board then
         return nil
     end
-
     local side = board:FindFirstChild("Side" .. tostring(seatIndex))
     if not side then
         return nil
     end
-
     local indices = {}
     for _, child in ipairs(side:GetChildren()) do
         local index = tonumber(child.Name)
         if index ~= nil then
             local hasKernel = child:FindFirstChild("Popcorn") ~= nil
                 or child:FindFirstChild("Kernel") ~= nil
-
             if hasKernel then
                 indices[#indices + 1] = index
             end
         end
     end
-
     if #indices <= 0 then
         return nil
     end
-
     table.sort(indices)
-
     local positionByIndex = {}
     for position, index in ipairs(indices) do
         positionByIndex[index] = position
     end
-
     return {
         count = #indices,
         indices = indices,
@@ -27115,30 +26636,21 @@ local function readPopcornKernelLayout(seatIndex)
         lastIndex = indices[#indices],
     }
 end
-
 local function readPopcornKernelLayoutEitherSeat(seatIndex, opponentSeat)
     local layout = readPopcornKernelLayout(seatIndex)
     if layout then
         return layout
     end
-
     return readPopcornKernelLayout(opponentSeat)
 end
-
 local function popcornSlotPosition(layout, slotIndex)
     if not layout or slotIndex == nil then
         return nil
     end
-
     local exact = layout.positionByIndex[slotIndex]
     if exact ~= nil then
         return exact
     end
-
-
-
-
-
     local first = layout.firstIndex
     if first ~= nil then
         local estimated = math.floor(slotIndex - first + 1)
@@ -27146,19 +26658,15 @@ local function popcornSlotPosition(layout, slotIndex)
             return estimated
         end
     end
-
     return nil
 end
-
 local function popcornProcessedKernelCount(state, layout)
     if type(state) ~= "table" or not layout then
         return nil
     end
-
     if state.finished == true then
         return layout.count
     end
-
     local resultCell = nil
     if type(state.lastResult) == "table" then
         resultCell = numeric(state.lastResult.cellIndex, nil)
@@ -27167,61 +26675,44 @@ local function popcornProcessedKernelCount(state, layout)
     if resultPosition ~= nil then
         return math.clamp(resultPosition, 0, layout.count)
     end
-
     local activeSlot = numeric(state.activeKernelSlot, nil)
     local activePosition = popcornSlotPosition(layout, activeSlot)
     if activePosition ~= nil then
         return math.clamp(activePosition - 1, 0, layout.count)
     end
-
     return nil
 end
-
 local function popcornResultCell(state)
     if state == nil then
         return nil
     end
-
     local result = safeIndex(state, "lastResult")
     if result == nil and type(state) == "table" then
         result = state.lastResult
     end
-
     return numeric(safeIndex(result, "cellIndex"), nil)
 end
-
 local function readPopcornPrivateState(stateName)
     local private = tracker.popcornPrivatePayload
     if private == nil then
         private = tryIndex({ "session", "private" })
     end
-
-
-
-
-
-
-
     local state = safeIndex(private, stateName)
     if state == nil then
         state = tryIndex({ "session", "private", stateName })
     end
-
     local function field(name)
         local fromState = safeIndex(state, name)
         if fromState ~= nil then
             return fromState
         end
-
         return tryIndex({ "session", "private", stateName, name })
     end
-
     local lastResult = field("lastResult")
     if lastResult ~= nil then
         local cellIndex = safeIndex(lastResult, "cellIndex")
         local rating = safeIndex(lastResult, "rating")
         local points = safeIndex(lastResult, "points")
-
         if cellIndex ~= nil or rating ~= nil or points ~= nil then
             lastResult = {
                 cellIndex = cellIndex,
@@ -27241,7 +26732,6 @@ local function readPopcornPrivateState(stateName)
         local points = tryIndex({
             "session", "private", stateName, "lastResult", "points"
         })
-
         if cellIndex ~= nil or rating ~= nil or points ~= nil then
             lastResult = {
                 cellIndex = cellIndex,
@@ -27250,7 +26740,6 @@ local function readPopcornPrivateState(stateName)
             }
         end
     end
-
     local kernelIndex = numeric(
         field("kernelIndex")
             or field("KernelIndex")
@@ -27265,7 +26754,6 @@ local function readPopcornPrivateState(stateName)
             or field("KernelCount"),
         nil
     )
-
     return {
         finished = field("finished") == true,
         activeKernelSlot = numeric(field("activeKernelSlot"), nil),
@@ -27276,51 +26764,41 @@ local function readPopcornPrivateState(stateName)
         raw = state,
     }
 end
-
 local function resultKey(result)
     if result == nil then
         return nil
     end
-
     local cellIndex = safeIndex(result, "cellIndex")
     if cellIndex == nil then
         return nil
     end
-
     return table.concat({
         tostring(cellIndex),
         tostring(safeIndex(result, "rating")),
         tostring(safeIndex(result, "points")),
     }, ":")
 end
-
 local function readPopcornKernelCounts(seatIndex)
     if seatIndex == nil then
         return nil, nil
     end
-
     local tableModel = tryIndex({ "session", "public", "tableModel" })
     if typeof(tableModel) ~= "Instance" then
         return nil, nil
     end
-
     local board = tableModel:FindFirstChild("PopcornBurstBoard")
     if not board then
         return nil, nil
     end
-
     local side = board:FindFirstChild("Side" .. tostring(seatIndex))
     if not side then
         return nil, nil
     end
-
     local totalSlots = 0
     local remainingKernels = 0
-
     for _, child in ipairs(side:GetChildren()) do
         if tonumber(child.Name) ~= nil then
             totalSlots += 1
-
             if child:FindFirstChild("Popcorn") ~= nil
                 or child:FindFirstChild("Kernel") ~= nil
             then
@@ -27328,40 +26806,32 @@ local function readPopcornKernelCounts(seatIndex)
             end
         end
     end
-
     if totalSlots <= 0 then
         return nil, nil
     end
-
     return totalSlots, remainingKernels
 end
-
 local function popcornHasLiveKernel(state)
     if type(state) ~= "table" or state.finished == true then
         return false
     end
-
     local activeSlot = numeric(state.activeKernelSlot, nil)
     local duration = numeric(state.ringDuration, nil)
     if activeSlot == nil or activeSlot <= 0 or duration == nil or duration <= 0 then
         return false
     end
-
     local resultCell = popcornResultCell(state)
     return resultCell == nil or resultCell ~= activeSlot
 end
-
 local function popcornStateScore(state)
     if type(state) ~= "table" then
         return nil
     end
-
     local raw = state.raw
     local score = readPopcornStateTotal(raw)
     if score ~= nil then
         return score
     end
-
     if raw ~= nil then
         for _, key in ipairs({ "Score", "score", "TotalScore", "totalScore", "Points", "points" }) do
             local value = numeric(safeIndex(raw, key), nil)
@@ -27370,24 +26840,19 @@ local function popcornStateScore(state)
             end
         end
     end
-
     return nil
 end
-
 local function popcornExactProgressFinished(state)
     if type(state) ~= "table" then
         return false
     end
-
     local current = numeric(state.kernelIndex, nil)
     local total = numeric(state.totalKernels, nil)
-
     return current ~= nil
         and total ~= nil
         and total > 0
         and current >= total
 end
-
 local function initializePopcornRoundTracking(
     s,
     myState,
@@ -27398,50 +26863,33 @@ local function initializePopcornRoundTracking(
     opponentRemaining
 )
     tracker.popcornRoundInitialized = true
-
-
-
-
     tracker.popcornRoundStartLocalWins = s.localWins
     tracker.popcornRoundStartOpponentWins = s.opponentWins
     tracker.popcornAwaitingFreshRound = false
     tracker.popcornPendingRoundLocalWins = nil
     tracker.popcornPendingRoundOpponentWins = nil
-
     tracker.popcornMyCurrentResultKey = resultKey(myState.lastResult)
     tracker.popcornOpponentCurrentResultKey = resultKey(opponentState.lastResult)
     tracker.popcornMyResultsSinceBaseline = 0
     tracker.popcornOpponentResultsSinceBaseline = 0
-
-
-
-
     local function expectedResults(state, totalSlots, remaining, currentResultKey)
         if remaining ~= nil and remaining > 0 then
             return remaining
         end
-
         local total = numeric(state.totalKernels, nil)
             or numeric(totalSlots, nil)
         local current = numeric(state.kernelIndex, nil)
-
         if total ~= nil and total > 0 and current ~= nil then
             return math.max(0, math.floor(total - current))
         end
-
-
-
-
         if currentResultKey == nil then
             if total ~= nil and total > 0 then
                 return math.floor(total)
             end
             return 16
         end
-
         return nil
     end
-
     tracker.popcornMyExpectedResults = expectedResults(
         myState,
         myTotalSlots,
@@ -27454,47 +26902,34 @@ local function initializePopcornRoundTracking(
         opponentRemaining,
         tracker.popcornOpponentCurrentResultKey
     )
-
-
-
-
     tracker.popcornMyFinal = myState.finished == true
         or popcornExactProgressFinished(myState)
     tracker.popcornOpponentFinal = opponentState.finished == true
         or popcornExactProgressFinished(opponentState)
-
     tracker.popcornMyLastVisibleRemaining = myRemaining
     tracker.popcornOpponentLastVisibleRemaining = opponentRemaining
-
     table.clear(tracker.popcornMyResultKeys)
     table.clear(tracker.popcornOpponentResultKeys)
     tracker.popcornMyAccumulatedPoints = 0
     tracker.popcornOpponentAccumulatedPoints = 0
-
-
-
     tracker.popcornSeenFromRoundStart =
         tracker.popcornMyCurrentResultKey == nil
         and tracker.popcornOpponentCurrentResultKey == nil
 end
-
 local function updatePopcornResultCounter(state, isOpponent)
     local key = resultKey(state.lastResult)
     if key == nil then
         return false
     end
-
     local previousKey
     if isOpponent then
         previousKey = tracker.popcornOpponentCurrentResultKey
     else
         previousKey = tracker.popcornMyCurrentResultKey
     end
-
     if key == previousKey then
         return false
     end
-
     if isOpponent then
         tracker.popcornOpponentCurrentResultKey = key
         tracker.popcornOpponentResultsSinceBaseline += 1
@@ -27504,10 +26939,8 @@ local function updatePopcornResultCounter(state, isOpponent)
         tracker.popcornMyResultsSinceBaseline += 1
         tracker.popcornMyAccumulatedPoints += numeric(state.lastResult.points, 0)
     end
-
     return true
 end
-
 local function ensurePopcornRemainingBaselines(
     myState,
     opponentState,
@@ -27523,7 +26956,6 @@ local function ensurePopcornRemainingBaselines(
         tracker.popcornMyCurrentResultKey = resultKey(myState.lastResult)
         tracker.popcornMyResultsSinceBaseline = 0
     end
-
     if tracker.popcornOpponentExpectedResults == nil
         and not tracker.popcornOpponentFinal
         and opponentRemaining ~= nil
@@ -27534,7 +26966,6 @@ local function ensurePopcornRemainingBaselines(
         tracker.popcornOpponentResultsSinceBaseline = 0
     end
 end
-
 local function updatePopcornTerminalFlags(
     myState,
     opponentState,
@@ -27549,49 +26980,38 @@ local function updatePopcornTerminalFlags(
         and opponentRemaining == 0
         and tracker.popcornOpponentLastVisibleRemaining ~= nil
         and tracker.popcornOpponentLastVisibleRemaining > 0
-
     if myState.finished == true
         or popcornExactProgressFinished(myState)
         or myReachedZeroAfterVisible
     then
         tracker.popcornMyFinal = true
     end
-
     if opponentState.finished == true
         or popcornExactProgressFinished(opponentState)
         or opponentReachedZeroAfterVisible
     then
         tracker.popcornOpponentFinal = true
     end
-
-
-
-
-
     if tracker.popcornMyExpectedResults ~= nil
         and tracker.popcornMyExpectedResults > 0
         and tracker.popcornMyResultsSinceBaseline >= tracker.popcornMyExpectedResults
     then
         tracker.popcornMyFinal = true
     end
-
     if tracker.popcornOpponentExpectedResults ~= nil
         and tracker.popcornOpponentExpectedResults > 0
         and tracker.popcornOpponentResultsSinceBaseline >= tracker.popcornOpponentExpectedResults
     then
         tracker.popcornOpponentFinal = true
     end
-
     tracker.popcornMyLastVisibleRemaining = myRemaining
     tracker.popcornOpponentLastVisibleRemaining = opponentRemaining
 end
-
 local function readFootballDraftState(seatIndex)
     local opponentSeat = opponentSeatIndex(seatIndex)
     if seatIndex == nil or opponentSeat == nil then
         return nil
     end
-
     local myCompleted = readIndexed(
         { "session", "public", "completed" },
         seatIndex
@@ -27608,7 +27028,6 @@ local function readFootballDraftState(seatIndex)
         readIndexed({ "session", "public", "totalOVR" }, opponentSeat),
         nil
     )
-
     return {
         myCompleted = myCompleted,
         opponentCompleted = opponentCompleted,
@@ -27616,26 +27035,21 @@ local function readFootballDraftState(seatIndex)
         opponentOVR = opponentOVR,
     }
 end
-
 local function footballMaxPossibleLocalOVR()
     if type(FootballDraftConfig) ~= "table"
         or type(FootballDraftConfig.Formation) ~= "table"
     then
         return nil
     end
-
     local lineup = tryIndex({ "session", "private", "lineup" })
     if lineup == nil then
         return nil
     end
-
     local total = 0
-
     for _, slot in ipairs(FootballDraftConfig.Formation) do
         local slotId = slot.SlotId
         local line = slot.Line
         local draftedName = safeIndex(lineup, slotId)
-
         if draftedName ~= nil then
             local okOVR, ovr = pcall(FootballDraftConfig.GetOVR, draftedName)
             if not okOVR or type(ovr) ~= "number" then
@@ -27650,40 +27064,31 @@ local function footballMaxPossibleLocalOVR()
             total += maxLine
         end
     end
-
     return total
 end
-
 local function currentCandyBoardObject()
     local board = tryIndex({ "session", "private", "myBoard" })
     if board ~= nil then
         return board
     end
-
     local private = tryIndex({ "session", "private" })
     return safeIndex(private, "myBoard")
 end
-
 local function countCandyBombsHit()
     local board = currentCandyBoardObject()
     local cells = tryIndex({ "session", "private", "myBoard", "cells" })
-
     if cells == nil then
         cells = safeIndex(board, "cells")
     end
-
     if cells == nil then
         return nil
     end
-
     local bombCount = 0
     local sawCell = false
-
     for index = 1, 32 do
         local cell = safeIndex(cells, index)
         if cell ~= nil then
             sawCell = true
-
             if safeIndex(cell, "eaten") == true
                 and safeIndex(cell, "wasBomb") == true
             then
@@ -27693,102 +27098,64 @@ local function countCandyBombsHit()
             break
         end
     end
-
     if not sawCell then
         return nil
     end
-
     return bombCount
 end
-
 local function clinchPossibleFromRoundLoss(opponentWins, requiredWins)
     if requiredWins == nil then
         return false
     end
-
-
-
-
-
     local beforeRound = tracker.roundStartOpponentWins
     if beforeRound == nil then
-
-
-
         return false
     end
-
     beforeRound = math.max(0, math.floor(numeric(beforeRound, 0)))
-
-
-
     return beforeRound == requiredWins - 1
 end
-
 local function exactRoundLossClinches(opponentWins, requiredWins)
     if clinchPossibleFromRoundLoss(opponentWins, requiredWins) then
         return true
     end
-
-
-
-
-
     return requiredWins ~= nil
         and numeric(opponentWins, 0) >= requiredWins
 end
-
 local function armCandyRoundFromCurrentSeries()
-
-
     local bestOf = currentBestOfRounds()
     if bestOf == nil then
         tracker.candyRoundStartOpponentWins = nil
         tracker.candyClinchRoundArmed = false
         return
     end
-
     local requiredWins = winsRequired(bestOf)
     local seatIndex = currentSeatIndex()
     local _, opponentWins = readSeriesScores("CandyBomb", seatIndex)
-
     tracker.candyRoundStartOpponentWins = opponentWins
     tracker.roundStartOpponentWins = opponentWins
     tracker.candyClinchRoundArmed = opponentWins == requiredWins - 1
 end
-
 local function resetCandyRoundBombCounter(observedBombs)
     local baseline = math.clamp(math.floor(numeric(observedBombs, 0)), 0, 3)
     tracker.candyBombsHit = baseline
     tracker.candyBombEvents = baseline
     tracker.candyLastObservedBoardBombs = observedBombs
 end
-
 local function beginFreshCandyRound()
-
-
-
     if type(controller.pendingLossReason) == "string"
         and string.sub(controller.pendingLossReason, 1, 10) == "CandyBomb:"
     then
         controller.pendingLossReason = nil
     end
-
     tracker.candyBombsHit = 0
     tracker.candyBombEvents = 0
     tracker.candyAwaitingBoardToken = currentCandyBoardObject()
     tracker.candyAwaitingFreshBoard = true
     tracker.candyBoardFreshConfirmed = false
-
-
-
-
-
     tracker.candyRoundStartOpponentWins = nil
     tracker.candyClinchRoundArmed = false
     armCandyRoundFromCurrentSeries()
 end
-
 local function syncCandyBombBoardCount()
     local observedBombs = countCandyBombsHit()
     if observedBombs == nil then
@@ -27798,27 +27165,18 @@ local function syncCandyBombBoardCount()
         )
         return nil
     end
-
     observedBombs = math.clamp(math.floor(numeric(observedBombs, 0)), 0, 3)
-
     if tracker.candyAwaitingFreshBoard then
         local board = currentCandyBoardObject()
         local tokenChanged = board ~= nil
             and tracker.candyAwaitingBoardToken ~= nil
             and board ~= tracker.candyAwaitingBoardToken
-
         local countReset = tracker.candyLastObservedBoardBombs ~= nil
             and observedBombs < tracker.candyLastObservedBoardBombs
-
-
-
-
-
         if not tokenChanged and not countReset then
             tracker.candyLastObservedBoardBombs = observedBombs
             return observedBombs
         end
-
         tracker.candyAwaitingFreshBoard = false
         tracker.candyAwaitingBoardToken = nil
         tracker.candyBoardFreshConfirmed = true
@@ -27826,17 +27184,12 @@ local function syncCandyBombBoardCount()
         armCandyRoundFromCurrentSeries()
         return observedBombs
     end
-
-
-
-
     if tracker.candyLastObservedBoardBombs == 3 and observedBombs < 3 then
         if type(controller.pendingLossReason) == "string"
             and string.sub(controller.pendingLossReason, 1, 10) == "CandyBomb:"
         then
             controller.pendingLossReason = nil
         end
-
         resetCandyRoundBombCounter(observedBombs)
         tracker.candyAwaitingFreshBoard = false
         tracker.candyAwaitingBoardToken = nil
@@ -27844,32 +27197,22 @@ local function syncCandyBombBoardCount()
         armCandyRoundFromCurrentSeries()
         return observedBombs
     end
-
     tracker.candyLastObservedBoardBombs = observedBombs
     tracker.candyBombsHit = math.min(
         3,
         math.max(tracker.candyBombsHit, observedBombs, tracker.candyBombEvents)
     )
-
     return observedBombs
 end
-
 local function processCandyBomb(s)
     local wasInCandyRound = tracker.phase == "BombPlacement"
         or tracker.phase == "Playing"
     local isInCandyRound = s.phase == "BombPlacement"
         or s.phase == "Playing"
-
     if isInCandyRound and not wasInCandyRound then
         beginFreshCandyRound()
     end
-
     local observedBombs = syncCandyBombBoardCount()
-
-
-
-
-
     if tracker.candyClinchRoundArmed == true
         and tracker.candyAwaitingFreshBoard ~= true
         and tracker.candyBoardFreshConfirmed == true
@@ -27882,10 +27225,6 @@ local function processCandyBomb(s)
         latchClinchingLoss("CandyBomb:ThirdBombState")
         return
     end
-
-
-
-
     if s.requiredWins ~= nil
         and s.opponentWins >= s.requiredWins
     then
@@ -27895,19 +27234,15 @@ local function processCandyBomb(s)
         end
     end
 end
-
 local function processNumberGuess(s)
     local guessLog = tryIndex({ "session", "public", "guessLog" })
     if guessLog == nil then
         tracker.guessCount = nil
         return
     end
-
     local count = safeSequenceLength(guessLog, 256)
     if tracker.guessCount == nil then
         tracker.guessCount = count
-
-
         local lastEntry = safeIndex(guessLog, count)
         if s.phase == "Guessing"
             and safeIndex(lastEntry, "response") == "Correct"
@@ -27918,12 +27253,10 @@ local function processNumberGuess(s)
         end
         return
     end
-
     if count < tracker.guessCount then
         tracker.guessCount = count
         return
     end
-
     if count > tracker.guessCount then
         for index = tracker.guessCount + 1, count do
             local entry = safeIndex(guessLog, index)
@@ -27936,109 +27269,69 @@ local function processNumberGuess(s)
             end
         end
     end
-
     tracker.guessCount = count
 end
-
 local function processConnectFour(s)
     if s.opponentSeat == nil then
         return
     end
-
     local grid = tryIndex({ "session", "public", "grid" })
     local opponentHasWin = hasConnectFourWin(grid, s.opponentSeat)
-
-
-
-
     if tracker.connectFourAwaitingFreshRound then
         if opponentHasWin then
             return
         end
-
         tracker.connectFourAwaitingFreshRound = false
         tracker.connectFourRoundArmed = true
         return
     end
-
     if not tracker.connectFourRoundArmed then
         tracker.connectFourRoundArmed = true
     end
-
     if opponentHasWin
         and exactRoundLossClinches(s.opponentWins, s.requiredWins)
     then
         latchClinchingLoss("ConnectFour:FourInRow")
     end
 end
-
 local function processBattleship(s)
     if s.phase == "Placement" or s.phase == "Starting" then
         tracker.battleshipAwaitingFreshRound = true
         tracker.battleshipRoundArmed = false
         return
     end
-
     local allCellsHit = ownBattleshipsAllHitByOpponentShots(s.seatIndex)
     local allSunk = ownBattleshipsAllSunk(s.seatIndex)
-
-
-
-
-
     if tracker.battleshipAwaitingFreshRound then
         if allCellsHit or allSunk then
             return
         end
-
         tracker.battleshipAwaitingFreshRound = false
         tracker.battleshipRoundArmed = true
         return
     end
-
     if not tracker.battleshipRoundArmed then
         tracker.battleshipRoundArmed = true
     end
-
     if not exactRoundLossClinches(s.opponentWins, s.requiredWins) then
         return
     end
-
-
-
-
-
     if allCellsHit then
         latchClinchingLoss("Battleship:AllOwnShipCellsHit")
         return
     end
-
-
-
     if allSunk then
         latchClinchingLoss("Battleship:AllOwnShipsSunk")
     end
 end
-
-
-
-
-
-
-
-
-
-
 local function cacheKnockoutReplicatedPuckTeams(seatIndex, opponentSeat)
     if seatIndex == nil or opponentSeat == nil then
         return
     end
-
     local pucks = tryIndex({ "session", "public", "pucks" })
     if pucks == nil then
         return
     end
-
     local function cachePuck(puck)
         if puck == nil then
             return
@@ -28049,7 +27342,6 @@ local function cacheKnockoutReplicatedPuckTeams(seatIndex, opponentSeat)
             tracker.knockoutRoundPuckTeams[puckId] = team
         end
     end
-
     local iterated = false
     local okIter = pcall(function()
         for _, puck in pucks do
@@ -28066,19 +27358,15 @@ local function cacheKnockoutReplicatedPuckTeams(seatIndex, opponentSeat)
         end
     end
 end
-
 local function cacheKnockoutRoundPucks(s)
     if s == nil or s.seatIndex == nil or s.opponentSeat == nil then
         return
     end
-
     cacheKnockoutReplicatedPuckTeams(s.seatIndex, s.opponentSeat)
-
     local pucks = tryIndex({ "session", "public", "pucks" })
     if pucks == nil then
         return
     end
-
     local function cachePuck(puck)
         if puck == nil then
             return
@@ -28089,7 +27377,6 @@ local function cacheKnockoutRoundPucks(s)
             tracker.knockoutRoundPuckTeams[puckId] = team
         end
     end
-
     local iterated = false
     local okIter = pcall(function()
         for _, puck in pucks do
@@ -28106,15 +27393,12 @@ local function cacheKnockoutRoundPucks(s)
         end
     end
 end
-
 local function trajectorySunkState(trajectory)
     if trajectory == nil then
         return nil, false
     end
-
     local sawSample = false
     local sunk = false
-
     local okIter = pcall(function()
         for _, sample in trajectory do
             if sample ~= nil then
@@ -28125,7 +27409,6 @@ local function trajectorySunkState(trajectory)
             end
         end
     end)
-
     if not okIter or not sawSample then
         local misses = 0
         for index = 1, 4096 do
@@ -28144,20 +27427,16 @@ local function trajectorySunkState(trajectory)
             end
         end
     end
-
     return sunk, sawSample
 end
-
 local function knockoutFinalResolutionOutcome(s)
     if s.seatIndex == nil or s.opponentSeat == nil then
         return nil
     end
-
     local resolution = tryIndex({ "session", "public", "resolution" })
     if resolution == nil then
         return nil
     end
-
     local trajectories = safeIndex(resolution, "trajectories")
     if trajectories == nil then
         trajectories = tryIndex({
@@ -28170,13 +27449,11 @@ local function knockoutFinalResolutionOutcome(s)
     if trajectories == nil then
         return nil
     end
-
     local liveById = {}
     local roundTeams = {}
     for puckId, team in pairs(tracker.knockoutRoundPuckTeams) do
         roundTeams[puckId] = team
     end
-
     local pucks = tryIndex({ "session", "public", "pucks" })
     local function captureLivePuck(puck)
         if puck == nil then return end
@@ -28186,15 +27463,12 @@ local function knockoutFinalResolutionOutcome(s)
             return
         end
         liveById[puckId] = puck
-
-
         if roundTeams[puckId] == nil
             and (safeIndex(puck, "alive") == true or safeIndex(trajectories, puckId) ~= nil)
         then
             roundTeams[puckId] = team
         end
     end
-
     if pucks ~= nil then
         local iterated = false
         local okIter = pcall(function()
@@ -28212,10 +27486,6 @@ local function knockoutFinalResolutionOutcome(s)
             end
         end
     end
-
-
-
-
     pcall(function()
         for _, puckInstance in ipairs(CollectionService:GetTagged("KnockoutPuck")) do
             local puckId = puckInstance:GetAttribute("PuckId")
@@ -28228,14 +27498,12 @@ local function knockoutFinalResolutionOutcome(s)
             end
         end
     end)
-
     local mySurvivors = 0
     local opponentSurvivors = 0
     local sawMyPuck = false
     local sawOpponentPuck = false
     local incompleteResolution = false
     local roundPuckCount = 0
-
     for puckId, team in pairs(roundTeams) do
         roundPuckCount += 1
         if team == s.seatIndex then
@@ -28243,11 +27511,9 @@ local function knockoutFinalResolutionOutcome(s)
         elseif team == s.opponentSeat then
             sawOpponentPuck = true
         end
-
         local trajectory = safeIndex(trajectories, puckId)
         local sunk, sawSample = trajectorySunkState(trajectory)
         local survives = nil
-
         if sawSample then
             survives = not sunk
         else
@@ -28261,7 +27527,6 @@ local function knockoutFinalResolutionOutcome(s)
                 end
             end
         end
-
         if survives == nil then
             incompleteResolution = true
         elseif survives then
@@ -28272,7 +27537,6 @@ local function knockoutFinalResolutionOutcome(s)
             end
         end
     end
-
     if roundPuckCount == 0
         or incompleteResolution
         or not sawMyPuck
@@ -28280,7 +27544,6 @@ local function knockoutFinalResolutionOutcome(s)
     then
         return nil
     end
-
     return {
         mySurvivors = mySurvivors,
         opponentSurvivors = opponentSurvivors,
@@ -28290,23 +27553,17 @@ local function knockoutFinalResolutionOutcome(s)
             mySurvivors == 0 and opponentSurvivors == 0,
     }
 end
-
-
-
 local function knockoutResolutionPayloadProvesLoss(resolution, seatIndex, opponentSeat)
     if resolution == nil or seatIndex == nil or opponentSeat == nil then
         return false
     end
-
     cacheKnockoutReplicatedPuckTeams(seatIndex, opponentSeat)
     local trajectories = safeIndex(resolution, "trajectories")
     if trajectories == nil then return false end
-
     local mySurvivors = 0
     local opponentSurvivors = 0
     local sawMyPuck = false
     local sawOpponentPuck = false
-
     for puckId, team in pairs(tracker.knockoutRoundPuckTeams) do
         if team == seatIndex or team == opponentSeat then
             if team == seatIndex then sawMyPuck = true else sawOpponentPuck = true end
@@ -28323,99 +27580,61 @@ local function knockoutResolutionPayloadProvesLoss(resolution, seatIndex, oppone
             end
         end
     end
-
     return sawMyPuck
         and sawOpponentPuck
         and mySurvivors == 0
         and opponentSurvivors > 0
 end
-
 local function processKnockout(s)
-
-
-
-
-
     if clinchPossibleFromRoundLoss(s.opponentWins, s.requiredWins) then
-
-
-
         local outcome = knockoutFinalResolutionOutcome(s)
         if outcome and outcome.opponentGuaranteedRoundWin then
             latchClinchingLoss("Knockout:ResolutionGuaranteedLoss")
             return
         end
     end
-
     local lastRoundWinner = tryIndex({ "session", "public", "lastRoundWinner" })
     local opponentWonRound = numeric(lastRoundWinner, nil) == s.opponentSeat
-
-
-
-
-
     if opponentWonRound then
         if not tracker.knockoutOpponentLossPending then
             tracker.knockoutOpponentLossPending = true
             tracker.knockoutPendingRoundStartOpponentWins =
                 tracker.roundStartOpponentWins
         end
-
         local beforeRound = tracker.knockoutPendingRoundStartOpponentWins
         local clinchedFromSnapshot = s.requiredWins ~= nil
             and beforeRound ~= nil
             and math.max(0, math.floor(numeric(beforeRound, 0)))
                 == s.requiredWins - 1
-
-
-
-
-
         local clinchedFromLiveScore = s.requiredWins ~= nil
             and s.opponentWins >= s.requiredWins
-
         if clinchedFromSnapshot or clinchedFromLiveScore then
             latchClinchingLoss("Knockout:LastRoundWinner")
             tracker.lastRoundWinner = lastRoundWinner
             return
         end
     end
-
-
-
-
     if (s.phase == "Starting" or s.phase == "Aiming")
         and not opponentWonRound
     then
         tracker.knockoutOpponentLossPending = false
         tracker.knockoutPendingRoundStartOpponentWins = nil
     end
-
     tracker.lastRoundWinner = lastRoundWinner
 end
-
 local function processFootballDraft(s)
     local draft = readFootballDraftState(s.seatIndex)
     if not draft then
         return
     end
-
     if draft.opponentCompleted and not draft.myCompleted then
         tracker.footballOpponentCompletedFirstObserved = true
     elseif draft.myCompleted and not draft.opponentCompleted then
         tracker.footballLocalCompletedFirstObserved = true
     end
-
     if not exactRoundLossClinches(s.opponentWins, s.requiredWins) then
         return
     end
-
-
-
-
-
-
-
     if draft.opponentCompleted
         and not draft.myCompleted
         and draft.opponentOVR ~= nil
@@ -28426,7 +27645,6 @@ local function processFootballDraft(s)
             return
         end
     end
-
     if draft.myCompleted
         and draft.opponentCompleted
         and draft.myOVR ~= nil
@@ -28436,7 +27654,6 @@ local function processFootballDraft(s)
             latchClinchingLoss("FootballDraft:FinalOVR")
             return
         end
-
         if draft.opponentOVR == draft.myOVR
             and tracker.footballOpponentCompletedFirstObserved
             and not tracker.footballLocalCompletedFirstObserved
@@ -28446,30 +27663,20 @@ local function processFootballDraft(s)
         end
     end
 end
-
 local function processPopcorn(s)
-
-
-
-
     local stableBestOf = currentBestOfRounds()
     if stableBestOf ~= nil then
         tracker.popcornBestOfRounds = stableBestOf
     end
-
     local popcornRequiredWins = nil
     if tracker.popcornBestOfRounds ~= nil then
         popcornRequiredWins = winsRequired(tracker.popcornBestOfRounds)
     end
-
     local myState = readPopcornPrivateState("myState")
     local opponentState = readPopcornPrivateState("opponentState")
-
     local myTotalSlots, myRemaining = readPopcornKernelCounts(s.seatIndex)
     local opponentTotalSlots, opponentRemaining = readPopcornKernelCounts(s.opponentSeat)
-
     local myLiveKernel = popcornHasLiveKernel(myState)
-
     if not tracker.popcornRoundInitialized then
         initializePopcornRoundTracking(
             s,
@@ -28481,22 +27688,11 @@ local function processPopcorn(s)
             opponentRemaining
         )
     else
-
-
-
-
-
         local priorLocalWins = numeric(tracker.popcornRoundStartLocalWins, 0)
         local priorOpponentWins = numeric(tracker.popcornRoundStartOpponentWins, 0)
         local opponentScoreAdvanced = s.opponentWins > priorOpponentWins
         local localScoreAdvanced = s.localWins > priorLocalWins
         local scoreAdvanced = opponentScoreAdvanced or localScoreAdvanced
-
-
-
-
-
-
         if opponentScoreAdvanced
             and popcornRequiredWins ~= nil
             and priorOpponentWins == popcornRequiredWins - 1
@@ -28505,28 +27701,21 @@ local function processPopcorn(s)
             latchClinchingLoss("PopcornBurst:ClinchingSeriesScoreAdvanced")
             return
         end
-
         if scoreAdvanced and not tracker.popcornAwaitingFreshRound then
             tracker.popcornAwaitingFreshRound = true
             tracker.popcornPendingRoundLocalWins = s.localWins
             tracker.popcornPendingRoundOpponentWins = s.opponentWins
         end
-
         if tracker.popcornAwaitingFreshRound then
-
-
-
             local freshBoard = myRemaining ~= nil and myRemaining > 0
             local freshPrivate = myState.finished ~= true
             local freshKernelState = myLiveKernel
                 or resultKey(myState.lastResult) == nil
-
             if freshBoard and freshPrivate and freshKernelState then
                 local freshSnapshot = {
                     localWins = numeric(tracker.popcornPendingRoundLocalWins, s.localWins),
                     opponentWins = numeric(tracker.popcornPendingRoundOpponentWins, s.opponentWins),
                 }
-
                 initializePopcornRoundTracking(
                     freshSnapshot,
                     myState,
@@ -28537,20 +27726,16 @@ local function processPopcorn(s)
                     opponentRemaining
                 )
             else
-
-
                 return
             end
         end
     end
-
     ensurePopcornRemainingBaselines(
         myState,
         opponentState,
         myRemaining,
         opponentRemaining
     )
-
     updatePopcornResultCounter(myState, false)
     updatePopcornResultCounter(opponentState, true)
     updatePopcornTerminalFlags(
@@ -28559,35 +27744,23 @@ local function processPopcorn(s)
         myRemaining,
         opponentRemaining
     )
-
     local myPoints, opponentPoints = readPopcornBoardPoints(s.seatIndex)
-
     if myPoints == nil then
         myPoints = popcornStateScore(myState)
     end
     if opponentPoints == nil then
         opponentPoints = popcornStateScore(opponentState)
     end
-
-
-
-
     if tracker.popcornSeenFromRoundStart then
         myPoints = tracker.popcornMyAccumulatedPoints
         opponentPoints = tracker.popcornOpponentAccumulatedPoints
     end
-
     local clinchingRound = popcornRequiredWins ~= nil
         and (
             (tracker.popcornRoundStartOpponentWins ~= nil
                 and tracker.popcornRoundStartOpponentWins == popcornRequiredWins - 1)
             or s.opponentWins >= popcornRequiredWins
         )
-
-
-
-
-
     if clinchingRound then
         local layout = readPopcornKernelLayoutEitherSeat(
             s.seatIndex,
@@ -28596,7 +27769,6 @@ local function processPopcorn(s)
         local processed = popcornProcessedKernelCount(myState, layout)
         local total = layout and layout.count
             or numeric(myState.totalKernels, nil)
-
         local remainingUpperBound = nil
         if myRemaining ~= nil then
             remainingUpperBound = math.max(0, math.floor(myRemaining))
@@ -28610,7 +27782,6 @@ local function processPopcorn(s)
                 and byProgress
                 or math.max(remainingUpperBound, byProgress)
         end
-
         local localScoreUpperBase = nil
         local function addLocalScoreCandidate(value)
             value = numeric(value, nil)
@@ -28625,10 +27796,6 @@ local function processPopcorn(s)
         if tracker.popcornSeenFromRoundStart then
             addLocalScoreCandidate(tracker.popcornMyAccumulatedPoints)
         end
-
-
-
-
         local opponentScoreLowerBound = nil
         local function addOpponentScoreCandidate(value)
             value = numeric(value, nil)
@@ -28643,7 +27810,6 @@ local function processPopcorn(s)
         if tracker.popcornSeenFromRoundStart then
             addOpponentScoreCandidate(tracker.popcornOpponentAccumulatedPoints)
         end
-
         if remainingUpperBound ~= nil
             and localScoreUpperBase ~= nil
             and opponentScoreLowerBound ~= nil
@@ -28656,11 +27822,6 @@ local function processPopcorn(s)
             end
         end
     end
-
-
-
-
-
     local liveWinner = tryIndex({ "session", "public", "winner" })
     local liveWinnerIdentity = publicWinnerIdentity(liveWinner)
     local winnerChanged = liveWinnerIdentity ~= tracker.publicWinner
@@ -28672,18 +27833,10 @@ local function processPopcorn(s)
     then
         liveWinnerIsOpponent = true
     end
-
     if clinchingRound and winnerChanged and liveWinnerIsOpponent then
         latchClinchingLoss("PopcornBurst:PublicWinnerTransition")
         return
     end
-
-
-
-
-
-
-
     if clinchingRound and tracker.popcornMyFinal then
         if myPoints ~= nil
             and opponentPoints ~= nil
@@ -28692,11 +27845,6 @@ local function processPopcorn(s)
             latchClinchingLoss("PopcornBurst:FinalKernelScoreLost")
             return
         end
-
-
-
-
-
         if tracker.popcornSeenFromRoundStart
             and tracker.popcornOpponentAccumulatedPoints
                 > tracker.popcornMyAccumulatedPoints
@@ -28704,16 +27852,11 @@ local function processPopcorn(s)
             latchClinchingLoss("PopcornBurst:OpponentPassedFinalScore")
             return
         end
-
-
-
-
         local winner = tryIndex({ "session", "public", "winner" })
         if isOpponentPlayer(winner, s.opponent) then
             latchClinchingLoss("PopcornBurst:FinalPublicWinner")
             return
         end
-
         if popcornRequiredWins ~= nil
             and s.opponentWins >= popcornRequiredWins
         then
@@ -28721,7 +27864,6 @@ local function processPopcorn(s)
             return
         end
     end
-
     tracker.popcornWasFinished = myState.finished == true
     tracker.popcornLastActiveKernelSlot = myState.activeKernelSlot
     tracker.popcornLastResultCell = popcornResultCell(myState)
@@ -28729,12 +27871,10 @@ local function processPopcorn(s)
     tracker.popcornOpponentLastActiveKernelSlot = opponentState.activeKernelSlot
     tracker.popcornOpponentLastResultCell = popcornResultCell(opponentState)
 end
-
 local function processPublicWinnerTransition(s)
     local winner = tryIndex({ "session", "public", "winner" })
     local identity = publicWinnerIdentity(winner)
     local changed = identity ~= tracker.publicWinner
-
     if s.gameId ~= "PopcornBurst"
         and s.gameId ~= "CandyBomb"
         and changed
@@ -28743,55 +27883,38 @@ local function processPublicWinnerTransition(s)
     then
         latchClinchingLoss(s.gameId .. ":PublicWinner")
     end
-
     tracker.publicWinner = identity
 end
-
 local function processKnockoutMatchWinnerFallback(s)
     if s.gameId ~= "Knockout" then
         return
     end
-
-
-
-
-
     local matchWinner = tryIndex({ "session", "public", "matchWinner" })
     if isOpponentPlayer(matchWinner, s.opponent) then
         latchClinchingLoss("Knockout:MatchWinner")
     end
 end
-
 local function processMatchResultFallback(s)
     if not s or not SUPPORTED_GAMES[s.gameId] then
         return
     end
-
-
-
-
-
     local winnerIndex = numeric(
         tryIndex({ "matchResult", "winnerIndex" }),
         nil
     )
-
     if winnerIndex == nil then
         local matchResult = tryIndex({ "matchResult" })
         winnerIndex = numeric(safeIndex(matchResult, "winnerIndex"), nil)
     end
-
     if winnerIndex ~= nil and winnerIndex ~= 0 and winnerIndex ~= 1 then
         latchClinchingLoss(tostring(s.gameId) .. ":MatchResult")
     end
 end
-
 local function evaluateCachedTerminalState()
     local cachedGameId = tracker.gameId
     if not cachedGameId or not SUPPORTED_GAMES[cachedGameId] then
         return
     end
-
     local seatIndex = currentSeatIndex() or tracker.cachedSeatIndex
     local opponentSeat = opponentSeatIndex(seatIndex) or tracker.cachedOpponentSeat
     local opponent = currentOpponent() or tracker.cachedOpponent
@@ -28801,7 +27924,6 @@ local function evaluateCachedTerminalState()
     if requiredWins == nil and bestOf ~= nil then
         requiredWins = winsRequired(bestOf)
     end
-
     local localWins, opponentWins = readSeriesScores(cachedGameId, seatIndex)
     local s = {
         gameId = cachedGameId,
@@ -28814,11 +27936,6 @@ local function evaluateCachedTerminalState()
         opponentWins = opponentWins,
         opponent = opponent,
     }
-
-
-
-
-
     if cachedGameId == "CandyBomb" then
         processCandyBomb(s)
     elseif cachedGameId == "NumberGuess" then
@@ -28835,58 +27952,36 @@ local function evaluateCachedTerminalState()
     elseif cachedGameId == "PopcornBurst" then
         processPopcorn(s)
     end
-
-
-
-
-
     if requiredWins ~= nil and opponentWins >= requiredWins then
         latchClinchingLoss(cachedGameId .. ":SeriesScoreTeardown")
     end
-
     processPublicWinnerTransition(s)
     processMatchResultFallback(s)
 end
-
 evaluateState = function()
     if controller.destroyed or controller.triggered then
         return
     end
-
-
-
-
     readRoundVoteEvidence()
-
     local gameId = currentGameId()
-
-
-
-
-
-
     if gameId == nil and tracker.gameId and SUPPORTED_GAMES[tracker.gameId] then
         tracker.gameIdTeardownSeen = true
         evaluateCachedTerminalState()
         tracker.phase = currentPhase()
         return
     end
-
     if gameId ~= tracker.gameId or tracker.gameIdTeardownSeen then
         resetTracker(gameId)
     end
-
     if not gameId or not SUPPORTED_GAMES[gameId] then
         tracker.phase = currentPhase()
         return
     end
-
     local liveSeatIndex = currentSeatIndex()
     if liveSeatIndex ~= nil then
         tracker.cachedSeatIndex = liveSeatIndex
         tracker.cachedOpponentSeat = opponentSeatIndex(liveSeatIndex)
     end
-
     local seatIndex = liveSeatIndex or tracker.cachedSeatIndex
     local opponentSeat = opponentSeatIndex(seatIndex) or tracker.cachedOpponentSeat
     local bestOf = currentBestOfRounds()
@@ -28898,13 +27993,11 @@ evaluateState = function()
     end
     local localWins, opponentWins = readSeriesScores(gameId, seatIndex)
     local phase = currentPhase()
-
     local liveOpponent = currentOpponent()
     if liveOpponent ~= nil then
         tracker.cachedOpponent = liveOpponent
     end
     local opponent = liveOpponent or tracker.cachedOpponent
-
     local s = {
         gameId = gameId,
         phase = phase,
@@ -28916,7 +28009,6 @@ evaluateState = function()
         opponentWins = opponentWins,
         opponent = opponent,
     }
-
     if not tracker.initialized then
         tracker.initialized = true
         tracker.phase = phase
@@ -28928,7 +28020,6 @@ evaluateState = function()
             tryIndex({ "session", "public", "winner" })
         )
         tracker.lastRoundWinner = tryIndex({ "session", "public", "lastRoundWinner" })
-
         if gameId == "CandyBomb" then
             local observedBombs = countCandyBombsHit()
             tracker.candyBombsHit = observedBombs or 0
@@ -28939,18 +28030,13 @@ evaluateState = function()
             tracker.candyBoardFreshConfirmed = observedBombs ~= nil
             armCandyRoundFromCurrentSeries()
         end
-
         if gameId == "NumberGuess" then
             local log = tryIndex({ "session", "public", "guessLog" })
             tracker.guessCount = log ~= nil and safeSequenceLength(log, 256) or nil
         end
-
         if gameId == "PopcornBurst" then
             local myState = readPopcornPrivateState("myState")
             local opponentState = readPopcornPrivateState("opponentState")
-
-
-
             tracker.popcornRoundInitialized = false
             tracker.popcornRoundStartLocalWins = localWins
             tracker.popcornRoundStartOpponentWins = opponentWins
@@ -28966,10 +28052,6 @@ evaluateState = function()
             tracker.popcornOpponentLastResultCell = popcornResultCell(opponentState)
         end
     end
-
-
-
-
     local roundStartPhases = ROUND_START_PHASES[gameId]
     if tracker.initialized
         and gameId ~= "PopcornBurst"
@@ -28979,7 +28061,6 @@ evaluateState = function()
     then
         tracker.roundStartLocalWins = localWins
         tracker.roundStartOpponentWins = opponentWins
-
         if gameId == "Knockout" then
             tracker.knockoutOpponentLossPending = false
             tracker.knockoutPendingRoundStartOpponentWins = nil
@@ -28995,20 +28076,14 @@ evaluateState = function()
         tracker.roundStartLocalWins = localWins
         tracker.roundStartOpponentWins = opponentWins
     elseif opponentWins < tracker.roundStartOpponentWins then
-
         tracker.roundStartLocalWins = localWins
         tracker.roundStartOpponentWins = opponentWins
     end
-
     if gameId == "Knockout"
         and (phase == "Starting" or phase == "Aiming" or phase == "Launching")
     then
         cacheKnockoutRoundPucks(s)
     end
-
-
-
-
     if gameId ~= "PopcornBurst"
         and gameId ~= "CandyBomb"
         and requiredWins ~= nil
@@ -29016,7 +28091,6 @@ evaluateState = function()
     then
         latchClinchingLoss(gameId .. ":SeriesScore")
     end
-
     if gameId == "CandyBomb" then
         processCandyBomb(s)
     elseif gameId == "NumberGuess" then
@@ -29032,32 +28106,21 @@ evaluateState = function()
     elseif gameId == "PopcornBurst" then
         processPopcorn(s)
     end
-
     processPublicWinnerTransition(s)
     processKnockoutMatchWinnerFallback(s)
     processMatchResultFallback(s)
-
     tracker.phase = phase
     tracker.localWins = localWins
     tracker.opponentWins = opponentWins
 end
-
-
-
-
 if MinigameBombExplosion and MinigameBombExplosion.OnClientEvent then
     addConnection(MinigameBombExplosion.OnClientEvent:Connect(function(_, explodedPlayer)
         if controller.destroyed or controller.triggered then
             return
         end
-
         if currentGameId() ~= "CandyBomb" or explodedPlayer ~= LocalPlayer then
             return
         end
-
-
-
-
         syncCandyBombBoardCount()
         if tracker.candyAwaitingFreshBoard then
             tracker.candyAwaitingFreshBoard = false
@@ -29069,18 +28132,13 @@ if MinigameBombExplosion and MinigameBombExplosion.OnClientEvent then
             tracker.candyBoardFreshConfirmed = true
             armCandyRoundFromCurrentSeries()
         end
-
         tracker.candyBombEvents = math.min(3, tracker.candyBombEvents + 1)
         tracker.candyBombsHit = tracker.candyBombEvents
-
-
-
         if tracker.candyBombEvents == 3 then
             local bestOf = currentBestOfRounds()
             local requiredWins = bestOf and winsRequired(bestOf) or nil
             local seatIndex = currentSeatIndex()
             local _, liveOpponentWins = readSeriesScores("CandyBomb", seatIndex)
-
             if tracker.candyClinchRoundArmed == true
                 or exactRoundLossClinches(liveOpponentWins, requiredWins)
             then
@@ -29088,13 +28146,9 @@ if MinigameBombExplosion and MinigameBombExplosion.OnClientEvent then
                 return
             end
         end
-
         evaluateState()
     end))
 end
-
-
-
 local okRaw, rawListener = pcall(function()
     return ActiveMinigame:ListenRaw(function()
         controller.evaluationRequested = true
@@ -29103,17 +28157,12 @@ end)
 if okRaw then
     addDisconnector(rawListener)
 end
-
-
-
-
 do
     local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
     local minigameGui = playerGui and playerGui:FindFirstChild("MinigameGui")
     local votingGui = minigameGui and minigameGui:FindFirstChild("Voting")
     local bestOfGui = votingGui and votingGui:FindFirstChild("BestofGamemode")
     local list = bestOfGui and bestOfGui:FindFirstChild("List")
-
     if list then
         for _, item in ipairs({
             { button = list:FindFirstChild("One"), value = 1 },
@@ -29132,14 +28181,10 @@ do
         end
     end
 end
-
-
-
 local okPrivate, privateListener = pcall(function()
     return ActiveMinigame:Listen({ "session", "private" }, function(privateValue)
         controller.queuedPopcornPrivatePayload = privateValue
         controller.queuedPopcornPrivatePayloadSet = true
-
         if tracker.gameId == "PopcornBurst"
             and tracker.popcornRoundInitialized
             and tracker.popcornSeenFromRoundStart
@@ -29148,7 +28193,6 @@ local okPrivate, privateListener = pcall(function()
             tracker.popcornPrivatePayload = privateValue
             local myState = safeIndex(privateValue, "myState")
             local opponentState = safeIndex(privateValue, "opponentState")
-
             if myState ~= nil then
                 updatePopcornResultCounter(myState, false)
                 if tracker.popcornMyExpectedResults ~= nil
@@ -29159,7 +28203,6 @@ local okPrivate, privateListener = pcall(function()
                     tracker.popcornMyFinal = true
                 end
             end
-
             if opponentState ~= nil then
                 updatePopcornResultCounter(opponentState, true)
                 if tracker.popcornOpponentExpectedResults ~= nil
@@ -29170,7 +28213,6 @@ local okPrivate, privateListener = pcall(function()
                     tracker.popcornOpponentFinal = true
                 end
             end
-
             local expected = tracker.popcornMyExpectedResults
             if expected ~= nil and expected >= 0 then
                 local remaining = math.max(
@@ -29194,17 +28236,12 @@ local okPrivate, privateListener = pcall(function()
                 latchClinchingLoss("PopcornBurst:PrivateResultSignal")
             end
         end
-
         controller.evaluationRequested = true
     end)
 end)
 if okPrivate then
     addDisconnector(privateListener)
 end
-
-
-
-
 for _, path in ipairs({
     { "session", "public", "phase" },
     { "session", "public", "resolution" },
@@ -29229,7 +28266,6 @@ for _, path in ipairs({
             elseif leaf == "lastRoundWinner" then
                 controller.queuedKnockoutLastRoundWinner = value
                 controller.queuedKnockoutLastRoundWinnerSet = true
-
                 local opponentSeat = tracker.cachedOpponentSeat
                 local requiredWins = tracker.cachedRequiredWins
                 local beforeRound = tracker.roundStartOpponentWins
@@ -29269,9 +28305,6 @@ for _, path in ipairs({
         addDisconnector(listener)
     end
 end
-
-
-
 do
     local ok, listener = pcall(function()
         return ActiveMinigame:Listen({ "session", "private", "myBoard", "cells" }, function(cells)
@@ -29282,7 +28315,6 @@ do
                 controller.evaluationRequested = true
                 return
             end
-
             local bombs = 0
             local sawCell = false
             for index = 1, 32 do
@@ -29298,7 +28330,6 @@ do
                     break
                 end
             end
-
             if bombs >= 3 then
                 controller.queuedCandyThirdBombState = true
                 latchClinchingLoss("CandyBomb:ThirdBombStateSignal")
@@ -29308,10 +28339,6 @@ do
     end)
     if ok then addDisconnector(listener) end
 end
-
-
-
-
 for seat = 1, 2 do
     local path = { "playerWins", seat }
     local ok, listener = pcall(function()
@@ -29331,10 +28358,6 @@ for seat = 1, 2 do
     end)
     if ok then addDisconnector(listener) end
 end
-
-
-
-
 cachedClinchRoundReady = function()
     local requiredWins = tracker.cachedRequiredWins
     local popcornContext = tracker.gameId == "PopcornBurst"
@@ -29350,7 +28373,6 @@ cachedClinchRoundReady = function()
     if requiredWins == nil then
         return false
     end
-
     local beforeRound = popcornContext
         and tracker.popcornRoundStartOpponentWins
         or tracker.roundStartOpponentWins
@@ -29360,7 +28382,6 @@ cachedClinchRoundReady = function()
     return beforeRound ~= nil
         and math.max(0, math.floor(numeric(beforeRound, 0))) == requiredWins - 1
 end
-
 do
     local ok, listener = pcall(function()
         return ActiveMinigame:Listen({ "session", "public", "guessLog" }, function(guessLog)
@@ -29382,7 +28403,6 @@ do
     end)
     if ok then addDisconnector(listener) end
 end
-
 do
     local ok, listener = pcall(function()
         return ActiveMinigame:Listen({ "session", "public", "grid" }, function(grid)
@@ -29399,7 +28419,6 @@ do
     end)
     if ok then addDisconnector(listener) end
 end
-
 local function fastBattleshipTerminalCheck()
     if tracker.gameId ~= "Battleship"
         or tracker.battleshipAwaitingFreshRound == true
@@ -29416,7 +28435,6 @@ local function fastBattleshipTerminalCheck()
         latchClinchingLoss("Battleship:AllOwnShipsSunkSignal")
     end
 end
-
 for _, path in ipairs({
     { "session", "public", "shots", 1 },
     { "session", "public", "shots", 2 },
@@ -29431,7 +28449,6 @@ for _, path in ipairs({
     end)
     if ok then addDisconnector(listener) end
 end
-
 local function fastFootballTerminalCheck()
     if tracker.gameId ~= "FootballDraft" or not cachedClinchRoundReady() then
         return
@@ -29450,7 +28467,6 @@ local function fastFootballTerminalCheck()
         opponent = tracker.cachedOpponent,
     })
 end
-
 for _, path in ipairs({
     { "session", "public", "totalOVR", 1 },
     { "session", "public", "totalOVR", 2 },
@@ -29466,8 +28482,6 @@ for _, path in ipairs({
     end)
     if ok then addDisconnector(listener) end
 end
-
-
 for _, path in ipairs({
     { "session", "private", "myBoard", "cells" },
     { "session", "public", "guessLog" },
@@ -29495,17 +28509,12 @@ for _, path in ipairs({
         addDisconnector(listener)
     end
 end
-
-
-
-
 do
     local ok, listener = pcall(function()
         return ActiveMinigame:Listen({ "session", "public", "winner" }, function(value)
             if value ~= nil then
                 controller.queuedPopcornPublicWinner = value
                 controller.queuedPopcornPublicWinnerSet = true
-
                 local opponentWinner = tracker.cachedOpponent ~= nil
                     and value == tracker.cachedOpponent
                 if not opponentWinner
@@ -29515,7 +28524,6 @@ do
                 then
                     opponentWinner = true
                 end
-
                 if opponentWinner then
                     if tracker.gameId == "PopcornBurst" and cachedClinchRoundReady() then
                         latchClinchingLoss("PopcornBurst:PublicWinnerSignal")
@@ -29534,11 +28542,6 @@ do
         addDisconnector(listener)
     end
 end
-
-
-
-
-
 do
     local ok, listener = pcall(function()
         return ActiveMinigame:Observe({ "matchResult" }, function(result)
@@ -29548,7 +28551,6 @@ do
                 )
                 controller.queuedMatchResultSet =
                     controller.queuedMatchResultWinnerIndex ~= nil
-
                 local winnerIndex = controller.queuedMatchResultWinnerIndex
                 local gameId = currentGameId() or tracker.gameId
                 if winnerIndex ~= nil
@@ -29566,8 +28568,6 @@ do
         addDisconnector(listener)
     end
 end
-
-
 for _, path in ipairs({
     { "voting" },
     { "session" },
@@ -29586,7 +28586,6 @@ for _, path in ipairs({
         addDisconnector(listener)
     end
 end
-
 local function consumeQueuedReplicatorSignals()
     if controller.queuedCandyThirdBombState then
         controller.queuedCandyThirdBombState = false
@@ -29596,19 +28595,16 @@ local function consumeQueuedReplicatorSignals()
             latchClinchingLoss("CandyBomb:ThirdBombStateSignal")
         end
     end
-
     if controller.queuedKnockoutResolutionLoss then
         controller.queuedKnockoutResolutionLoss = false
         if currentGameId() == "Knockout" or tracker.gameId == "Knockout" then
             latchClinchingLoss("Knockout:ResolutionSignalGuaranteedLoss")
         end
     end
-
     if controller.queuedPopcornPublicWinnerSet then
         controller.queuedPopcornPublicWinnerSet = false
         local value = controller.queuedPopcornPublicWinner
         controller.queuedPopcornPublicWinner = nil
-
         local popcornContext = currentGameId() == "PopcornBurst"
             or tracker.gameId == "PopcornBurst"
         if popcornContext then
@@ -29624,12 +28620,10 @@ local function consumeQueuedReplicatorSignals()
                     requiredWins = winsRequired(bestOf)
                 end
             end
-
             local beforeRound = tracker.popcornRoundStartOpponentWins
             if beforeRound == nil then
                 beforeRound = tracker.roundStartOpponentWins
             end
-
             local opponentWinner = isOpponentPlayer(value, opponent)
             if not opponentWinner
                 and opponentSeat ~= nil
@@ -29638,7 +28632,6 @@ local function consumeQueuedReplicatorSignals()
             then
                 opponentWinner = true
             end
-
             local _, liveOpponentWins = readSeriesScores(
                 "PopcornBurst",
                 currentSeatIndex() or tracker.cachedSeatIndex
@@ -29650,13 +28643,11 @@ local function consumeQueuedReplicatorSignals()
                             == requiredWins - 1)
                     or numeric(liveOpponentWins, 0) >= requiredWins
                 )
-
             if opponentWinner and clinchingWinner then
                 latchClinchingLoss("PopcornBurst:QueuedPublicWinner")
             end
         end
     end
-
     if controller.queuedMatchResultSet then
         controller.queuedMatchResultSet = false
         local winnerIndex = tonumber(controller.queuedMatchResultWinnerIndex)
@@ -29671,7 +28662,6 @@ local function consumeQueuedReplicatorSignals()
             latchClinchingLoss(tostring(gameId) .. ":MatchResultQueued")
         end
     end
-
     if controller.queuedPopcornPrivatePayloadSet then
         controller.queuedPopcornPrivatePayloadSet = false
         if currentGameId() == "PopcornBurst"
@@ -29683,10 +28673,8 @@ local function consumeQueuedReplicatorSignals()
         end
         controller.queuedPopcornPrivatePayload = nil
     end
-
     local knockoutContext = currentGameId() == "Knockout"
         or tracker.gameId == "Knockout"
-
     if controller.queuedKnockoutMatchWinnerSet then
         controller.queuedKnockoutMatchWinnerSet = false
         local value = controller.queuedKnockoutMatchWinner
@@ -29698,7 +28686,6 @@ local function consumeQueuedReplicatorSignals()
             end
         end
     end
-
     if controller.queuedKnockoutLastRoundWinnerSet then
         controller.queuedKnockoutLastRoundWinnerSet = false
         local value = numeric(controller.queuedKnockoutLastRoundWinner, nil)
@@ -29721,27 +28708,17 @@ local function consumeQueuedReplicatorSignals()
         end
     end
 end
-
-
-
-
 addConnection(TeleportService.TeleportInitFailed:Connect(function(player)
     if player == LocalPlayer and controller.pendingLossReason ~= nil then
         controller.triggered = false
         controller.lastDepartureAttemptAt = 0
     end
 end))
-
-
-
-
-
 local function urgentDeparturePump()
     if controller.pendingLossReason ~= nil then
         executePendingLossIfReady()
     end
 end
-
 pcall(function()
     addConnection(RunService.PreSimulation:Connect(urgentDeparturePump))
 end)
@@ -29749,52 +28726,38 @@ addConnection(RunService.Stepped:Connect(urgentDeparturePump))
 pcall(function()
     addConnection(RunService.RenderStepped:Connect(urgentDeparturePump))
 end)
-
 do
     local nextFallbackEvaluationAt = 0
     addConnection(RunService.Heartbeat:Connect(function()
-
-
-
         consumeQueuedReplicatorSignals()
-
         local now = os.clock()
         local gameId = currentGameId()
         local activeSupportedGame = gameId and SUPPORTED_GAMES[gameId] == true
         local shouldEvaluate = controller.evaluationRequested == true
-
-
-
-
-
-
-        if not shouldEvaluate and now >= nextFallbackEvaluationAt then
+        if activeSupportedGame then
+            -- A single 50ms polling gap is enough to miss the small window
+            -- between a deterministic terminal state and the server's final
+            -- match resolution. Evaluate every heartbeat while a supported
+            -- minigame is live; event listeners still provide the fastest
+            -- direct path for known terminal signals.
             shouldEvaluate = true
-            nextFallbackEvaluationAt = now + (activeSupportedGame and 0.05 or 0.25)
+        elseif not shouldEvaluate and now >= nextFallbackEvaluationAt then
+            shouldEvaluate = true
+            nextFallbackEvaluationAt = now + 0.25
         end
-
         if shouldEvaluate then
             controller.evaluationRequested = false
             evaluateState()
-            nextFallbackEvaluationAt = math.max(
-                nextFallbackEvaluationAt,
-                now + (activeSupportedGame and 0.05 or 0.25)
-            )
+            if not activeSupportedGame then
+                nextFallbackEvaluationAt = math.max(nextFallbackEvaluationAt, now + 0.25)
+            end
         end
-
-
-
         executePendingLossIfReady()
     end))
 end
-
-
-
-
 task.spawn(function()
     local lastActiveGame = nil
     local nextRefreshAt = 0
-
     while not controller.destroyed and not controller.triggered do
         local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
         local gameId = currentGameId()
@@ -29804,7 +28767,6 @@ task.spawn(function()
             and utility.PauseMinigameFeatures ~= true
             and gameId ~= nil
             and SUPPORTED_GAMES[gameId] == true
-
         if enabled then
             local now = os.clock()
             if gameId ~= lastActiveGame or now >= nextRefreshAt then
@@ -29820,32 +28782,24 @@ task.spawn(function()
         end
     end
 end)
-
-
-
 task.defer(evaluateState)
-
 function controller:Destroy()
     if self.destroyed then
         return
     end
-
     self.destroyed = true
-
     for _, disconnect in ipairs(self.disconnectors) do
         pcall(disconnect)
     end
     table.clear(self.disconnectors)
-
     for _, connection in ipairs(self.connections) do
         pcall(function()
             connection:Disconnect()
         end)
     end
     table.clear(self.connections)
-
     if rawget(_G, GLOBAL_KEY) == self then
         rawset(_G, GLOBAL_KEY, nil)
     end
-end
+end 
 end)
