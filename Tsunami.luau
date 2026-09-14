@@ -34,10 +34,9 @@ local RGB=Color3.fromRGB
 local TI=TweenInfo.new
 local guiParent = (gethui and gethui()) or CoreGui
 local camera = workspace.CurrentCamera
-if not camera then
-	workspace:GetPropertyChangedSignal(
-		"CurrentCamera"
-	):Wait()
+-- Camera viewports can briefly be 1x1 while the client initializes.
+while not camera or camera.ViewportSize.X < 64 or camera.ViewportSize.Y < 64 do
+	game:GetService("RunService").Heartbeat:Wait()
 	camera = workspace.CurrentCamera
 end
 local viewportSize = camera
@@ -409,9 +408,18 @@ if IS_MINIGAME_PLACE then
 		DeleteInventoryThreshold = 95,
 		NeverDeleteEnabled = false,
 		NeverDeleteItems = {},
+		DeleteAvoidTraits = {},
+		DeleteAvoidMutations = {},
 
 
 		AutoEquipBestBrainrot = false,
+		AutoEquipMount = false,
+		AutoEquipBoth = false,
+		EquipMountBest = false,
+		EquipMountSpecific = false,
+		EquipBothBest = false,
+		EquipBothSpecific = false,
+		SpecificMountBrainrotId = nil,
 		EquipBestBrainrot = false,
 		EquipBestMountableBrainrot = false,
 		EquipSpecificBrainrot = false,
@@ -473,6 +481,9 @@ if IS_MINIGAME_PLACE then
 		PermanentBlacklistPlayersAfterCanceledTrade = false,
 		PermanentBlacklistAfterCanceledTrades = 3,
 		PermanentBlacklistedUserIds = {},
+		CanceledTradeCounts = {},
+		ServerBlacklistMinutes = 10,
+		ServerBlacklistJoinedAt = {},
 
 
 		CheckServerHopNobodyServer = false,
@@ -727,6 +738,24 @@ if IS_MINIGAME_PLACE then
 			or tostring(id)
 	end
 
+	autoServerHopState.RefreshOwnedMountableOptions = function()
+		local owned = autoServerHopState.RefreshOwnedBrainrotOptions()
+		local options = {}
+		pcall(function()
+			local RS = game:GetService("ReplicatedStorage")
+			local replicator = require(RS.Client.Modules.ReplicatorClient)
+			local rideable = require(RS.Shared.Config.RideableBrainrots)
+			local data = replicator.get("PlayerData")
+			local inventory = data and data:TryIndex({"Inventory"}) or {}
+			for _, id in ipairs(owned) do
+				local item = inventory[id] or inventory[tonumber(id)]
+				local name = item and (item.name or (item.sub and item.sub.name))
+				if name and rideable.isRideable(name) then options[#options + 1] = id end
+			end
+		end)
+		return options
+	end
+
 	autoServerHopState.AllDeletableItemOptions = function()
 		local names = {}
 		local function addName(value)
@@ -895,6 +924,9 @@ if IS_MINIGAME_PLACE then
 		local count =
 			(math.floor(tonumber(autoServerHopState.RuntimeCanceledTradeCounts[key]) or 0) + 1)
 		autoServerHopState.RuntimeCanceledTradeCounts[key] = count
+		utility.CanceledTradeCounts = type(utility.CanceledTradeCounts) == "table" and utility.CanceledTradeCounts or {}
+		local persistentCount = math.max(0, math.floor(tonumber(utility.CanceledTradeCounts[key]) or 0)) + 1
+		utility.CanceledTradeCounts[key] = persistentCount
 
 		if utility.TempBlacklistPlayersAfterCanceledTrade == true then
 			local threshold = math.clamp(
@@ -915,7 +947,7 @@ if IS_MINIGAME_PLACE then
 				1,
 				10
 			)
-			if count >= threshold then
+			if persistentCount >= threshold then
 				utility.PermanentBlacklistedUserIds =
 					type(utility.PermanentBlacklistedUserIds) == "table"
 						and utility.PermanentBlacklistedUserIds
@@ -923,6 +955,8 @@ if IS_MINIGAME_PLACE then
 				utility.PermanentBlacklistedUserIds[key] = true
 			end
 		end
+		local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
+		if type(saver) == "function" then pcall(saver, true) end
 		return true
 	end
 
@@ -1050,6 +1084,15 @@ if IS_MINIGAME_PLACE then
 			"DeleteInventoryThreshold",
 			"NeverDeleteEnabled",
 			"NeverDeleteItems",
+			"DeleteAvoidTraits",
+			"DeleteAvoidMutations",
+			"AutoEquipMount",
+			"AutoEquipBoth",
+			"EquipMountBest",
+			"EquipMountSpecific",
+			"EquipBothBest",
+			"EquipBothSpecific",
+			"SpecificMountBrainrotId",
 			"AutoEquipBestBrainrot",
 			"EquipBestBrainrot",
 			"EquipBestMountableBrainrot",
@@ -1100,6 +1143,9 @@ if IS_MINIGAME_PLACE then
 			"PermanentBlacklistPlayersAfterCanceledTrade",
 			"PermanentBlacklistAfterCanceledTrades",
 			"PermanentBlacklistedUserIds",
+			"CanceledTradeCounts",
+			"ServerBlacklistMinutes",
+			"ServerBlacklistJoinedAt",
 			"CheckServerHopNobodyServer",
 			"CheckServerHopPlayedEveryoneServer",
 			"CheckServerHopNobodyMinigamesArea",
@@ -1162,6 +1208,11 @@ if IS_MINIGAME_PLACE then
 
 		local function snapshotSettings()
 			local utility = {}
+			for key, value in pairs(autoServerHopState.Utility) do
+				if type(key) == "string" and key:sub(1, 5) == "Trade" then
+					utility[key] = copyJsonSafe(value)
+				end
+			end
 			for _, key in ipairs(utilityKeys) do
 				utility[key] = copyJsonSafe(autoServerHopState.Utility[key])
 			end
@@ -1264,6 +1315,11 @@ if IS_MINIGAME_PLACE then
 				local savedUtility = serverHop.Utility
 				if type(savedUtility) == "table" then
 					local filteredUtility = {}
+					for key, value in pairs(savedUtility) do
+						if type(key) == "string" and key:sub(1, 5) == "Trade" then
+							filteredUtility[key] = value
+						end
+					end
 					for _, key in ipairs(utilityKeys) do
 						filteredUtility[key] = savedUtility[key]
 					end
@@ -1423,10 +1479,25 @@ if IS_MINIGAME_PLACE then
 
 
 
-			if autoServerHopState.Utility.EquipBestBrainrot == true
-				and autoServerHopState.Utility.EquipBestMountableBrainrot == true
-			then
-				autoServerHopState.Utility.EquipBestMountableBrainrot = false
+			do
+				local utility = autoServerHopState.Utility
+				if utility.AutoEquipBestBrainrot and (utility.EquipBestMountableBrainrot or utility.MountBrainrotIfPossible) then
+					utility.AutoEquipBestBrainrot = false
+					utility.AutoEquipMount = true
+					utility.EquipMountSpecific = utility.EquipSpecificBrainrot == true
+					utility.EquipMountBest = not utility.EquipMountSpecific
+					utility.SpecificMountBrainrotId = utility.SpecificBrainrotId
+				end
+				utility.EquipBestMountableBrainrot = false
+				utility.MountBrainrotIfPossible = false
+				local selected = false
+				for _, key in ipairs({"AutoEquipBestBrainrot", "AutoEquipMount", "AutoEquipBoth"}) do
+					utility[key] = utility[key] == true and not selected
+					selected = selected or utility[key]
+				end
+				for _, keys in ipairs({{"EquipBestBrainrot", "EquipSpecificBrainrot"}, {"EquipMountBest", "EquipMountSpecific"}, {"EquipBothBest", "EquipBothSpecific"}}) do
+					if utility[keys[2]] == true then utility[keys[1]] = false end
+				end
 			end
 			if autoServerHopState.Utility.DeleteNonBrainrotsFirst == true
 				and autoServerHopState.Utility.DeleteWorstBrainrotsFirst == true
@@ -1767,12 +1838,14 @@ local function applyDeviceWindowSize(
 	local currentCamera = workspace.CurrentCamera or camera
 	local currentViewport = currentCamera and currentCamera.ViewportSize or viewportSize
 	local responsiveWindowScale = window:FindFirstChild("ResponsiveWindowScale")
-	local scale = math.max(
-			0.05,
+	if currentViewport.X < 64 or currentViewport.Y < 64 then return end
+	local scale = math.clamp(
 			math.min(
 				currentViewport.X / math.max(1, viewportSize.X),
 				currentViewport.Y / math.max(1, viewportSize.Y)
-			)
+			),
+			0.25,
+			4
 		)
 	if responsiveWindowScale then
 		responsiveWindowScale.Scale = scale
@@ -1789,10 +1862,35 @@ local function applyDeviceWindowSize(
 		window.Position = U2S(0.5, 0.5)
 	end
 end
+do
+	local callbacks = {}
+	local viewportConnection
+	local function notifyViewportChanged()
+		if not screenGui.Parent or not camera then return end
+		if camera.ViewportSize.X < 64 or camera.ViewportSize.Y < 64 then return end
+		for _, callback in ipairs(callbacks) do task.defer(callback) end
+	end
+	local function bindCamera()
+		if viewportConnection then viewportConnection:Disconnect() end
+		camera = workspace.CurrentCamera
+		if camera then
+			viewportConnection = camera:GetPropertyChangedSignal("ViewportSize"):Connect(notifyViewportChanged)
+			notifyViewportChanged()
+		end
+	end
+	autoServerHopState.OnViewportChanged = function(callback)
+		callbacks[#callbacks + 1] = callback
+	end
+	local cameraConnection = workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(bindCamera)
+	screenGui.Destroying:Connect(function()
+		cameraConnection:Disconnect()
+		if viewportConnection then viewportConnection:Disconnect() end
+		table.clear(callbacks)
+	end)
+	bindCamera()
+end
 applyDeviceWindowSize(true)
-camera:GetPropertyChangedSignal(
-	"ViewportSize"
-):Connect(function()
+autoServerHopState.OnViewportChanged(function()
 	applyDeviceWindowSize(
 		true
 	)
@@ -3212,6 +3310,257 @@ local function closeActivePanelDropdown()
 	end
 end
 
+-- Trade filters share one representation for offered items and public inventory.
+autoServerHopState.TradeItemMatches = function(item, mutations, traits, name)
+	if type(item) ~= "table" then return false end
+	local sub = type(item.sub) == "table" and item.sub or {}
+	if name and name ~= "" and tostring(item.name or sub.name or "") ~= name then return false end
+	local mutation = item.mutation or item.Mutation or sub.mutation or sub.Mutation or "None"
+	if type(mutations) == "table" and next(mutations) and mutations[mutation] ~= true then return false end
+	if type(traits) == "table" and next(traits) then
+		local actual = item.traits or item.Traits or sub.traits or sub.Traits or {}
+		local set = {}
+		if type(actual) == "string" then
+			for token in actual:gmatch("[^,]+") do set[token:match("^%s*(.-)%s*$")] = true end
+		elseif type(actual) == "table" then
+			for key, value in pairs(actual) do
+				if type(key) == "string" and value then set[key] = true end
+				if type(value) == "string" then set[value] = true end
+			end
+		end
+		for trait, enabled in pairs(traits) do
+			if enabled and not set[trait] then return false end
+		end
+	end
+	return true
+end
+
+autoServerHopState.TradePublicItems = function(player, rarityOf)
+	local items, seen = {}, {}
+	for _, container in pairs({player and player:FindFirstChildOfClass("Backpack"), player and player.Character}) do
+		for _, tool in ipairs(container:GetChildren()) do
+			if tool:IsA("Tool") and not seen[tool] then
+				seen[tool] = true
+				local item = tool:GetAttributes()
+				item.name = item.BrainrotName or item.ItemName or tool.Name
+				item.mutation = item.Mutation or item.mutation
+				item.traits = item.Traits or item.traits
+				item.rarity = rarityOf(tool, item.name)
+				items[#items + 1] = item
+			end
+		end
+	end
+	return items
+end
+
+autoServerHopState.TradeFilterMatch = function(prefix, items, tokens, all)
+	local u = autoServerHopState.Utility
+	local checked, matched, unknown = 0, 0, false
+	local function check(name, rarity, amount, key)
+		checked += 1
+		local count = 0
+		if rarity == "Tokens" then
+			if tokens == nil then unknown = true; return end
+			count = tokens
+		else
+			for _, item in ipairs(items) do
+				if (not rarity or item.rarity == rarity)
+					and autoServerHopState.TradeItemMatches(item, u[key .. "Mutations"], u[key .. "Traits"], name)
+				then count += 1 end
+			end
+		end
+		if count >= math.max(1, tonumber(amount) or 1) then matched += 1 end
+	end
+	for _, rarity in ipairs(RARITY_OPTIONS) do
+		local key = prefix .. rarity
+		if u[key .. "Enabled"] then check(nil, rarity, u[key .. "Amount"], key) end
+	end
+	for index = 1, 32 do
+		local key = prefix .. "Specific" .. index
+		if u[key] and u[key] ~= "" then check(u[key], nil, u[key .. "Amount"], key) end
+	end
+	if checked == 0 then return false, 0 end
+	if all then
+		if unknown and matched == checked - 1 then return nil, checked end
+		return matched == checked, checked
+	end
+	if matched > 0 then return true, checked end
+	return unknown and nil or false, checked
+end
+
+autoServerHopState.TradeItemOptions = function()
+	local names = {}
+	for _, name in ipairs(autoServerHopState.BoothBrainrotOptions()) do names[name] = true end
+	pcall(function()
+		local shared = game:GetService("ReplicatedStorage"):FindFirstChild("Shared")
+		local config = shared and shared:FindFirstChild("Config")
+		for _, module in ipairs(config and config:GetChildren() or {}) do
+			if module:IsA("ModuleScript") and module.Name:lower():find("item") then
+				local ok, data = pcall(require, module)
+				if ok and type(data) == "table" then
+					for key, value in pairs(data.Items or data) do
+						if type(value) == "table" then names[tostring(value.name or value.Name or key)] = true end
+					end
+				end
+			end
+		end
+		local replicator = require(game:GetService("ReplicatedStorage").Client.Modules.ReplicatorClient)
+		local data = replicator.get("PlayerData")
+		for _, item in pairs(data and data:TryIndex({"Inventory"}) or {}) do
+			if type(item) == "table" then
+				local name = item.name or (item.sub and item.sub.name)
+				if name then names[tostring(name)] = true end
+			end
+		end
+	end)
+	local result = {}
+	for name in pairs(names) do result[#result + 1] = name end
+	table.sort(result)
+	return result
+end
+
+autoServerHopState.TradePanelDefinitions = function(title, original)
+	local u, rows = autoServerHopState.Utility, {}
+	local function add(row) rows[#rows + 1] = row end
+	local function toggle(label, key, parent, group)
+		add({Label = label, UtilityToggleKey = key, UtilityParentKey = parent, UtilityExclusiveGroup = group})
+	end
+	local function amount(label, key, parent, maximum)
+		add({Label = label, UtilitySliderKey = key, UtilityParentKey = parent, MinValue = 0, MaxValue = maximum or 6, UnitLabel = maximum == 1000000 and "Tokens" or "Items"})
+	end
+	local function attributes(key, parent, visible)
+		for _, kind in ipairs({"Mutations", "Traits"}) do
+			add({Label = kind, UtilityMultiDropdownKey = key .. kind, UtilityParentKey = parent,
+				TradeVisible = visible, OptionsProvider = kind == "Mutations" and autoServerHopState.BoothMutationOptions or autoServerHopState.BoothTraitOptions})
+		end
+	end
+	local function specific(prefix, parent, filters)
+		for index = 1, 32 do
+			local key = prefix .. "Specific" .. index
+			local visible = function() return index == 1 or u[prefix .. "Specific" .. (index - 1)] ~= nil or u[key] ~= nil end
+			add({Label = "Specific Brainrot / Item", UtilityDropdownKey = key, UtilityParentKey = parent, Placeholder = "Select", OptionsProvider = autoServerHopState.TradeItemOptions, TradeVisible = visible})
+			if filters then
+				amount("Amount", key .. "Amount", parent, 100)
+				rows[#rows].TradeVisible = function() return u[key] ~= nil end
+				attributes(key, parent, function() return u[key] ~= nil and table.find(autoServerHopState.BoothBrainrotOptions(), u[key]) ~= nil end)
+			end
+			if index > 1 then
+				add({Label = "Remove", UtilityToggleKey = key .. "Remove", UtilityParentKey = parent, TradeVisible = function() return u[key] ~= nil end,
+					TradeAction = function()
+						for at = index, 32 do
+							for _, suffix in ipairs({"", "Amount", "Mutations", "Traits"}) do
+								u[prefix .. "Specific" .. at .. suffix] = u[prefix .. "Specific" .. (at + 1) .. suffix]
+							end
+						end
+					end})
+			end
+		end
+	end
+	local function filters(prefix, label, legacy)
+		if u[prefix .. "Migrated"] ~= true then
+			for _, rarity in ipairs(RARITY_OPTIONS) do
+				local entry = legacy and legacy[rarity]
+				if entry then
+					u[prefix .. rarity .. "Enabled"] = entry.Enabled
+					u[prefix .. rarity .. "Amount"] = entry.Amount
+				elseif legacy and legacy.Targets then
+					u[prefix .. rarity .. "Enabled"] = legacy.Targets[rarity] == true
+					u[prefix .. rarity .. "Amount"] = rarity == "Tokens" and legacy.Tokens or (legacy.Amounts or {})[rarity]
+				end
+			end
+			u[prefix .. "Migrated"] = true
+		end
+		toggle(label, prefix .. "Enabled")
+		for _, rarity in ipairs(RARITY_OPTIONS) do
+			local key = prefix .. rarity
+			toggle(rarity, key .. "Enabled", prefix .. "Enabled")
+			amount(rarity .. " Amount", key .. "Amount", key .. "Enabled", rarity == "Tokens" and 1000000 or 100)
+			rows[#rows].VisibilityUtilityParentKey = prefix .. "Enabled"
+			if rarity ~= "Tokens" then attributes(key, key .. "Enabled", function() return u[prefix .. "Enabled"] == true end) end
+		end
+		specific(prefix, prefix .. "Enabled", true)
+	end
+	if title == "Auto Accept" then
+		if u.TradeAcceptAnyEnabled == nil then u.TradeAcceptAnyEnabled = u.AutoAcceptMaster end
+		filters("TradeAcceptAny", "Auto Accept (Must Have One Selected)", autoAcceptState)
+		filters("TradeAcceptAll", "Auto Accept (Must Have All Selected)")
+	elseif title == "Auto Cancel" then
+		for _, row in ipairs(original) do
+			if not row.AutoCancel and row.UtilityToggleKey ~= "AutoCancelCheckOpponentsBrainrots" and row.UtilitySliderKey ~= "AutoCancelBrainrotConditionDelay" then add(row) end
+		end
+		if u.TradeCancelAnyEnabled == nil then u.TradeCancelAnyEnabled = u.AutoCancelCheckOpponentsBrainrots end
+		filters("TradeCancelAny", "Cancel If Player Does Not Own At Least One Selected", autoCancelState)
+		filters("TradeCancelAll", "Cancel If Player Does Not Own All Selected")
+		amount("Time Before Auto Cancel", "AutoCancelBrainrotConditionDelay", "AutoCancelMaster", 30)
+		rows[#rows].UnitLabel = "Seconds"
+	elseif title == "Auto Sit" then
+		add(original[1]); add({Label = "Auto Sit At 1/2 Tables", SitKey = "OneOfTwo"})
+		if u.TradeSitAnyEnabled == nil then u.TradeSitAnyEnabled = next(autoSitState.OneOfTwo.Targets or {}) ~= nil end
+		filters("TradeSitAll", "Opponent Must Own All Selected Brainrots")
+		filters("TradeSitAny", "Opponent Must Own One Of Selected Brainrots", autoSitState.OneOfTwo)
+	elseif title == "Auto Offer" then
+		for _, row in ipairs(original) do add(row) end
+		rows[1].Label = "Offer Based On Rarity"
+		toggle("Offer Specific Brainrot", "TradeOfferSpecificEnabled")
+		specific("TradeOffer", "TradeOfferSpecificEnabled", false)
+		amount("Token Amount", "TradeOfferTokens", "TradeOfferSpecificEnabled", 1000000)
+		toggle("Offer All Tokens", "TradeOfferAllTokens", "TradeOfferSpecificEnabled")
+		toggle("Offer Based On Trade Chat", "TradeChatEnabled")
+		if u.TradeChatCount == nil then u.TradeChatCount = 1 end
+		for index = 1, 16 do
+			local key = "TradeChat" .. index
+			local visible = function() return index <= (tonumber(u.TradeChatCount) or 1) end
+			add({Label = "Trade Chat To Look For", UtilityTextKey = key .. "Text", UtilityParentKey = "TradeChatEnabled", TradeVisible = visible})
+			add({Label = "Offer Brainrot / Item", UtilityDropdownKey = key .. "Item", UtilityParentKey = "TradeChatEnabled", TradeVisible = visible, Placeholder = "Select", OptionsProvider = autoServerHopState.TradeItemOptions})
+			add({Label = "Offer Rarity", UtilityDropdownKey = key .. "Rarity", UtilityParentKey = "TradeChatEnabled", TradeVisible = visible, Placeholder = "Select", Options = BRAINROT_RARITY_OPTIONS})
+			amount("Amount", key .. "Amount", "TradeChatEnabled", 6); rows[#rows].TradeVisible = visible
+			amount("Token Amount", key .. "Tokens", "TradeChatEnabled", 1000000); rows[#rows].TradeVisible = visible
+			toggle("Offer All Tokens", key .. "AllTokens", "TradeChatEnabled"); rows[#rows].TradeVisible = visible
+			add({Label = "Clear Custom Offer", UtilityToggleKey = key .. "Clear", UtilityParentKey = "TradeChatEnabled", TradeVisible = visible, TradeAction = function()
+				for _, suffix in ipairs({"Text", "Item", "Rarity", "Amount", "Tokens", "AllTokens"}) do u[key .. suffix] = nil end
+			end})
+			if index > 1 then
+				add({Label = "Remove Custom Offer", UtilityToggleKey = key .. "Remove", UtilityParentKey = "TradeChatEnabled", TradeVisible = visible, TradeAction = function()
+					for at = index, 16 do
+						for _, suffix in ipairs({"Text", "Item", "Rarity", "Amount", "Tokens", "AllTokens"}) do u["TradeChat" .. at .. suffix] = u["TradeChat" .. (at + 1) .. suffix] end
+					end
+					u.TradeChatCount = math.max(1, (tonumber(u.TradeChatCount) or 1) - 1)
+				end})
+			end
+		end
+		add({Label = "Add Another Trade Chat Offer", UtilityToggleKey = "TradeChatAdd", UtilityParentKey = "TradeChatEnabled", TradeAction = function() u.TradeChatCount = math.min(16, (tonumber(u.TradeChatCount) or 1) + 1) end})
+	elseif title == "Auto Opening Offer" then
+		for _, row in ipairs(original) do add(row) end
+		toggle("Custom Token Amount", "TradeOpeningCustomTokens", "CustomOpeningOffer", "TradeOpeningTokens")
+		amount("Token Amount", "TradeOpeningTokens", "TradeOpeningCustomTokens", 1000000)
+		toggle("Show All Tokens", "TradeOpeningAllTokens", "CustomOpeningOffer", "TradeOpeningTokens")
+	elseif title == "Fallback Offer" then
+		for _, row in ipairs(original) do
+			if row.UtilityToggleKey == "FallbackToNextLowerRarityBrainrot" then row.UtilityExclusiveGroup = "TradeFallbackMode" end
+			if row.UtilitySliderKey == "FallbackNextLowerRarityAmount" then row.Label = "Amount Of Brainrots To Offer" end
+			add(row)
+		end
+		toggle("Fallback To Specific Brainrot / Item", "TradeFallbackSpecific", "FallbackOffers", "TradeFallbackMode")
+		add({Label = "Brainrot / Item", UtilityDropdownKey = "TradeFallbackItem", UtilityParentKey = "TradeFallbackSpecific", Placeholder = "Select", OptionsProvider = autoServerHopState.TradeItemOptions})
+		for _, kind in ipairs({"Mutations", "Traits"}) do
+			toggle("Avoid Brainrots With These " .. kind, "TradeFallbackAvoid" .. kind, "FallbackToNextLowerRarityBrainrot")
+			add({Label = kind .. " To Avoid", UtilityMultiDropdownKey = "TradeFallback" .. kind, UtilityParentKey = "TradeFallbackAvoid" .. kind,
+				OptionsProvider = kind == "Mutations" and autoServerHopState.BoothMutationOptions or autoServerHopState.BoothTraitOptions})
+		end
+	else return original end
+	local expanded = {}
+	for _, row in ipairs(rows) do
+		expanded[#expanded + 1] = row
+		if row.UnitLabel == "Tokens" then row.MaxValue = 1000000 end
+		if row.OfferSubrow then
+			expanded[#expanded + 1] = {Label = "Offer All Tokens", UtilityToggleKey = "TradeOfferAll" .. row.Source, UtilityParentKey = "AutoOfferMaster", TradeVisible = function() return autoOfferState[row.Source].Enabled end}
+		elseif row.UtilitySliderKey and row.UtilitySliderKey:match("^FallbackTokens") then
+			expanded[#expanded + 1] = {Label = "Offer All Tokens", UtilityToggleKey = "TradeAll" .. row.UtilitySliderKey, UtilityParentKeys = row.UtilityParentKeys}
+		end
+	end
+	return expanded
+end
+
 local function createEmptyCollapsiblePanel(
 	tabItem,
 	panelIndex,
@@ -3220,6 +3569,7 @@ local function createEmptyCollapsiblePanel(
 	panelTitle,
 	featureDefinitions
 )
+	featureDefinitions = autoServerHopState.TradePanelDefinitions(panelTitle, featureDefinitions)
 	local panelPersistenceKey = tostring(tabItem.Name)
 		.. "|" .. tostring(panelTitle or ("Panel " .. tostring(panelIndex)))
 		.. "|" .. tostring(column) .. "|" .. tostring(order)
@@ -3944,6 +4294,19 @@ local function createEmptyCollapsiblePanel(
 		toggleKnob.ZIndex = 45014
 		toggleKnob.Parent = toggleTrack
 		ensureCorner(toggleKnob, (toggleHeight - knobInset * 2) * 0.5)
+		if definition and (definition.MomentaryAction or definition.UtilityToggleKey == "UndoAllSettings") then
+			featureLabel.Visible = false
+			featureLabel.Size = U2(1, -px(16), 0, px(16))
+			toggleKnob.Visible = false
+			toggleTrack.Name = "ActionButton"
+			toggleTrack.Text = definition.Label
+			toggleTrack.TextColor3 = MENU_TEXT_SELECTED
+			toggleTrack.FontFace = MENU_FONT_FACE
+			setResponsiveTextSize(toggleTrack, 14)
+			toggleTrack.TextWrapped = true
+			toggleTrack.Size = U2(1, 0, 0, featureRowHeight - px(6))
+			ensureCorner(toggleTrack, px(5))
+		end
 
 		local featureEnabled
 		if isDropdownOnly then
@@ -3980,6 +4343,7 @@ local function createEmptyCollapsiblePanel(
 		local utilityTextBox
 		local standardDropdownButton
 		local dynamicSecondaryHeight
+		local customReplyRefresh
 
 
 		if isCustomReplyManager and stateEntry then
@@ -4122,6 +4486,9 @@ local function createEmptyCollapsiblePanel(
 					entries = {}
 					stateEntry[entriesKey] = entries
 				end
+				if #entries == 0 then
+					entries[1] = {LookFor = "", Reply = ""}
+				end
 				local y = px(5)
 				for entryIndex, entry in ipairs(entries) do
 					if type(entry) ~= "table" then
@@ -4150,14 +4517,14 @@ local function createEmptyCollapsiblePanel(
 					y += px(31)
 
 					local removeButton = New("TextButton")
-					removeButton.Name = "RemoveCustomMessage"
+					removeButton.Name = "ClearCustomMessage"
 					removeButton.Position = U2O(0, y)
 					removeButton.Size = U2(1, 0, 0, px(24))
 					removeButton.BackgroundColor3 = FEATURE_OFF_COLOR
 					removeButton.BorderSizePixel = 0
 					removeButton.AutoButtonColor = false
-					removeButton.Text = "Remove Custom Message"
-					removeButton.TextColor3 = MUTED_TEXT_COLOR
+					removeButton.Text = "Clear Custom Message"
+					removeButton.TextColor3 = MENU_TEXT_SELECTED
 					removeButton.FontFace = MENU_FONT_FACE
 					setResponsiveTextSize(removeButton, 13)
 					removeButton.ZIndex = 45015
@@ -4165,11 +4532,28 @@ local function createEmptyCollapsiblePanel(
 					ensureCorner(removeButton, px(5))
 					rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(removeButton)
 					removeButton.MouseButton1Click:Connect(function()
-						table.remove(entries, entryIndex)
+						entry.LookFor = ""
+						entry.Reply = ""
 						saveCustomReplies()
 						task.defer(rebuildCustomReplies)
 					end)
 					y += px(31)
+					if entryIndex > 1 then
+						local deleteButton = removeButton:Clone()
+						deleteButton.Name = "RemoveCustomMessage"
+						deleteButton.Text = "Remove Custom Message"
+						deleteButton.Position = U2O(0, y)
+						deleteButton.Parent = secondaryContainer
+						deleteButton.MouseButton1Click:Connect(function()
+							if entries[entryIndex] ~= entry then return end
+							if #entries <= 1 then return end
+							table.remove(entries, entryIndex)
+							saveCustomReplies()
+							task.defer(rebuildCustomReplies)
+						end)
+						y += px(31)
+					end
+					y += px(8)
 				end
 
 				local addRow = New("Frame")
@@ -4203,40 +4587,22 @@ local function createEmptyCollapsiblePanel(
 				local addToggle = New("TextButton")
 				addToggle.AnchorPoint = V2(1, 0.5)
 				addToggle.Position = U2(1, 0, 0.5, 0)
-				addToggle.Size = U2O(toggleWidth, toggleHeight)
+				addToggle.Size = U2(1, 0, 1, 0)
 				addToggle.BackgroundColor3 = FEATURE_OFF_COLOR
 				addToggle.BorderSizePixel = 0
 				addToggle.AutoButtonColor = false
-				addToggle.Text = ""
+				addToggle.Text = "Add Another Custom Message"
+				addToggle.TextColor3 = MENU_TEXT_SELECTED
+				addToggle.FontFace = MENU_FONT_FACE
+				setResponsiveTextSize(addToggle, 14)
+				addToggle.TextWrapped = true
+				addLabel.Visible = false
 				addToggle.ZIndex = 45014
 				addToggle.Parent = addRow
-				ensureCorner(addToggle, toggleHeight * 0.5)
+				ensureCorner(addToggle, px(5))
 				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(addToggle)
 
-				local addKnob = New("Frame")
-				addKnob.Size = U2O(
-					toggleHeight - knobInset * 2,
-					toggleHeight - knobInset * 2
-				)
-				addKnob.Position = U2O(knobInset, knobInset)
-				addKnob.BackgroundColor3 = MENU_TEXT_SELECTED
-				addKnob.BorderSizePixel = 0
-				addKnob.ZIndex = 45015
-				addKnob.Parent = addToggle
-				ensureCorner(addKnob, (toggleHeight - knobInset * 2) * 0.5)
-
 				addToggle.MouseButton1Click:Connect(function()
-					TweenService:Create(
-						addToggle,
-						TI(0.10, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-						{BackgroundColor3 = PINK}
-					):Play()
-					TweenService:Create(
-						addKnob,
-						TI(0.10, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-						{Position = U2(0, toggleWidth - toggleHeight + knobInset, 0, knobInset)}
-					):Play()
-
 					entries[#entries + 1] = {LookFor = "", Reply = ""}
 					saveCustomReplies()
 					task.defer(rebuildCustomReplies)
@@ -4247,6 +4613,7 @@ local function createEmptyCollapsiblePanel(
 				task.defer(relayoutRows)
 			end
 
+			customReplyRefresh = rebuildCustomReplies
 			rebuildCustomReplies()
 		end
 
@@ -5826,6 +6193,7 @@ local function createEmptyCollapsiblePanel(
 		end)
 
 		local function refreshFeatureRowFromState()
+			if customReplyRefresh then customReplyRefresh() end
 			if isDropdownOnly then
 				featureEnabled = true
 			elseif isUtilityToggle then
@@ -5920,6 +6288,9 @@ local function createEmptyCollapsiblePanel(
 				labelHeight
 			)
 			toggleTrack.Position = U2(1, 0, 0, baseHeight * 0.5)
+			if definition and (definition.MomentaryAction or definition.UtilityToggleKey == "UndoAllSettings") then
+				toggleTrack.Size = U2(1, 0, 0, math.max(px(24), baseHeight - px(6)))
+			end
 
 			if utilityDropdownButton then
 				utilityDropdownButton.Position = U2(
@@ -6286,14 +6657,14 @@ if IS_MINIGAME_PLACE then
 		{
 			{Label = "Auto Server Hop", ServerHopKey = "Enabled"},
 			{
-				Label = "Time In Server",
+				Label = "Time In Server Until Hop",
 				ServerHopKey = "ServerTimeEnabled",
 				SliderKey = "ServerTime",
 				MinValue = 1,
 				MaxValue = 60,
 			},
 			{
-				Label = "Time Since Last Game",
+				Label = "Time Since Last Game To Hop",
 				ServerHopKey = "TimeSinceLastGameEnabled",
 				SliderKey = "TimeSinceLastGame",
 				MinValue = 1,
@@ -6301,6 +6672,12 @@ if IS_MINIGAME_PLACE then
 			},
 			{Label = "Time Added After Winning Wager", ServerHopSliderKey = "WinWagerTimeAdded", MinValue = 0, MaxValue = 60, UnitLabel = "Minutes"},
 			{Label = "Time Added After Booth Purchase", ServerHopSliderKey = "BoothPurchaseTimeAdded", MinValue = 1, MaxValue = 60, UnitLabel = "Minutes"},
+		}
+	)
+	createEmptyCollapsiblePanel(
+		mainItem, 60, 2, 3, "Blacklist Servers",
+		{
+			{Label = "How long to blacklist joined servers", UtilitySliderKey = "ServerBlacklistMinutes", MinValue = 1, MaxValue = 60, Step = 1, UnitLabel = "Minutes"},
 		}
 	)
 	createEmptyCollapsiblePanel(
@@ -6477,54 +6854,61 @@ if IS_MINIGAME_PLACE then
 					return autoServerHopState.AllDeletableItemOptions()
 				end,
 			},
+			{
+				Label = "Avoid Deleting These Traits",
+				UtilityMultiDropdownKey = "DeleteAvoidTraits",
+				UtilityParentKey = "AutoDeleteWorstInventory",
+				Placeholder = "Select",
+				OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end,
+			},
+			{
+				Label = "Avoid Deleting These Mutations",
+				UtilityMultiDropdownKey = "DeleteAvoidMutations",
+				UtilityParentKey = "AutoDeleteWorstInventory",
+				Placeholder = "Select",
+				OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end,
+			},
 		}
 	)
 
-	createEmptyCollapsiblePanel(
-		mainItem,
-		10,
-		1,
-		6,
-		"Auto Equip",
-		{
-			{Label = "Auto Equip", UtilityToggleKey = "AutoEquipBestBrainrot"},
-			{
-				Label = "Best Brainrot",
-				UtilityToggleKey = "EquipBestBrainrot",
-				UtilityParentKey = "AutoEquipBestBrainrot",
-				UtilityExclusiveGroup = "EquipPriority",
-			},
-			{
-				Label = "Best Mountable Brainrot",
-				UtilityToggleKey = "EquipBestMountableBrainrot",
-				UtilityParentKey = "AutoEquipBestBrainrot",
-				UtilityExclusiveGroup = "EquipPriority",
-			},
-			{
-				Label = "Specific Brainrot",
-				UtilityToggleKey = "EquipSpecificBrainrot",
-				UtilityParentKey = "AutoEquipBestBrainrot",
-			},
-			{
-				Label = "Brainrot",
-				UtilityDropdownKey = "SpecificBrainrotId",
-				UtilityParentKeys = {"AutoEquipBestBrainrot", "EquipSpecificBrainrot"},
-				Placeholder = "None",
-				OptionsProvider = function()
-					return autoServerHopState.RefreshOwnedBrainrotOptions()
-				end,
-				OptionLabelProvider = function(id)
-					return autoServerHopState.OwnedBrainrotOptionLabel(id)
-				end,
-				ClearIfMissing = true,
-			},
-			{
-				Label = "Mount Brainrot If Possible",
-				UtilityToggleKey = "MountBrainrotIfPossible",
-				UtilityParentKey = "AutoEquipBestBrainrot",
-			},
-		}
-	)
+	do
+		local rows = {}
+		for _, mode in ipairs({
+			{Label = "Auto Equip (Hold)", Key = "AutoEquipBestBrainrot", Best = "EquipBestBrainrot", Specific = "EquipSpecificBrainrot", Hold = true},
+			{Label = "Auto Equip (Mount)", Key = "AutoEquipMount", Best = "EquipMountBest", Specific = "EquipMountSpecific", Mount = true},
+			{Label = "Auto Equip (Hold + Mount)", Key = "AutoEquipBoth", Best = "EquipBothBest", Specific = "EquipBothSpecific", Hold = true, Mount = true},
+		}) do
+			rows[#rows + 1] = {Label = mode.Label, UtilityToggleKey = mode.Key, UtilityExclusiveGroup = "EquipMode"}
+			rows[#rows + 1] = {
+				Label = "Equip Best Brainrot", UtilityToggleKey = mode.Best,
+				UtilityParentKey = mode.Key, UtilityExclusiveGroup = mode.Key .. "Priority",
+			}
+			rows[#rows + 1] = {
+				Label = "Equip Specific Brainrot", UtilityToggleKey = mode.Specific,
+				UtilityParentKey = mode.Key, UtilityExclusiveGroup = mode.Key .. "Priority",
+			}
+			for _, slot in ipairs({"Hold", "Mount"}) do
+				if mode[slot] then
+					local mountOnly = slot == "Mount"
+					rows[#rows + 1] = {
+						Label = "Brainrot To " .. slot,
+						UtilityDropdownKey = mountOnly and "SpecificMountBrainrotId" or "SpecificBrainrotId",
+						UtilityParentKeys = {mode.Key, mode.Specific},
+						Placeholder = "Select",
+						OptionsProvider = function()
+							if mountOnly then return autoServerHopState.RefreshOwnedMountableOptions() end
+							return autoServerHopState.RefreshOwnedBrainrotOptions()
+						end,
+						OptionLabelProvider = function(id)
+							return autoServerHopState.OwnedBrainrotOptionLabel(id)
+						end,
+						ClearIfMissing = true,
+					}
+				end
+			end
+		end
+		createEmptyCollapsiblePanel(mainItem, 10, 1, 6, "Auto Equip", rows)
+	end
 	createEmptyCollapsiblePanel(
 		mainItem,
 		11,
@@ -6687,10 +7071,10 @@ if IS_MINIGAME_PLACE then
 		}
 	)
 	createEmptyCollapsiblePanel(
-		mainItem,
-		15,
+		settingsItem,
+		4,
 		2,
-		8,
+		2,
 		"Logging",
 		{
 			{Label = "Print Wins/Losses To Terminal", UtilityToggleKey = "PrintWinsLossesToTerminal"},
@@ -6934,10 +7318,10 @@ if IS_MINIGAME_PLACE then
 	)
 
 	createEmptyCollapsiblePanel(
-		mainItem,
-		21,
-		2,
-		10,
+		settingsItem,
+		5,
+		1,
+		3,
 		"Manual",
 		{
 			{
@@ -7322,7 +7706,7 @@ window:GetPropertyChangedSignal(
 		syncRightPanelGeometry(true)
 	end)
 end)
-camera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+autoServerHopState.OnViewportChanged(function()
 	if autoServerHopState.RuntimeResponsiveRelayoutQueued then return end
 	autoServerHopState.RuntimeResponsiveRelayoutQueued = true
 	task.defer(function()
@@ -7530,14 +7914,15 @@ end
 	restoreButton.Position = U2(0.5, 0, 0, px(10))
 
 	local function syncRestoreButtonSize()
-		local squarePixels = math.max(
-			1,
-			roundPixel(((workspace.CurrentCamera or camera) and (workspace.CurrentCamera or camera).ViewportSize.Y or viewportSize.Y) * 0.10)
-		)
+		local currentCamera = workspace.CurrentCamera or camera
+		local currentViewport = currentCamera and currentCamera.ViewportSize or viewportSize
+		if currentViewport.X < 64 or currentViewport.Y < 64 then return end
+		local squarePixels = math.clamp(roundPixel(math.min(currentViewport.X, currentViewport.Y) * 0.10), 36, 88)
 		restoreButton.Size = U2O(squarePixels, squarePixels)
+		ensureCorner(restoreButton, squarePixels * 0.16)
 	end
 	syncRestoreButtonSize()
-	camera:GetPropertyChangedSignal("ViewportSize"):Connect(syncRestoreButtonSize)
+	autoServerHopState.OnViewportChanged(syncRestoreButtonSize)
 
 	restoreButton.BackgroundColor3 = BLACK
 	restoreButton.BackgroundTransparency = 0
@@ -7547,7 +7932,7 @@ end
 	restoreButton.Visible = not panelOpen
 	restoreButton.ZIndex = 65000
 	restoreButton.Parent = screenGui
-	ensureCorner(restoreButton, px(9))
+	ensureCorner(restoreButton, restoreButton.Size.X.Offset * 0.16)
 
 	local restoreStroke = New("UIStroke")
 	restoreStroke.Name = "GrayOutline"
@@ -10486,6 +10871,7 @@ if IS_MINIGAME_PLACE then
 
 		local function heartbeatTableSP(extra)
 			local data = {
+				leave = autoServerHopState.LeaveIfScriptUserInServer == true,
 				t = "thp10",
 				k = serverKeySP,
 				uid = tonumber(LocalPlayerSP.UserId),
@@ -10514,7 +10900,7 @@ if IS_MINIGAME_PLACE then
 			if not remoteUserId or not remoteStarted or not remoteId or not remoteTs then return nil end
 			local nowMs = math.floor(workspace:GetServerTimeNow() * 1000)
 			if remoteTs > nowMs + 5000 or nowMs - remoteTs > staleAfterMsSP then return nil end
-			return remoteUserId, remoteStarted, remoteId, parseSeenSP(decoded.seen)
+			return remoteUserId, remoteStarted, remoteId, parseSeenSP(decoded.seen), decoded.leave
 		end
 
 		local envsSP = {}
@@ -10560,7 +10946,10 @@ if IS_MINIGAME_PLACE then
 				if ok then addConnectorSP(value) end
 			end
 		end
-		if #connectorsSP == 0 then return end
+		if #connectorsSP == 0 then
+			warn("TuffHub: script-user presence unavailable; no WebSocket connector found.")
+			return
+		end
 
 		local function connectSocketSP(url)
 			for _, connector in ipairs(connectorsSP) do
@@ -10662,6 +11051,8 @@ if IS_MINIGAME_PLACE then
 		end
 
 		local function requestPresenceHopSP()
+			if autoServerHopState.LeaveIfScriptUserInServer ~= true then return end
+			if autoServerHopState.RuntimeScriptUserHopRequested == true then return end
 			autoServerHopState.RuntimeScriptUserHopRequested = true
 			local wake = autoServerHopState.RuntimePresenceHopWake
 			if type(wake) == "function" then
@@ -10669,12 +11060,14 @@ if IS_MINIGAME_PLACE then
 			end
 		end
 
-		local function armLeaveIfOlderSP(remoteUserId, remoteStarted, remoteId, remoteSeen)
+		local function armLeaveIfOlderSP(remoteUserId, remoteStarted, remoteId, remoteSeen, remoteLeave)
+			if autoServerHopState.LeaveIfScriptUserInServer ~= true then return false end
+			if not playerStillHereSP(remoteUserId) then return false end
 			if autoServerHopState.RuntimeScriptUserHopRequested == true then
 				requestPresenceHopSP()
 				return true
 			end
-			if shouldYieldSP(remoteUserId, remoteStarted, remoteId, remoteSeen) then
+			if remoteLeave == false or shouldYieldSP(remoteUserId, remoteStarted, remoteId, remoteSeen) then
 				requestPresenceHopSP()
 				return true
 			end
@@ -10762,10 +11155,10 @@ if IS_MINIGAME_PLACE then
 				parseGetLostRosterSP(message)
 			end
 			if autoServerHopState.RuntimeScriptUserHopRequested == true then return end
-			local remoteUserId, remoteStarted, remoteId, remoteSeen = decodePresenceSP(message)
+			local remoteUserId, remoteStarted, remoteId, remoteSeen, remoteLeave = decodePresenceSP(message)
 			if not remoteUserId then return end
 			markScriptUserSP(remoteUserId)
-			if armLeaveIfOlderSP(remoteUserId, remoteStarted, remoteId, remoteSeen) then return end
+			if armLeaveIfOlderSP(remoteUserId, remoteStarted, remoteId, remoteSeen, remoteLeave) then return end
 
 
 
@@ -10849,6 +11242,7 @@ if IS_MINIGAME_PLACE then
 				return
 			end
 			channel.connecting = true
+			channel.connectStartedAt = os.clock()
 			channel.generation = (tonumber(channel.generation) or 0) + 1
 			local expectedGeneration = channel.generation
 			local endpoint = channel.endpoint
@@ -10940,6 +11334,10 @@ if IS_MINIGAME_PLACE then
 				end
 
 				for _, channel in ipairs(channelsSP) do
+					if channel.connecting and os.clock() - (channel.connectStartedAt or 0) > 10 then
+						cleanupChannelSP(channel, true)
+						channel.nextAttempt = os.clock() + reconnectEverySP
+					end
 					if channel.socket then
 						if not sendHeartbeatChannelSP(channel, false) then
 							cleanupChannelSP(channel, true)
@@ -11356,6 +11754,7 @@ if IS_MINIGAME_PLACE then
 		local cachedCandidatesHP = {}
 		local serverCacheAtHP = 0
 		local cacheRefreshingHP = false
+		local nextCacheAttemptHP = 0
 		local wasPresenceDueHP = false
 		local PRESENCE_HOP_CACHE_MAX_AGE_HP = 2.0
 
@@ -11364,6 +11763,14 @@ if IS_MINIGAME_PLACE then
 
 		local function recordRecentServerHP(id)
 			if type(id) ~= "string" or id == "" then return end
+			local utility = autoServerHopState.Utility
+			utility.ServerBlacklistJoinedAt = type(utility.ServerBlacklistJoinedAt) == "table" and utility.ServerBlacklistJoinedAt or {}
+			for jobId, joinedAt in pairs(utility.ServerBlacklistJoinedAt) do
+				if not tonumber(joinedAt) or os.time() - tonumber(joinedAt) >= 3600 then
+					utility.ServerBlacklistJoinedAt[jobId] = nil
+				end
+			end
+			utility.ServerBlacklistJoinedAt[id] = os.time()
 			local list = autoServerHopState.RecentServerIds
 			if type(list) ~= "table" then
 				list = {}
@@ -11377,6 +11784,15 @@ if IS_MINIGAME_PLACE then
 		end
 
 		recordRecentServerHP(game.JobId)
+		local startupSaverHP = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
+		if type(startupSaverHP) == "function" then pcall(startupSaverHP, true) end
+
+		local function blacklistedHP(id)
+			local joined = autoServerHopState.Utility.ServerBlacklistJoinedAt
+			local timestamp = type(joined) == "table" and tonumber(joined[id]) or nil
+			local seconds = math.clamp(tonumber(autoServerHopState.Utility.ServerBlacklistMinutes) or 10, 1, 60) * 60
+			return id == game.JobId or (timestamp ~= nil and os.time() - timestamp < seconds)
+		end
 
 		local function tryIndexHP(root, path)
 			if not root then return nil end
@@ -11401,6 +11817,7 @@ if IS_MINIGAME_PLACE then
 
 
 		local lastNegotiationSeenAtHP = -math.huge
+		local lastLifecycleSeenAtHP = -math.huge
 		local function lifecycleBlockedHP(active)
 			local negotiation
 			pcall(function() negotiation = ReplicatorHP.get("ActiveNegotiation") end)
@@ -11411,10 +11828,14 @@ if IS_MINIGAME_PLACE then
 				return true
 			end
 			if now - lastNegotiationSeenAtHP < 1.00 then return true end
-			if tryIndexHP(active, {"phase"}) ~= nil then return true end
-			if tryIndexHP(active, {"session", "gameId"}) ~= nil then return true end
-			if type(tryIndexHP(active, {"voting"})) == "table" then return true end
-			return false
+			if tryIndexHP(active, {"phase"}) ~= nil
+				or tryIndexHP(active, {"session", "gameId"}) ~= nil
+				or type(tryIndexHP(active, {"voting"})) == "table"
+			then
+				lastLifecycleSeenAtHP = now
+				return true
+			end
+			return now - lastLifecycleSeenAtHP < 2 or next(pendingBoothChecksHP) ~= nil
 		end
 
 		local function playingHP(active)
@@ -11433,6 +11854,7 @@ if IS_MINIGAME_PLACE then
 
 		local function presenceDueHP()
 			return autoServerHopState.Utility.PauseScript ~= true
+				and autoServerHopState.LeaveIfScriptUserInServer == true
 				and autoServerHopState.RuntimeScriptUserHopRequested == true
 		end
 
@@ -11497,7 +11919,7 @@ if IS_MINIGAME_PLACE then
 			local playerData
 			pcall(function() playerData = ReplicatorHP.get("PlayerData") end)
 			local inventory = tryIndexHP(playerData, {"Inventory"})
-			if type(inventory) ~= "table" then return false end
+			if type(inventory) ~= "table" then return nil end
 			return inventory[itemId] ~= nil
 				or inventory[tostring(itemId)] ~= nil
 				or (tonumber(itemId) ~= nil and inventory[tonumber(itemId)] ~= nil)
@@ -11505,6 +11927,7 @@ if IS_MINIGAME_PLACE then
 
 		local function scanBoothPurchasesHP()
 			local state = myBoothStateHP()
+			if not state then return end
 			local currentOffers = {}
 			for offerId in pairs(state and state.offers or {}) do
 				local item = state.items and (state.items[offerId] or state.items[tostring(offerId)]) or nil
@@ -11522,15 +11945,24 @@ if IS_MINIGAME_PLACE then
 				then
 					pendingBoothChecksHP[offerKey] = true
 					task.delay(0.75, function()
+						-- Keep hopping blocked while inventory replication settles.
+						local deadline = os.clock() + 4
+						while screenGui.Parent and os.clock() < deadline do
+							local live = myBoothStateHP()
+							if live and not boothContainsItemHP(live, itemId) and inventoryContainsHP(itemId) == false then break end
+							task.wait(0.2)
+						end
 						pendingBoothChecksHP[offerKey] = nil
 						if not screenGui.Parent or autoServerHopState.Enabled ~= true then return end
 						local liveState = myBoothStateHP()
-						if boothContainsItemHP(liveState, itemId) or inventoryContainsHP(itemId) then return end
+						local liveSuppressions = autoServerHopState.RuntimeBoothScriptRemoveUntil
+						if type(liveSuppressions) == "table" and os.clock() < (tonumber(liveSuppressions[offerKey]) or 0) then return end
+						if not liveState or boothContainsItemHP(liveState, itemId) or inventoryContainsHP(itemId) ~= false then return end
 						local seconds = math.clamp(
 							math.floor(tonumber(autoServerHopState.BoothPurchaseTimeAdded) or 1),
 							1, 60
 						) * 60
-						boothBlockRemainingHP = math.max(boothBlockRemainingHP, seconds)
+						boothBlockRemainingHP += seconds
 					end)
 				end
 			end
@@ -11548,7 +11980,6 @@ if IS_MINIGAME_PLACE then
 			if type(gameId) == "string" and gameId ~= "" and gameId ~= lastGameIdHP then
 				lastGameIdHP = gameId
 			end
-			if nowPlaying and not wasPlayingHP then lastResultSignatureHP = nil end
 
 			local result = tryIndexHP(active, {"matchResult"})
 			if type(result) ~= "table" then return end
@@ -11562,6 +11993,8 @@ if IS_MINIGAME_PLACE then
 
 			if autoServerHopState.Enabled ~= true then return end
 			if winner == 1 then
+				local rewardSeconds = math.clamp(tonumber(autoServerHopState.WinWagerTimeAdded) or 3, 0, 60) * 60
+				boothBlockRemainingHP += rewardSeconds
 				if autoServerHopState.ServerTimeEnabled == true then
 					local addedSeconds = math.clamp(
 						tonumber(autoServerHopState.WinWagerTimeAdded) or 3,
@@ -11639,8 +12072,11 @@ if IS_MINIGAME_PLACE then
 
 
 
-			local decoded = fetchServerPageHP(requestFn, nil)
-			if not decoded then return candidates end
+			local cursor
+			local cursors = {}
+			repeat
+			local decoded = fetchServerPageHP(requestFn, cursor)
+			if not decoded or type(decoded.data) ~= "table" then return {} end
 			for _, server in ipairs(decoded.data or {}) do
 				local id = server.id
 				local playing = tonumber(server.playing)
@@ -11649,6 +12085,7 @@ if IS_MINIGAME_PLACE then
 					and id ~= ""
 					and id ~= game.JobId
 					and not seen[id]
+					and not blacklistedHP(id)
 					and playing
 					and maxPlayers
 					and maxPlayers > 0
@@ -11664,6 +12101,11 @@ if IS_MINIGAME_PLACE then
 					}
 				end
 			end
+			cursor = decoded.nextPageCursor
+			if type(cursor) ~= "string" or cursor == "" then break end
+			if cursors[cursor] then return {} end
+			cursors[cursor] = true
+			until #candidates >= 10 or not screenGui.Parent
 			table.sort(candidates, function(a, b)
 				if a.playing ~= b.playing then return a.playing > b.playing end
 				if a.fullness ~= b.fullness then return a.fullness > b.fullness end
@@ -11674,12 +12116,17 @@ if IS_MINIGAME_PLACE then
 		end
 
 		local function refreshServerCacheHP()
-			if cacheRefreshingHP or not screenGui.Parent then return end
+			if cacheRefreshingHP or not screenGui.Parent or os.clock() < nextCacheAttemptHP then return end
 			cacheRefreshingHP = true
+			nextCacheAttemptHP = os.clock() + 2
 			local ok, candidates = pcall(collectCandidatesHP)
 			if ok and type(candidates) == "table" and #candidates > 0 then
 				cachedCandidatesHP = candidates
 				serverCacheAtHP = os.clock()
+			else
+				cachedCandidatesHP = {}
+				serverCacheAtHP = 0
+				nextCacheAttemptHP = os.clock() + 5
 			end
 			cacheRefreshingHP = false
 		end
@@ -11689,6 +12136,7 @@ if IS_MINIGAME_PLACE then
 			local topTen = {}
 			for _, candidate in ipairs(candidates) do
 				if candidate.id ~= game.JobId
+					and not blacklistedHP(candidate.id)
 					and tonumber(candidate.playing)
 					and tonumber(candidate.maxPlayers)
 					and candidate.playing < candidate.maxPlayers
@@ -11706,6 +12154,7 @@ if IS_MINIGAME_PLACE then
 		end
 
 		local function cachedChoiceHP()
+			if serverCacheAtHP <= 0 or os.clock() - serverCacheAtHP > PRESENCE_HOP_CACHE_MAX_AGE_HP then return nil end
 			return chooseTopTenHP(cachedCandidatesHP)
 		end
 
@@ -11720,7 +12169,7 @@ if IS_MINIGAME_PLACE then
 
 
 
-			return freshPresenceChoiceHP() or cachedChoiceHP()
+			return freshPresenceChoiceHP()
 		end
 
 		local function hopDifferentHP()
@@ -11736,6 +12185,14 @@ if IS_MINIGAME_PLACE then
 				return
 			end
 			hoppingHP = true
+			-- Query again for every teleport attempt, including retries.
+			while cacheRefreshingHP and screenGui.Parent do task.wait(0.1) end
+			if os.clock() < nextCacheAttemptHP then
+				hoppingHP = false
+				return
+			end
+			refreshServerCacheHP()
+			collisionDueHP = presenceDueHP()
 
 
 
@@ -11749,6 +12206,8 @@ if IS_MINIGAME_PLACE then
 				return
 			end
 			local activeBeforeTeleport = activeMinigameHP()
+			processMatchResultHP(activeBeforeTeleport, playingHP(activeBeforeTeleport))
+			scanBoothPurchasesHP()
 			local checkServerDueHP =
 				autoServerHopState.RuntimeCheckServerHopRequested == true
 			local manualDueHP =
@@ -11756,7 +12215,6 @@ if IS_MINIGAME_PLACE then
 			if not scheduledDueHP()
 				or (
 					not collisionDueHP
-					and not checkServerDueHP
 					and not manualDueHP
 					and boothBlockRemainingHP > 0
 				)
@@ -11794,6 +12252,15 @@ if IS_MINIGAME_PLACE then
 			end
 
 			local ok = pcall(function()
+				local finalActive = activeMinigameHP()
+				processMatchResultHP(finalActive, playingHP(finalActive))
+				scanBoothPurchasesHP()
+				if not scheduledDueHP() or (not presenceDueHP() and (
+					lifecycleBlockedHP(finalActive) or (not manualDueHP and boothBlockRemainingHP > 0)
+				)) then
+					hoppingHP = false
+					return
+				end
 				TeleportServiceHP:TeleportToPlaceInstance(game.PlaceId, chosen.id, LocalPlayerHP)
 			end)
 
@@ -11937,7 +12404,7 @@ if IS_MINIGAME_PLACE then
 				local shouldRefreshHP = false
 				local maxCacheAgeHP = 10
 
-				if autoServerHopState.Utility.PauseScript ~= true then
+				if presenceNowHP then
 					shouldRefreshHP = serverCacheAtHP == 0
 						or nowHP - serverCacheAtHP >= 1.25
 					maxCacheAgeHP = 1.25
@@ -11968,7 +12435,7 @@ if IS_MINIGAME_PLACE then
 					end
 				end
 
-				if shouldRefreshHP then
+				if shouldRefreshHP and not hopDueHP and os.clock() >= nextCacheAttemptHP then
 					task.spawn(refreshServerCacheHP)
 				end
 			end
@@ -11985,7 +12452,7 @@ if IS_MINIGAME_PLACE then
 					or boothBlockRemainingHP <= 0
 				)
 				and not hoppingHP
-				and preparedHopReadyHP
+				and os.clock() >= nextCacheAttemptHP
 			then
 				task.spawn(hopDifferentHP)
 			end
@@ -12967,7 +13434,31 @@ if IS_MINIGAME_PLACE then
 
 		local function neverDeleteADI(item)
 			local state = autoServerHopState and autoServerHopState.Utility
-			if not state or state.NeverDeleteEnabled ~= true then
+			if not state or type(item) ~= "table" then return false end
+			local function matches(values, selected)
+				if type(selected) ~= "table" then return false end
+				if type(values) == "string" then
+					for value in string.gmatch(values, "[^,|;]+") do
+						if selected[string.match(value, "^%s*(.-)%s*$")] == true then return true end
+					end
+				elseif type(values) == "table" then
+					for key, value in pairs(values) do
+						if value ~= false and value ~= nil then
+							local name = type(key) == "number" and value or key
+							if selected[tostring(name)] == true then return true end
+						end
+					end
+				end
+				return false
+			end
+			local sub = type(item.sub) == "table" and item.sub or {}
+			for _, fields in ipairs({{"traits", "Traits", "DeleteAvoidTraits"}, {"mutation", "Mutation", "DeleteAvoidMutations"}}) do
+				local selected = state[fields[3]]
+				if matches(item[fields[1]], selected) or matches(item[fields[2]], selected)
+					or matches(sub[fields[1]], selected) or matches(sub[fields[2]], selected)
+				then return true end
+			end
+			if state.NeverDeleteEnabled ~= true then
 				return false
 			end
 			local selected = state.NeverDeleteItems
@@ -13282,6 +13773,7 @@ if IS_MINIGAME_PLACE then
 
 			local function capacityClassification(item)
 				if type(item) ~= "table"
+					or neverDeleteADI(item)
 					or inventoryItemTypeADI(item) ~= "Brainrot"
 				then
 					return nil
@@ -14711,7 +15203,9 @@ if IS_MINIGAME_PLACE then
 			and not (
 				autoServerHopState
 				and autoServerHopState.Utility
-				and autoServerHopState.Utility.AutoEquipBestBrainrot == true
+				and (autoServerHopState.Utility.AutoEquipBestBrainrot == true
+					or autoServerHopState.Utility.AutoEquipMount == true
+					or autoServerHopState.Utility.AutoEquipBoth == true)
 			)
 		do
 			task.wait(0.10)
@@ -14841,35 +15335,62 @@ if IS_MINIGAME_PLACE then
 			end
 		end
 
-		local function mountAE()
+		local mountedIdAE
+		local mountedCharacterAE
+		local function rideActionAE(action)
 			if not RideActionAE or os.clock() < nextRideAtAE then return false end
 			nextRideAtAE = os.clock() + 0.75
 			local ok, result = pcall(function()
-				return RideActionAE:InvokeServer("mount")
+				return RideActionAE:InvokeServer(action)
 			end)
 			return ok and result ~= false
+		end
+
+		local function inventoryItemAE(inventory, id)
+			if id == nil then return nil end
+			return inventory[id] or inventory[tostring(id)] or inventory[tonumber(id)]
+		end
+
+		local function isRideableAE(item)
+			if type(item) ~= "table" or itemTypeAE(item) ~= "Brainrot" then return false end
+			local name = item.name or (item.sub and item.sub.name)
+			local ok, result = pcall(RideableAE.isRideable, name)
+			return ok and result == true
+		end
+
+		local function equipAE(id, character, humanoid, backpack)
+			if id == nil then return false end
+			id = tostring(id)
+			local tool = character:FindFirstChild(id)
+			if tool and tool:IsA("Tool") then return true end
+			tool = backpack:FindFirstChild(id)
+			if tool and tool:IsA("Tool") then pcall(humanoid.EquipTool, humanoid, tool) end
+			tool = character:FindFirstChild(id)
+			return tool ~= nil and tool:IsA("Tool")
 		end
 
 		while screenGui.Parent do
 			task.wait(0.35)
 			local state = autoServerHopState.Utility
-			if state.PauseScript == true
-			or state.PauseMinigameFeatures == true
-				or state.AutoEquipBestBrainrot ~= true
-				or (state.EquipBestBrainrot ~= true
-					and state.EquipBestMountableBrainrot ~= true
-					and state.EquipSpecificBrainrot ~= true)
-			then
-				continue
-			end
+			local hold = state.AutoEquipBestBrainrot == true or state.AutoEquipBoth == true
+			local mount = state.AutoEquipMount == true or state.AutoEquipBoth == true
+			local specificKey = state.AutoEquipBoth and "EquipBothSpecific"
+				or state.AutoEquipMount and "EquipMountSpecific" or "EquipSpecificBrainrot"
+			local bestKey = state.AutoEquipBoth and "EquipBothBest"
+				or state.AutoEquipMount and "EquipMountBest" or "EquipBestBrainrot"
+			if state.PauseScript == true or state.PauseMinigameFeatures == true
+				or not (hold or mount) or not (state[specificKey] or state[bestKey])
+			then continue end
 
 			refreshAE()
 			local inventory = tryAE(PlayerDataAE, {"Inventory"})
 			local character = LocalPlayerAE.Character
 			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 			local backpack = LocalPlayerAE:FindFirstChildOfClass("Backpack")
-			if type(inventory) ~= "table" or not character or not humanoid or not backpack then
-				continue
+			if type(inventory) ~= "table" or not character or not humanoid or not backpack then continue end
+			if mountedCharacterAE ~= character then
+				mountedIdAE = nil
+				mountedCharacterAE = character
 			end
 
 			local minigameActive = tryAE(ActiveMinigameAE, {"phase"}) ~= nil
@@ -14879,156 +15400,52 @@ if IS_MINIGAME_PLACE then
 				continue
 			end
 
-			local bestId
-			local bestRank
-			local bestRideableId
-			local bestRideableName
-
-			for _, id in ipairs(sortedIdsAE(inventory)) do
-				local item = inventory[id] or inventory[tostring(id)]
-				if type(item) == "table" and itemTypeAE(item) == "Brainrot" then
-					local rarity = rarityAE(item)
-					local rank = rarityRankAE[rarity]
-					if not bestId then
-						bestId = tostring(id)
-						bestRank = rank
+			local holdId, mountId
+			if state[specificKey] == true then
+				local holdItem = inventoryItemAE(inventory, state.SpecificBrainrotId)
+				if hold and type(holdItem) == "table" and itemTypeAE(holdItem) == "Brainrot" then
+					holdId = tostring(state.SpecificBrainrotId)
+				end
+				if mount and isRideableAE(inventoryItemAE(inventory, state.SpecificMountBrainrotId)) then
+					mountId = tostring(state.SpecificMountBrainrotId)
+				end
+			else
+				for _, id in ipairs(sortedIdsAE(inventory)) do
+					local item = inventoryItemAE(inventory, id)
+					if type(item) == "table" and itemTypeAE(item) == "Brainrot" then
+						if hold and not holdId then holdId = tostring(id) end
+						if mount and not mountId and isRideableAE(item) then mountId = tostring(id) end
 					end
-
-					if bestRank and rank
-						and (rank == bestRank or rank == bestRank - 1)
-					then
-						local itemName = item.name or (item.sub and item.sub.name)
-						local rideable = false
-						if type(itemName) == "string" and itemName ~= "" then
-							pcall(function()
-								rideable = RideableAE.isRideable(itemName) == true
-							end)
-						end
-						if rideable then
-							bestRideableId = tostring(id)
-							bestRideableName = itemName
-							break
-						end
-					elseif bestRank and rank and rank < bestRank - 1 then
-						break
-					end
+					if (not hold or holdId) and (not mount or mountId) then break end
 				end
 			end
 
 			local mounted = LocalPlayerAE:GetAttribute("RideableBrainrotActive") == true
-			local specificId = state.EquipSpecificBrainrot == true
-				and state.SpecificBrainrotId
-				or nil
-			local specificItem = specificId and (
-				inventory[specificId]
-					or inventory[tostring(specificId)]
-					or (tonumber(specificId) and inventory[tonumber(specificId)] or nil)
-			) or nil
-			if specificId ~= nil
-				and (
-					type(specificItem) ~= "table"
-					or itemTypeAE(specificItem) ~= "Brainrot"
-				)
-			then
-
-
-				state.SpecificBrainrotId = nil
-				specificId = nil
-				specificItem = nil
-				local refreshSettings = rawget(_G, "__TUFFHUB_REFRESH_DYNAMIC_DROPDOWNS")
-				if type(refreshSettings) == "function" then
-					task.defer(refreshSettings)
-				end
-			end
-
-			local desiredId
-			local desiredName
-			local shouldMount = false
-
-			if specificId ~= nil then
-				desiredId = tostring(specificId)
-				desiredName = specificItem.name
-					or (specificItem.sub and specificItem.sub.name)
-				if state.MountBrainrotIfPossible == true
-					and type(desiredName) == "string"
-				then
-					pcall(function()
-						shouldMount = RideableAE.isRideable(desiredName) == true
-					end)
-				end
-			elseif state.EquipBestMountableBrainrot == true then
-				desiredId = bestRideableId
-				desiredName = bestRideableName
-				shouldMount = desiredId ~= nil
-			else
-
-
-				desiredId = bestId
-				local desiredItem = desiredId and (
-					inventory[desiredId] or inventory[tostring(desiredId)]
-				) or nil
-				desiredName = type(desiredItem) == "table"
-					and (desiredItem.name or (desiredItem.sub and desiredItem.sub.name))
-					or nil
-				if state.MountBrainrotIfPossible == true
-					and type(desiredName) == "string"
-				then
-					pcall(function()
-						shouldMount = RideableAE.isRideable(desiredName) == true
-					end)
-				end
-			end
-
-			if not desiredId then continue end
-
+			local mountItem = inventoryItemAE(inventory, mountId)
+			local mountName = mountItem and (mountItem.name or (mountItem.sub and mountItem.sub.name))
 			if mounted then
-				local mountedName = LocalPlayerAE:GetAttribute("RideableBrainrotName")
-				if shouldMount
-					and (
-						desiredName == nil
-						or mountedName == desiredName
-					)
+				-- Establish exact inventory identity once, even for duplicate brainrot names.
+				if not mount or (mountId and (mountedIdAE ~= mountId
+					or LocalPlayerAE:GetAttribute("RideableBrainrotName") ~= mountName))
 				then
-					unequipBrainrotToolsAE(character, humanoid, inventory)
+					if rideActionAE("unmount") then mountedIdAE = nil end
 					continue
 				end
-
-
-				continue
-			end
-
-			local equipped = character:FindFirstChild(desiredId)
-			if not (equipped and equipped:IsA("Tool")) then
-				local tool = backpack:FindFirstChild(desiredId)
-				if tool and tool:IsA("Tool") then
-					pcall(humanoid.EquipTool, humanoid, tool)
-					equipped = character:FindFirstChild(desiredId)
+			else
+				if mountId then
+					if equipAE(mountId, character, humanoid, backpack) and rideActionAE("mount") then
+						mountedIdAE = mountId
+					end
+					-- Wait for replicated mount state before changing the held tool.
+					continue
 				end
+				mountedIdAE = nil
 			end
 
-			if shouldMount and equipped and equipped:IsA("Tool") and mountAE() then
-				task.spawn(function()
-					local deadline = os.clock() + 1.25
-					while screenGui.Parent
-						and os.clock() < deadline
-						and LocalPlayerAE:GetAttribute("RideableBrainrotActive") ~= true
-					do
-						task.wait(0.03)
-					end
-					if LocalPlayerAE:GetAttribute("RideableBrainrotActive") == true
-						and (
-							desiredName == nil
-							or LocalPlayerAE:GetAttribute("RideableBrainrotName") == desiredName
-						)
-					then
-						local liveCharacter = LocalPlayerAE.Character
-						local liveHumanoid = liveCharacter
-							and liveCharacter:FindFirstChildOfClass("Humanoid")
-						if liveCharacter and liveHumanoid then
-							unequipBrainrotToolsAE(liveCharacter, liveHumanoid, inventory)
-						end
-					end
-				end)
+			if hold then
+				equipAE(holdId, character, humanoid, backpack)
+			elseif mounted then
+				unequipBrainrotToolsAE(character, humanoid, inventory)
 			end
 		end
 	end)
@@ -17269,8 +17686,8 @@ local KERNEL_COMPENSATION_HISTORY = 7
 
 
 
-local BASE_PRECISION_SPIN_WINDOW = 0.004
-local MAX_PRECISION_SPIN_WINDOW = 0.010
+local BASE_PRECISION_SPIN_WINDOW = 0.0005
+local MAX_PRECISION_SPIN_WINDOW = 0.001
 local FAILSAFE_EXTRA_EARLY_LEAD = 0.000
 
 
@@ -17334,6 +17751,8 @@ local controller = {
     lastResultIdentity = nil,
     currentButton = nil,
     currentOuter = nil,
+    retiredButton = nil,
+    lastFrameTime = 1 / 60,
     dataPingSamples = {},
     networkPingSamples = {},
     timingModel = timingModel,
@@ -17603,7 +18022,7 @@ local function locateOuterRing()
 
 
     for _, button in ipairs(h:GetChildren()) do
-        if button:IsA("TextButton") then
+        if button:IsA("TextButton") and button ~= controller.retiredButton then
             local candidate = nil
             local candidateScale = -math.huge
 
@@ -17680,7 +18099,9 @@ local function resultBlocksAttempt(state)
 
 
 
-    return type(state and state.lastResult) == "table"
+    local result = state and state.lastResult
+    return type(result) == "table"
+        and tonumber(result.cellIndex) == tonumber(state.activeKernelSlot)
 end
 
 local function kernelStillLive(slot)
@@ -17836,13 +18257,16 @@ local function preciseWaitUntil(targetTime, slot, key)
 
 
 
-        task.wait(math.max(0.001, remaining - spinWindow))
+        -- Reserve a scheduler frame; task.wait resumes on Heartbeat.
+        local frameBudget = math.clamp(controller.lastFrameTime, 1 / 240, 0.1)
+        task.wait(math.max(0, remaining - frameBudget - spinWindow))
     end
 
     if controller.currentKernelKey ~= key or not kernelStillLive(slot) then
         return false
     end
 
+    local spinStartedAt = os.clock()
     while nowServer() < targetTime do
         if controller.destroyed
             or not scriptEnabled
@@ -17850,6 +18274,10 @@ local function preciseWaitUntil(targetTime, slot, key)
             or controller.currentKernelKey ~= key
         then
             return false
+        end
+        if os.clock() - spinStartedAt >= MAX_PRECISION_SPIN_WINDOW then
+            task.wait()
+            spinStartedAt = os.clock()
         end
     end
 
@@ -17879,10 +18307,7 @@ local function fireAttempt(slot, key, targetTime, details)
 
 
 
-        local reportedAt = tonumber(targetTime) or firedAt
-        if reportedAt > firedAt then
-            reportedAt = firedAt
-        end
+        local reportedAt = firedAt
         sent = pcall(
             MinigameGameAction.FireServer,
             MinigameGameAction,
@@ -17975,7 +18400,7 @@ local function runKernel(slot, duration, key, stateSeenAt)
 
 
 
-        while kernelStillLive(slot) do
+        while controller.currentKernelKey == key and kernelStillLive(slot) do
             local scale, sampledAt = sampleOuterScale()
             latestScale = scale or latestScale
 
@@ -18040,18 +18465,24 @@ local function runKernel(slot, duration, key, stateSeenAt)
                 source = "live-ring+latency"
                 break
             elseif sampleCount > 0
-                and remainingToTarget <= LIMITED_GEOMETRY_LOCK_WINDOW
+                and remainingToTarget <= math.max(
+                    LIMITED_GEOMETRY_LOCK_WINDOW,
+                    controller.lastFrameTime * 2 + MAX_PRECISION_SPIN_WINDOW
+                )
             then
                 source = "limited-ring-failsafe"
                 break
             elseif sampleCount == 0
-                and remainingToTarget <= ZERO_GEOMETRY_HARD_FALLBACK_WINDOW
+                and remainingToTarget <= math.max(
+                    ZERO_GEOMETRY_HARD_FALLBACK_WINDOW,
+                    controller.lastFrameTime * 2 + MAX_PRECISION_SPIN_WINDOW
+                )
             then
                 source = "state-arrival-failsafe"
                 break
             end
 
-            RunService.RenderStepped:Wait()
+            RunService.Heartbeat:Wait()
         end
     end
 
@@ -18308,6 +18739,8 @@ local function armCurrentKernel()
     if controller.currentKernelKey == nil
         or controller.currentKernelSlot ~= slot
     then
+        controller.retiredButton = controller.currentButton or controller.retiredButton
+        clearGeometryCache()
         controller.kernelOccurrence += 1
         controller.currentKernelSlot = slot
         controller.currentKernelKey = table.concat({
@@ -18328,7 +18761,13 @@ local function armCurrentKernel()
 
     local stateSeenAt = nowServer()
 
-    task.spawn(runKernel, slot, duration, key, stateSeenAt)
+    task.spawn(function()
+        local ok, err = pcall(runKernel, slot, duration, key, stateSeenAt)
+        controller.scheduled[key] = nil
+        if not ok then
+            controller.lastTimingError = tostring(err)
+        end
+    end)
 end
 
 local function resultIdentity(result, key)
@@ -18405,8 +18844,8 @@ local function update()
     end
 
     if isActive then
-        armCurrentKernel()
         reportAndCalibrate()
+        armCurrentKernel()
     end
 end
 
@@ -18460,6 +18899,7 @@ local pingAccumulator = 0
 
 controller.connections[#controller.connections + 1] =
     RunService.Heartbeat:Connect(function(dt)
+        controller.lastFrameTime = math.clamp(tonumber(dt) or 1 / 60, 1 / 240, 0.1)
         if not popcornActive() then
             pingAccumulator = 0
             return
@@ -27191,9 +27631,10 @@ local function popcornResultCell(state)
 end
 
 local function readPopcornPrivateState(stateName)
-    local private = tracker.popcornPrivatePayload
+    -- Nested patches can advance live state without replacing the cached parent payload.
+    local private = tryIndex({ "session", "private" })
     if private == nil then
-        private = tryIndex({ "session", "private" })
+        private = tracker.popcornPrivatePayload
     end
 
 
@@ -29095,10 +29536,28 @@ end
 
 
 
-local okRaw, rawListener = pcall(function()
-    return ActiveMinigame:ListenRaw(function()
-        controller.evaluationRequested = true
+local terminalEvaluationScheduled = false
+local function requestTerminalEvaluation()
+    controller.evaluationRequested = true
+    if controller.destroyed or terminalEvaluationScheduled then
+        return
+    end
+    terminalEvaluationScheduled = true
+    -- Let the current replication patch finish, then check before the next Heartbeat.
+    task.defer(function()
+        terminalEvaluationScheduled = false
+        if controller.destroyed then
+            return
+        end
+        local ok, err = pcall(evaluateState)
+        if not ok then
+            controller.lastEvaluationError = tostring(err)
+        end
     end)
+end
+
+local okRaw, rawListener = pcall(function()
+    return ActiveMinigame:ListenRaw(requestTerminalEvaluation)
 end)
 if okRaw then
     addDisconnector(rawListener)
