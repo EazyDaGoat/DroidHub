@@ -211,8 +211,8 @@ local PANEL_BACKGROUND = RGB(
 	)
 local PANEL_CHEVRON_COLOR = MUTED_TEXT_COLOR
 local FEATURE_OFF_COLOR=RGB(24,25,29)
-local IS_MINIGAME_PLACE = game.PlaceId == 111917342868480
-    or game.PlaceId == 131623223084840
+-- Standalone minigames build: always initialize, regardless of PlaceId/GameId.
+local MINIGAME_MODE = true
 local MINIGAME_AUTOPLAY_KEY = "__TUFFHUB_MINIGAME_AUTOPLAY"
 local AUTO_OFFER_KEY = "__TUFFHUB_AUTO_OFFER"
 local AUTO_ACCEPT_KEY = "__TUFFHUB_AUTO_ACCEPT"
@@ -232,11 +232,13 @@ local RARITY_OPTIONS = table.clone(BRAINROT_RARITY_OPTIONS)
 RARITY_OPTIONS[#RARITY_OPTIONS + 1] = "Tokens"
 local minigameAutoplayState
 local autoOfferState
+local regularAutoOfferState
 local autoAcceptState
+local tradeRequestCriteriaState
 local autoSitState
 local autoCancelState
 local autoServerHopState
-if IS_MINIGAME_PLACE then
+if MINIGAME_MODE then
 	minigameAutoplayState = {}
 	rawset(_G, MINIGAME_AUTOPLAY_KEY, minigameAutoplayState)
 	for _, id in ipairs({
@@ -252,17 +254,25 @@ if IS_MINIGAME_PLACE then
 	end
 	autoOfferState = {}
 	rawset(_G, AUTO_OFFER_KEY, autoOfferState)
+	regularAutoOfferState = {}
+	rawset(_G, "__TUFFHUB_REGULAR_AUTO_OFFER", regularAutoOfferState)
 	for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
-		autoOfferState[rarity] = {
-			Enabled = false,
-			OfferModeRarity = true,
-			OfferModeSpecific = false,
-			Targets = {},
-			Amounts = {},
-			SpecificTargets = {},
-			Tokens = 0,
-			OfferAllTokens = false,
-		}
+		local function newOfferConfig()
+			return {
+				Enabled = false,
+				OfferModeRarity = true,
+				OfferModeSpecific = false,
+				Targets = {},
+				Amounts = {},
+				SpecificTargets = {},
+				SpecificMutations = {},
+				SpecificTraits = {},
+				Tokens = 0,
+				OfferAllTokens = false,
+			}
+		end
+		autoOfferState[rarity] = newOfferConfig()
+		regularAutoOfferState[rarity] = newOfferConfig()
 	end
 	autoAcceptState = {}
 	rawset(_G, AUTO_ACCEPT_KEY, autoAcceptState)
@@ -275,6 +285,18 @@ if IS_MINIGAME_PLACE then
 		}
 	end
 	autoAcceptState.Tokens = {
+		Enabled = false,
+		Amount = 1,
+	}
+	tradeRequestCriteriaState = {}
+	rawset(_G, "__TUFFHUB_TRADE_REQUEST_CRITERIA", tradeRequestCriteriaState)
+	for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+		tradeRequestCriteriaState[rarity] = {
+			Enabled = false,
+			Amount = 1,
+		}
+	end
+	tradeRequestCriteriaState.Tokens = {
 		Enabled = false,
 		Amount = 1,
 	}
@@ -354,7 +376,7 @@ if IS_MINIGAME_PLACE then
 		AutoOfferBrainrotMatchOfferAllTokens = false,
 		AutoOfferBasedOnTradeChat = false,
 		AutoOfferTradeChatOffers = {
-			{LookFor = "", Targets = {}, Amounts = {}, BrainrotId = nil, TokenAmount = 0, OfferAllTokens = false},
+			{LookFor = "", Targets = {}, Amounts = {}, SpecificItems = {}, SpecificMutations = {}, SpecificTraits = {}, BrainrotId = nil, TokenAmount = 0, OfferAllTokens = false},
 		},
 		AutoAcceptMaster = false,
 		AutoAcceptMustHaveOne = true,
@@ -362,9 +384,77 @@ if IS_MINIGAME_PLACE then
 		AutoAcceptSpecificItems = {
 			{Item = nil, Mutations = {}, Traits = {}},
 		},
+
+		-- Normal player-to-player trade automation. Accept Offer intentionally uses
+		-- the exact same shared criteria as Minigame Offers. Trade Request Criteria
+		-- are separate because they are evaluated before entering a regular trade.
+		AutoAcceptTradesEnabled = false, -- legacy compatibility only
+		AutoAcceptTradesAcceptOffers = false,
+		AutoAcceptTradesAcceptRequests = false,
+		AutoAcceptTradesRequestMustHaveOne = true,
+		AutoAcceptTradesRequestMustHaveAll = false,
+		AutoAcceptTradesRequestSpecificItems = {
+			{Item = nil, Mutations = {}, Traits = {}},
+		},
+		-- Legacy request-only criteria are retained for one-way migration.
+		AutoAcceptTradesCriteriaRarities = {Any = true},
+		AutoAcceptTradesCriteriaSpecificItems = {Any = true},
+		AutoAcceptTradesCriteriaSpecificMutations = {},
+		AutoAcceptTradesCriteriaSpecificTraits = {},
+		AutoAcceptTradesCriteriaTokens = 0, -- legacy: 0 = Any
+
+		-- Regular-trade reactive offers mirror Minigame Offers while remaining fully separate.
+		RegularAutoOfferMaster = false,
+		RegularAutoOfferTokensEnabled = false,
+		RegularAutoOfferMatchTokensWithTokens = false,
+		RegularAutoOfferTokenAddRatio = 1,
+		RegularAutoOfferLowestTokensToMatch = 1,
+		RegularAutoOfferMatchTokensWithBrainrots = false,
+		RegularAutoOfferTokenAmount = 0,
+		RegularAutoOfferTokenRarity = nil,
+		RegularAutoOfferBasedOnTradeChat = false,
+		RegularAutoOfferTradeChatOffers = {
+			{LookFor = "", Targets = {}, Amounts = {}, SpecificItems = {}, SpecificMutations = {}, SpecificTraits = {}, TokenAmount = 0, OfferAllTokens = false},
+		},
+
+		AutoAcceptTradesAcceptSpecificItems = {
+			{Item = nil, Mutations = {}, Traits = {}, Amount = 1},
+		},
+		AutoAcceptTradesAcceptTokensEnabled = false,
+		AutoAcceptTradesAcceptTokens = 1,
+		-- Delays dedicated to normal player-to-player trades.
+		AutoAcceptTradesCustomDelays = false,
+		AutoAcceptTradesInitialDelay = 0,
+		AutoAcceptTradesDelayAfterTradeMessage = 0.75,
+		AutoAcceptTradesReactionDelay = 0,
+		AutoAcceptTradesAddBrainrotDelay = 0.03,
+		AutoAcceptTradesRemoveBrainrotDelay = 0.03,
+		AutoAcceptTradesAddTokenDelay = 0,
+		AutoAcceptTradesRemoveTokenDelay = 0,
+		AutoAcceptTradesAcceptDelay = 0,
+
+		-- Regular-trade opening offer. Separate from the minigame/wager opening offer.
+		RegularOpeningAutoshowBestBrainrots = false,
+		RegularOpeningCustomBrainrots = false,
+		RegularOpeningAutoshowAllTokens = false,
+		RegularOpeningCustomTokens = false,
+		RegularOpeningTokenAmount = 0,
+		RegularOpeningSpecificMutations = {},
+		RegularOpeningSpecificTraits = {},
+
+		-- Regular-trade fallbacks. These never modify minigame/wager fallback settings.
+		RegularFallbackOffers = false,
+		RegularFallbackToSpecificItems = false,
+		RegularFallbackToTokens = false,
+		RegularFallbackNextLowerRarityAmount = 1,
+		RegularFallbackAvoidMutationsEnabled = false,
+		RegularFallbackAvoidMutations = {},
+		RegularFallbackAvoidTraitsEnabled = false,
+		RegularFallbackAvoidTraits = {},
 		CustomDelays = false,
 		AutoCancelMaster = false,
-		AutoCancelCheckOpponentsBrainrots = false,
+		AutoCancelCheckOpponentsBrainrots = false, -- legacy/internal rarity-cancel switch
+		AutoCancelBasedOnSpecificItems = false,
 		AutoSitMustOwnAllSelected = false,
 		AutoSitMustOwnOneSelected = true,
 		AutoSitSpecificItems = {
@@ -441,6 +531,8 @@ if IS_MINIGAME_PLACE then
 		DeleteInventoryThreshold = 95,
 		NeverDeleteEnabled = false,
 		NeverDeleteItems = {},
+		NeverDeleteSpecificMutations = {},
+		NeverDeleteSpecificTraits = {},
 		AvoidDeletingTraits = {},
 		AvoidDeletingMutations = {},
 		AutoEquipBestBrainrot = false,
@@ -452,9 +544,13 @@ if IS_MINIGAME_PLACE then
 		HoldEquipBestBrainrot = true,
 		HoldEquipSpecificBrainrot = false,
 		HoldSpecificBrainrotId = nil,
+		HoldSpecificBrainrotMutations = {},
+		HoldSpecificBrainrotTraits = {},
 		MountEquipBestBrainrot = true,
 		MountEquipSpecificBrainrot = false,
 		MountSpecificBrainrotId = nil,
+		MountSpecificBrainrotMutations = {},
+		MountSpecificBrainrotTraits = {},
 		-- Legacy keys kept for migration/backward compatibility.
 		EquipBestBrainrot = false,
 		EquipBestMountableBrainrot = false,
@@ -474,6 +570,8 @@ if IS_MINIGAME_PLACE then
 		OpeningOfferCustomTokenAmount = false,
 		OpeningOfferTokenAmount = 0,
 		OpeningOfferShowAllTokens = false,
+		OpeningOfferSpecificMutations = {},
+		OpeningOfferSpecificTraits = {},
 		InitialJoinDelay = 1.125,
 		DelayAfterTradeMessage = 0.75,
 		ReactionDelay = 1.6875,
@@ -517,7 +615,9 @@ if IS_MINIGAME_PLACE then
 		CheckServerHopNobodyMinigamesArea = false,
 		CheckServerHopPlayedEveryoneMinigamesArea = false,
 		CheckServerBrainrotRarities = {},
-		CheckServerSpecificItems = {},
+		CheckServerSpecificItems = {
+			{Item = nil, Mutations = {}, Traits = {}},
+		},
 		CheckServerMutations = {},
 		CheckServerTraits = {},
 		CheckServerMustOwnAll = false,
@@ -533,6 +633,8 @@ if IS_MINIGAME_PLACE then
 		AutoBoothAvoidTraits = {},
 		AutoBoothAvoidMutations = {},
 		AutoBoothAvoidBrainrots = {},
+		AutoBoothAvoidSpecificMutations = {},
+		AutoBoothAvoidSpecificTraits = {},
 		AutoBoothSpecificOnly = false,
 		AutoBoothSpecificBrainrots = {},
 		AutoBoothMessageAllListingsCompleted = false,
@@ -563,13 +665,28 @@ if IS_MINIGAME_PLACE then
 	for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 		autoServerHopState.Utility["AutoOffer" .. rarity .. "OfferAllTokens"] = false
 		autoServerHopState.Utility["Fallback" .. rarity .. "OfferAllTokens"] = false
-		autoServerHopState.Utility["FallbackSpecific" .. rarity .. "Item"] = nil
+		autoServerHopState.Utility["FallbackSpecific" .. rarity .. "Item"] = nil -- legacy singular fallback
+		autoServerHopState.Utility["FallbackSpecific" .. rarity .. "Items"] = {}
+		autoServerHopState.Utility["FallbackSpecific" .. rarity .. "Mutations"] = {}
+		autoServerHopState.Utility["FallbackSpecific" .. rarity .. "Traits"] = {}
 		autoServerHopState.Utility["AutoAccept" .. rarity .. "Mutations"] = {}
 		autoServerHopState.Utility["AutoAccept" .. rarity .. "Traits"] = {}
+		autoServerHopState.Utility["AutoAcceptTradesRequest" .. rarity .. "Mutations"] = {}
+		autoServerHopState.Utility["AutoAcceptTradesRequest" .. rarity .. "Traits"] = {}
 		autoServerHopState.Utility["AutoSit" .. rarity .. "Mutations"] = {}
 		autoServerHopState.Utility["AutoSit" .. rarity .. "Traits"] = {}
 		autoServerHopState.Utility["AutoCancel" .. rarity .. "Mutations"] = {}
 		autoServerHopState.Utility["AutoCancel" .. rarity .. "Traits"] = {}
+		autoServerHopState.Utility["AutoAcceptTradesAccept" .. rarity .. "Enabled"] = false -- legacy; migrated into shared Accept Offer criteria
+		autoServerHopState.Utility["AutoAcceptTradesAccept" .. rarity .. "Amount"] = 1
+		autoServerHopState.Utility["RegularFallbackSpecific" .. rarity .. "Items"] = {}
+		autoServerHopState.Utility["RegularFallbackSpecific" .. rarity .. "Mutations"] = {}
+		autoServerHopState.Utility["RegularFallbackSpecific" .. rarity .. "Traits"] = {}
+		autoServerHopState.Utility["RegularFallbackTokens" .. rarity] = 0
+		autoServerHopState.Utility["RegularFallback" .. rarity .. "OfferAllTokens"] = false
+	end
+	for slotIndex = 1, 6 do
+		autoServerHopState.Utility["RegularOpeningBrainrot" .. tostring(slotIndex)] = nil
 	end
 	rawset(_G, "__TUFFHUB_UTILITY_FEATURES", autoServerHopState.Utility)
 	do
@@ -586,6 +703,8 @@ if IS_MINIGAME_PLACE then
 			autoServerHopState.Utility[prefix .. "ListByRarity"] = true
 			autoServerHopState.Utility[prefix .. "ListByBrainrot"] = false
 			autoServerHopState.Utility[prefix .. "Brainrot"] = nil
+			autoServerHopState.Utility[prefix .. "BrainrotMutations"] = {}
+			autoServerHopState.Utility[prefix .. "BrainrotTraits"] = {}
 			autoServerHopState.Utility[prefix .. "MinimumCopies"] = 1
 			autoServerHopState.Utility[prefix .. "MessageDelay"] = 0
 		end
@@ -687,7 +806,7 @@ if IS_MINIGAME_PLACE then
 		autoServerHopState.RuntimeBoothMaxSlots = maximum
 		return maximum
 	end
-	if IS_MINIGAME_PLACE then
+	if MINIGAME_MODE then
 		autoServerHopState.RefreshBoothMaxSlots()
 	end
 	autoServerHopState.RefreshOwnedBrainrotOptions = function()
@@ -920,6 +1039,82 @@ if IS_MINIGAME_PLACE then
 			and labels[tostring(id)]
 			or tostring(id)
 	end
+	-- Shared owned-item filters keep every specific-brainrot selector consistent.
+	autoServerHopState.OwnedTradeableItemData = function(id)
+		if id == nil then return nil end
+		local item
+		pcall(function()
+			local Replicator = require(
+				ReplicatedStorage:WaitForChild("Client")
+					:WaitForChild("Modules")
+					:WaitForChild("ReplicatorClient")
+			)
+			local playerData = Replicator.get("PlayerData")
+			local inventory = playerData and playerData:TryIndex({"Inventory"})
+			if type(inventory) == "table" then
+				local sid = tostring(id)
+				item = inventory[sid] or (tonumber(sid) and inventory[tonumber(sid)] or nil)
+			end
+		end)
+		return type(item) == "table" and item or nil
+	end
+	autoServerHopState.ItemMutation = function(item)
+		if type(item) ~= "table" then return nil end
+		local value = item.mutation or item.Mutation
+			or (item.sub and (item.sub.mutation or item.sub.Mutation))
+		return type(value) == "string" and value or nil
+	end
+	autoServerHopState.ItemTraits = function(item)
+		local out = {}
+		if type(item) ~= "table" then return out end
+		local value = item.traits or item.Traits
+			or (item.sub and (item.sub.traits or item.sub.Traits))
+		if type(value) == "table" then
+			for key, enabled in pairs(value) do
+				if enabled ~= nil and enabled ~= false then
+					out[tostring(type(key) == "number" and enabled or key)] = true
+				end
+			end
+		elseif type(value) == "string" then
+			for trait in string.gmatch(value, "[^,|;]+") do
+				trait = string.gsub(trait, "^%s*(.-)%s*$", "%1")
+				if trait ~= "" then out[trait] = true end
+			end
+		end
+		return out
+	end
+	autoServerHopState.ItemMatchesSpecificFilters = function(item, mutations, traits)
+		if type(item) ~= "table" then return false end
+		if type(mutations) == "table" and next(mutations) ~= nil then
+			local mutation = autoServerHopState.ItemMutation(item)
+			if not mutation or mutations[mutation] ~= true then return false end
+		end
+		if type(traits) == "table" and next(traits) ~= nil then
+			local present = autoServerHopState.ItemTraits(item)
+			local matched = false
+			for trait in pairs(traits) do
+				if present[tostring(trait)] == true then matched = true break end
+			end
+			if not matched then return false end
+		end
+		return true
+	end
+	autoServerHopState.OwnedTradeableItemMatchesFilters = function(id, mutations, traits)
+		return autoServerHopState.ItemMatchesSpecificFilters(
+			autoServerHopState.OwnedTradeableItemData(id),
+			mutations,
+			traits
+		)
+	end
+	autoServerHopState.FilterOwnedTradeableItemOptions = function(mutations, traits)
+		local options = {}
+		for _, id in ipairs(autoServerHopState.RefreshOwnedTradeableItemOptions()) do
+			if autoServerHopState.OwnedTradeableItemMatchesFilters(id, mutations, traits) then
+				options[#options + 1] = id
+			end
+		end
+		return options
+	end
 	autoServerHopState.RefreshOwnedOfferableBrainrotOptions = function()
 		local allowed = {}
 		for _, id in ipairs(autoServerHopState.RefreshOwnedTradeableItemOptions()) do
@@ -928,6 +1123,33 @@ if IS_MINIGAME_PLACE then
 		local options = {}
 		for _, id in ipairs(autoServerHopState.RefreshOwnedBrainrotOptions()) do
 			if allowed[tostring(id)] then options[#options + 1] = id end
+		end
+		return options
+	end
+	autoServerHopState.FilterOwnedOfferableBrainrotOptions = function(mutations, traits)
+		local options = {}
+		for _, id in ipairs(autoServerHopState.RefreshOwnedOfferableBrainrotOptions()) do
+			if autoServerHopState.OwnedTradeableItemMatchesFilters(id, mutations, traits) then
+				options[#options + 1] = id
+			end
+		end
+		return options
+	end
+	autoServerHopState.FilterOwnedBrainrotOptions = function(mutations, traits)
+		local options = {}
+		for _, id in ipairs(autoServerHopState.RefreshOwnedBrainrotOptions()) do
+			if autoServerHopState.OwnedTradeableItemMatchesFilters(id, mutations, traits) then
+				options[#options + 1] = id
+			end
+		end
+		return options
+	end
+	autoServerHopState.FilterOwnedMountableBrainrotOptions = function(mutations, traits)
+		local options = {}
+		for _, id in ipairs(autoServerHopState.RefreshOwnedMountableBrainrotOptions()) do
+			if autoServerHopState.OwnedTradeableItemMatchesFilters(id, mutations, traits) then
+				options[#options + 1] = id
+			end
 		end
 		return options
 	end
@@ -1252,12 +1474,61 @@ if IS_MINIGAME_PLACE then
 			"AutoAcceptMustHaveOne",
 			"AutoAcceptMustHaveAll",
 			"AutoAcceptSpecificItems",
+			"AutoAcceptTradesEnabled",
+			"AutoAcceptTradesAcceptOffers",
+			"AutoAcceptTradesAcceptRequests",
+			"AutoAcceptTradesRequestMustHaveOne",
+			"AutoAcceptTradesRequestMustHaveAll",
+			"AutoAcceptTradesRequestSpecificItems",
+			"AutoAcceptTradesCriteriaRarities",
+			"AutoAcceptTradesCriteriaSpecificItems",
+			"AutoAcceptTradesCriteriaSpecificMutations",
+			"AutoAcceptTradesCriteriaSpecificTraits",
+			"AutoAcceptTradesCriteriaTokens",
+			"RegularAutoOfferMaster",
+			"RegularAutoOfferTokensEnabled",
+			"RegularAutoOfferMatchTokensWithTokens",
+			"RegularAutoOfferTokenAddRatio",
+			"RegularAutoOfferLowestTokensToMatch",
+			"RegularAutoOfferMatchTokensWithBrainrots",
+			"RegularAutoOfferTokenAmount",
+			"RegularAutoOfferTokenRarity",
+			"RegularAutoOfferBasedOnTradeChat",
+			"RegularAutoOfferTradeChatOffers",
+			"AutoAcceptTradesAcceptSpecificItems",
+			"AutoAcceptTradesAcceptTokensEnabled",
+			"AutoAcceptTradesAcceptTokens",
+			"AutoAcceptTradesCustomDelays",
+			"AutoAcceptTradesInitialDelay",
+			"AutoAcceptTradesDelayAfterTradeMessage",
+			"AutoAcceptTradesReactionDelay",
+			"AutoAcceptTradesAddBrainrotDelay",
+			"AutoAcceptTradesRemoveBrainrotDelay",
+			"AutoAcceptTradesAddTokenDelay",
+			"AutoAcceptTradesRemoveTokenDelay",
+			"AutoAcceptTradesAcceptDelay",
+			"RegularOpeningAutoshowBestBrainrots",
+			"RegularOpeningCustomBrainrots",
+			"RegularOpeningAutoshowAllTokens",
+			"RegularOpeningCustomTokens",
+			"RegularOpeningTokenAmount",
+			"RegularOpeningSpecificMutations",
+			"RegularOpeningSpecificTraits",
+			"RegularFallbackOffers",
+			"RegularFallbackToSpecificItems",
+			"RegularFallbackToTokens",
+			"RegularFallbackNextLowerRarityAmount",
+			"RegularFallbackAvoidMutationsEnabled",
+			"RegularFallbackAvoidMutations",
+			"RegularFallbackAvoidTraitsEnabled",
+			"RegularFallbackAvoidTraits",
 			"AutoSitMustOwnAllSelected",
 			"AutoSitMustOwnOneSelected",
 			"AutoSitSpecificItems",
 			"CustomDelays",
 			"AutoCancelMaster",
 			"AutoCancelCheckOpponentsBrainrots",
+			"AutoCancelBasedOnSpecificItems",
 			"AutoCancelPlayerMustOwnAllSelected",
 			"AutoCancelPlayerMustOwnAtLeastOneSelected",
 			"AutoCancelSpecificItems",
@@ -1319,6 +1590,8 @@ if IS_MINIGAME_PLACE then
 			"DeleteInventoryThreshold",
 			"NeverDeleteEnabled",
 			"NeverDeleteItems",
+			"NeverDeleteSpecificMutations",
+			"NeverDeleteSpecificTraits",
 			"AvoidDeletingTraits",
 			"AvoidDeletingMutations",
 			"AutoEquipBestBrainrot",
@@ -1330,9 +1603,13 @@ if IS_MINIGAME_PLACE then
 			"HoldEquipBestBrainrot",
 			"HoldEquipSpecificBrainrot",
 			"HoldSpecificBrainrotId",
+			"HoldSpecificBrainrotMutations",
+			"HoldSpecificBrainrotTraits",
 			"MountEquipBestBrainrot",
 			"MountEquipSpecificBrainrot",
 			"MountSpecificBrainrotId",
+			"MountSpecificBrainrotMutations",
+			"MountSpecificBrainrotTraits",
 			"EquipBestBrainrot",
 			"EquipBestMountableBrainrot",
 			"EquipSpecificBrainrot",
@@ -1351,6 +1628,8 @@ if IS_MINIGAME_PLACE then
 			"OpeningOfferCustomTokenAmount",
 			"OpeningOfferTokenAmount",
 			"OpeningOfferShowAllTokens",
+			"OpeningOfferSpecificMutations",
+			"OpeningOfferSpecificTraits",
 			"InitialJoinDelay",
 			"DelayAfterTradeMessage",
 			"ReactionDelay",
@@ -1409,6 +1688,8 @@ if IS_MINIGAME_PLACE then
 			"AutoBoothAvoidTraits",
 			"AutoBoothAvoidMutations",
 			"AutoBoothAvoidBrainrots",
+			"AutoBoothAvoidSpecificMutations",
+			"AutoBoothAvoidSpecificTraits",
 			"AutoBoothSpecificOnly",
 			"AutoBoothSpecificBrainrots",
 			"AutoBoothMessageAllListingsCompleted",
@@ -1440,12 +1721,27 @@ if IS_MINIGAME_PLACE then
 			utilityKeys[#utilityKeys + 1] = "AutoOffer" .. rarity .. "OfferAllTokens"
 			utilityKeys[#utilityKeys + 1] = "Fallback" .. rarity .. "OfferAllTokens"
 			utilityKeys[#utilityKeys + 1] = "FallbackSpecific" .. rarity .. "Item"
+			utilityKeys[#utilityKeys + 1] = "FallbackSpecific" .. rarity .. "Items"
+			utilityKeys[#utilityKeys + 1] = "FallbackSpecific" .. rarity .. "Mutations"
+			utilityKeys[#utilityKeys + 1] = "FallbackSpecific" .. rarity .. "Traits"
 			utilityKeys[#utilityKeys + 1] = "AutoAccept" .. rarity .. "Mutations"
 			utilityKeys[#utilityKeys + 1] = "AutoAccept" .. rarity .. "Traits"
+			utilityKeys[#utilityKeys + 1] = "AutoAcceptTradesRequest" .. rarity .. "Mutations"
+			utilityKeys[#utilityKeys + 1] = "AutoAcceptTradesRequest" .. rarity .. "Traits"
 			utilityKeys[#utilityKeys + 1] = "AutoSit" .. rarity .. "Mutations"
 			utilityKeys[#utilityKeys + 1] = "AutoSit" .. rarity .. "Traits"
 			utilityKeys[#utilityKeys + 1] = "AutoCancel" .. rarity .. "Mutations"
 			utilityKeys[#utilityKeys + 1] = "AutoCancel" .. rarity .. "Traits"
+			utilityKeys[#utilityKeys + 1] = "AutoAcceptTradesAccept" .. rarity .. "Enabled" -- legacy migration source
+			utilityKeys[#utilityKeys + 1] = "AutoAcceptTradesAccept" .. rarity .. "Amount"
+			utilityKeys[#utilityKeys + 1] = "RegularFallbackSpecific" .. rarity .. "Items"
+			utilityKeys[#utilityKeys + 1] = "RegularFallbackSpecific" .. rarity .. "Mutations"
+			utilityKeys[#utilityKeys + 1] = "RegularFallbackSpecific" .. rarity .. "Traits"
+			utilityKeys[#utilityKeys + 1] = "RegularFallbackTokens" .. rarity
+			utilityKeys[#utilityKeys + 1] = "RegularFallback" .. rarity .. "OfferAllTokens"
+		end
+		for slotIndex = 1, 6 do
+			utilityKeys[#utilityKeys + 1] = "RegularOpeningBrainrot" .. tostring(slotIndex)
 		end
 		for index = 4, 14 do
 			local prefix = "AutoBoothListing" .. tostring(index)
@@ -1461,6 +1757,8 @@ if IS_MINIGAME_PLACE then
 			utilityKeys[#utilityKeys + 1] = prefix .. "ListByRarity"
 			utilityKeys[#utilityKeys + 1] = prefix .. "ListByBrainrot"
 			utilityKeys[#utilityKeys + 1] = prefix .. "Brainrot"
+			utilityKeys[#utilityKeys + 1] = prefix .. "BrainrotMutations"
+			utilityKeys[#utilityKeys + 1] = prefix .. "BrainrotTraits"
 			utilityKeys[#utilityKeys + 1] = prefix .. "MinimumCopies"
 			utilityKeys[#utilityKeys + 1] = prefix .. "MessageDelay"
 		end
@@ -1473,7 +1771,9 @@ if IS_MINIGAME_PLACE then
 				Version = 2,
 				MinigameAutoplay = copyJsonSafe(minigameAutoplayState),
 				AutoOffer = copyJsonSafe(autoOfferState),
+				RegularAutoOffer = copyJsonSafe(regularAutoOfferState),
 				AutoAccept = copyJsonSafe(autoAcceptState),
+				TradeRequestCriteria = copyJsonSafe(tradeRequestCriteriaState),
 				AutoSit = copyJsonSafe(autoSitState),
 				AutoCancel = copyJsonSafe(autoCancelState),
 				ServerHop = {
@@ -1678,7 +1978,9 @@ if IS_MINIGAME_PLACE then
 			if type(saved) ~= "table" then return false end
 			mergeInto(minigameAutoplayState, saved.MinigameAutoplay)
 			mergeInto(autoOfferState, saved.AutoOffer)
+			mergeInto(regularAutoOfferState, saved.RegularAutoOffer)
 			mergeInto(autoAcceptState, saved.AutoAccept)
+			mergeInto(tradeRequestCriteriaState, saved.TradeRequestCriteria)
 			mergeInto(autoSitState, saved.AutoSit)
 			mergeInto(autoCancelState, saved.AutoCancel)
 			local serverHop = saved.ServerHop
@@ -1917,6 +2219,129 @@ if IS_MINIGAME_PLACE then
 			then
 				autoServerHopState.Utility.AutoCancelPlayerMustOwnAtLeastOneSelected = true
 			end
+			-- Accept Offer criteria are shared by minigame wagers and regular trades.
+			-- Each trade type has its own action toggle, but the criteria themselves stay identical.
+			if autoServerHopState.Utility.AutoAcceptMustHaveAll == true
+				and autoServerHopState.Utility.AutoAcceptMustHaveOne == true
+			then
+				autoServerHopState.Utility.AutoAcceptMustHaveOne = false
+			elseif autoServerHopState.Utility.AutoAcceptMustHaveAll ~= true
+				and autoServerHopState.Utility.AutoAcceptMustHaveOne ~= true
+			then
+				autoServerHopState.Utility.AutoAcceptMustHaveOne = true
+			end
+			-- Request criteria use an explicit Any sentinel. Old or hand-edited saves
+			-- can contain Any together with concrete selections, which would otherwise
+			-- silently bypass the concrete requirements.
+			do
+				local function normalizeAnySelection(key)
+					local selected = autoServerHopState.Utility[key]
+					if type(selected) ~= "table" then
+						selected = {}
+						autoServerHopState.Utility[key] = selected
+					end
+					local hasSpecific = false
+					for option, enabled in pairs(selected) do
+						if enabled == true and tostring(option) ~= "Any" then
+							hasSpecific = true
+							break
+						end
+					end
+					if hasSpecific then
+						selected.Any = nil
+					else
+						table.clear(selected)
+						selected.Any = true
+					end
+				end
+				normalizeAnySelection("AutoAcceptTradesCriteriaRarities")
+				normalizeAnySelection("AutoAcceptTradesCriteriaSpecificItems")
+				autoServerHopState.Utility.AutoAcceptTradesCriteriaTokens = math.clamp(
+					math.floor(tonumber(autoServerHopState.Utility.AutoAcceptTradesCriteriaTokens) or 0),
+					0,
+					1000000
+				)
+				autoServerHopState.Utility.RegularOpeningTokenAmount = math.clamp(
+					math.floor(tonumber(autoServerHopState.Utility.RegularOpeningTokenAmount) or 0),
+					0,
+					1000000
+				)
+				autoServerHopState.Utility.RegularFallbackNextLowerRarityAmount = math.clamp(
+					math.floor(tonumber(autoServerHopState.Utility.RegularFallbackNextLowerRarityAmount) or 1),
+					1,
+					6
+				)
+				for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+					local tokenKey = "RegularFallbackTokens" .. rarity
+					autoServerHopState.Utility[tokenKey] = math.clamp(
+						math.floor(tonumber(autoServerHopState.Utility[tokenKey]) or 0),
+						0,
+						1000000
+					)
+				end
+			end
+			-- Preserve a legacy specific-item cancel selection when migrating to the
+			-- independently selectable inventory-cancel modes.
+			do
+				local legacySpecific = autoServerHopState.Utility.AutoCancelSpecificItems
+				local hasSpecific = false
+				if type(legacySpecific) == "table" then
+					for _, rule in ipairs(legacySpecific) do
+						if type(rule) == "table" and rule.Item ~= nil and tostring(rule.Item) ~= "" then
+							hasSpecific = true
+							break
+						end
+					end
+				end
+				if hasSpecific then autoServerHopState.Utility.AutoCancelBasedOnSpecificItems = true end
+			end
+			-- The visible Next Lower Rarity master now directly controls lower-rarity
+			-- fallback behavior; retain that relationship for old profiles.
+			if autoServerHopState.Utility.FallbackOffers == true then
+				autoServerHopState.Utility.FallbackToNextLowerRarityBrainrot = true
+			end
+			-- Convert legacy singular per-rarity fallback choices to the new
+			-- multi-choice tables without discarding an existing selection.
+			for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+				local pluralKey = "FallbackSpecific" .. rarity .. "Items"
+				local singularKey = "FallbackSpecific" .. rarity .. "Item"
+				if type(autoServerHopState.Utility[pluralKey]) ~= "table" then
+					autoServerHopState.Utility[pluralKey] = {}
+				end
+				local oldValue = autoServerHopState.Utility[singularKey]
+				if oldValue ~= nil and tostring(oldValue) ~= "" then
+					autoServerHopState.Utility[pluralKey][tostring(oldValue)] = true
+				end
+			end
+			-- Check Server now uses the same expanding specific-item rule editor as
+			-- Accept/Cancel/Sit. Convert both old map-style and current row-style data.
+			do
+				local oldSpecifics = autoServerHopState.Utility.CheckServerSpecificItems
+				local converted, seen = {}, {}
+				if type(oldSpecifics) == "table" then
+					for _, rule in ipairs(oldSpecifics) do
+						if type(rule) == "table" and rule.Item ~= nil and tostring(rule.Item) ~= "" then
+							local name = tostring(rule.Item)
+							if not seen[name] then
+								seen[name] = true
+								converted[#converted + 1] = {
+									Item = name,
+									Mutations = type(rule.Mutations) == "table" and rule.Mutations or {},
+									Traits = type(rule.Traits) == "table" and rule.Traits or {},
+								}
+							end
+						end
+					end
+					for itemName, enabled in pairs(oldSpecifics) do
+						if type(itemName) == "string" and enabled == true and itemName ~= "" and not seen[itemName] then
+							seen[itemName] = true
+							converted[#converted + 1] = {Item=itemName, Mutations={}, Traits={}}
+						end
+					end
+				end
+				converted[#converted + 1] = {Item=nil, Mutations={}, Traits={}}
+				autoServerHopState.Utility.CheckServerSpecificItems = converted
+			end
 			-- Migrate the old opening-token controls into the new independent token mode.
 			if autoServerHopState.Utility.OpeningOfferCustomTokenAmount == true then
 				autoServerHopState.Utility.CustomOpeningTokens = true
@@ -1935,6 +2360,192 @@ if IS_MINIGAME_PLACE then
 				and autoServerHopState.Utility.CustomOpeningTokens == true
 			then
 				autoServerHopState.Utility.CustomOpeningTokens = false
+			end
+			-- Regular-trade opening modes are independent from minigame opening modes,
+			-- but each side still allows only one brainrot mode and one token mode.
+			if autoServerHopState.Utility.RegularOpeningAutoshowBestBrainrots == true
+				and autoServerHopState.Utility.RegularOpeningCustomBrainrots == true
+			then
+				autoServerHopState.Utility.RegularOpeningCustomBrainrots = false
+			end
+			if autoServerHopState.Utility.RegularOpeningAutoshowAllTokens == true
+				and autoServerHopState.Utility.RegularOpeningCustomTokens == true
+			then
+				autoServerHopState.Utility.RegularOpeningCustomTokens = false
+			end
+			-- The old Regular Trade tab had its own final-accept rules. Migrate those
+			-- once into the shared Accept Offer criteria only when the shared rules are empty.
+			do
+				local sharedConfigured = false
+				for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+					local cfg = autoAcceptState[rarity]
+					if cfg and cfg.Enabled == true then sharedConfigured = true break end
+				end
+				if not sharedConfigured and autoAcceptState.Tokens and autoAcceptState.Tokens.Enabled == true then
+					sharedConfigured = true
+				end
+				if not sharedConfigured then
+					for _, rule in ipairs(type(autoServerHopState.Utility.AutoAcceptSpecificItems) == "table" and autoServerHopState.Utility.AutoAcceptSpecificItems or {}) do
+						if type(rule) == "table" and rule.Item ~= nil and tostring(rule.Item) ~= "" then sharedConfigured = true break end
+					end
+				end
+				if not sharedConfigured then
+					local migrated = false
+					for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+						if autoServerHopState.Utility["AutoAcceptTradesAccept" .. rarity .. "Enabled"] == true then
+							autoAcceptState[rarity].Enabled = true
+							autoAcceptState[rarity].Amount = math.clamp(math.floor(tonumber(autoServerHopState.Utility["AutoAcceptTradesAccept" .. rarity .. "Amount"]) or 1), 1, 6)
+							migrated = true
+						end
+					end
+					if autoServerHopState.Utility.AutoAcceptTradesAcceptTokensEnabled == true then
+						autoAcceptState.Tokens.Enabled = true
+						autoAcceptState.Tokens.Amount = math.clamp(math.floor(tonumber(autoServerHopState.Utility.AutoAcceptTradesAcceptTokens) or 1), 1, 1000000)
+						migrated = true
+					end
+					local oldSpecific = autoServerHopState.Utility.AutoAcceptTradesAcceptSpecificItems
+					if type(oldSpecific) == "table" then
+						local converted = {}
+						for _, rule in ipairs(oldSpecific) do
+							if type(rule) == "table" and rule.Item ~= nil and tostring(rule.Item) ~= "" then
+								converted[#converted + 1] = {Item = rule.Item, Mutations = type(rule.Mutations) == "table" and rule.Mutations or {}, Traits = type(rule.Traits) == "table" and rule.Traits or {}}
+								migrated = true
+							end
+						end
+						if #converted > 0 then converted[#converted + 1] = {Item=nil, Mutations={}, Traits={}}; autoServerHopState.Utility.AutoAcceptSpecificItems = converted end
+					end
+					if migrated then
+						autoServerHopState.Utility.AutoAcceptTradesAcceptOffers = true
+						autoServerHopState.Utility.AutoAcceptMustHaveAll = true
+						autoServerHopState.Utility.AutoAcceptMustHaveOne = false
+					end
+				end
+				-- Retire the hidden legacy rules after migration so clearing the shared
+				-- criteria later cannot resurrect old Regular Trade-only requirements.
+				for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+					autoServerHopState.Utility["AutoAcceptTradesAccept" .. rarity .. "Enabled"] = false
+				end
+				autoServerHopState.Utility.AutoAcceptTradesAcceptTokensEnabled = false
+				autoServerHopState.Utility.AutoAcceptTradesAcceptSpecificItems = {{Item=nil, Mutations={}, Traits={}, Amount=1}}
+			end
+			-- Restore dedicated Trade Request Criteria. Old request-only settings are
+			-- migrated into the new request schema without changing Accept Offer criteria.
+			do
+				if autoServerHopState.Utility.AutoAcceptTradesRequestMustHaveAll == true
+					and autoServerHopState.Utility.AutoAcceptTradesRequestMustHaveOne == true
+				then
+					autoServerHopState.Utility.AutoAcceptTradesRequestMustHaveOne = false
+				elseif autoServerHopState.Utility.AutoAcceptTradesRequestMustHaveAll ~= true
+					and autoServerHopState.Utility.AutoAcceptTradesRequestMustHaveOne ~= true
+				then
+					autoServerHopState.Utility.AutoAcceptTradesRequestMustHaveOne = true
+				end
+				local requestConfigured = false
+				for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+					local cfg = tradeRequestCriteriaState[rarity]
+					if cfg and cfg.Enabled == true then requestConfigured = true break end
+				end
+				if not requestConfigured and tradeRequestCriteriaState.Tokens
+					and tradeRequestCriteriaState.Tokens.Enabled == true
+				then
+					requestConfigured = true
+				end
+				if not requestConfigured then
+					for _, rule in ipairs(type(autoServerHopState.Utility.AutoAcceptTradesRequestSpecificItems) == "table"
+						and autoServerHopState.Utility.AutoAcceptTradesRequestSpecificItems or {}) do
+						if type(rule) == "table" and rule.Item ~= nil and tostring(rule.Item) ~= "" then
+							requestConfigured = true
+							break
+						end
+					end
+				end
+				if not requestConfigured and saved.TradeRequestCriteria == nil
+					and autoServerHopState.Utility.AutoAcceptTradesAcceptRequests == true
+				then
+					local copied = false
+					for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+						local source = autoAcceptState[rarity]
+						if source and source.Enabled == true then
+							tradeRequestCriteriaState[rarity].Enabled = true
+							tradeRequestCriteriaState[rarity].Amount = math.clamp(math.floor(tonumber(source.Amount) or 1), 1, 6)
+							autoServerHopState.Utility["AutoAcceptTradesRequest" .. rarity .. "Mutations"] = copyJsonSafe(autoServerHopState.Utility["AutoAccept" .. rarity .. "Mutations"]) or {}
+							autoServerHopState.Utility["AutoAcceptTradesRequest" .. rarity .. "Traits"] = copyJsonSafe(autoServerHopState.Utility["AutoAccept" .. rarity .. "Traits"]) or {}
+							copied = true
+						end
+					end
+					if autoAcceptState.Tokens and autoAcceptState.Tokens.Enabled == true then
+						tradeRequestCriteriaState.Tokens.Enabled = true
+						tradeRequestCriteriaState.Tokens.Amount = math.clamp(math.floor(tonumber(autoAcceptState.Tokens.Amount) or 1), 1, 1000000)
+						copied = true
+					end
+					local copiedSpecific = {}
+					for _, rule in ipairs(type(autoServerHopState.Utility.AutoAcceptSpecificItems) == "table" and autoServerHopState.Utility.AutoAcceptSpecificItems or {}) do
+						if type(rule) == "table" and rule.Item ~= nil and tostring(rule.Item) ~= "" then
+							copiedSpecific[#copiedSpecific + 1] = {
+								Item = rule.Item,
+								Mutations = copyJsonSafe(rule.Mutations) or {},
+								Traits = copyJsonSafe(rule.Traits) or {},
+							}
+						end
+					end
+					if #copiedSpecific > 0 then
+						copiedSpecific[#copiedSpecific + 1] = {Item=nil, Mutations={}, Traits={}}
+						autoServerHopState.Utility.AutoAcceptTradesRequestSpecificItems = copiedSpecific
+						copied = true
+					end
+					if copied then
+						autoServerHopState.Utility.AutoAcceptTradesRequestMustHaveAll = autoServerHopState.Utility.AutoAcceptMustHaveAll == true
+						autoServerHopState.Utility.AutoAcceptTradesRequestMustHaveOne = autoServerHopState.Utility.AutoAcceptMustHaveOne == true
+						requestConfigured = true
+					end
+				end
+				if not requestConfigured then
+					local migrated = false
+					local selectedRarities = autoServerHopState.Utility.AutoAcceptTradesCriteriaRarities
+					if type(selectedRarities) == "table" and selectedRarities.Any ~= true then
+						for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+							if selectedRarities[rarity] == true then
+								tradeRequestCriteriaState[rarity].Enabled = true
+								tradeRequestCriteriaState[rarity].Amount = 1
+								migrated = true
+							end
+						end
+					end
+					local oldTokens = math.max(0, math.floor(tonumber(autoServerHopState.Utility.AutoAcceptTradesCriteriaTokens) or 0))
+					if oldTokens > 0 then
+						tradeRequestCriteriaState.Tokens.Enabled = true
+						tradeRequestCriteriaState.Tokens.Amount = math.clamp(oldTokens, 1, 1000000)
+						migrated = true
+					end
+					local selectedItems = autoServerHopState.Utility.AutoAcceptTradesCriteriaSpecificItems
+					if type(selectedItems) == "table" and selectedItems.Any ~= true then
+						local converted = {}
+						for itemName, enabled in pairs(selectedItems) do
+							if enabled == true and tostring(itemName) ~= "Any" then
+								converted[#converted + 1] = {
+									Item = tostring(itemName),
+									Mutations = copyJsonSafe(autoServerHopState.Utility.AutoAcceptTradesCriteriaSpecificMutations) or {},
+									Traits = copyJsonSafe(autoServerHopState.Utility.AutoAcceptTradesCriteriaSpecificTraits) or {},
+								}
+							end
+						end
+						if #converted > 0 then
+							converted[#converted + 1] = {Item=nil, Mutations={}, Traits={}}
+							autoServerHopState.Utility.AutoAcceptTradesRequestSpecificItems = converted
+							migrated = true
+						end
+					end
+					if migrated then
+						autoServerHopState.Utility.AutoAcceptTradesAcceptRequests = true
+						autoServerHopState.Utility.AutoAcceptTradesRequestMustHaveAll = true
+						autoServerHopState.Utility.AutoAcceptTradesRequestMustHaveOne = false
+					end
+				end
+				autoServerHopState.Utility.AutoAcceptTradesCriteriaRarities = {Any = true}
+				autoServerHopState.Utility.AutoAcceptTradesCriteriaSpecificItems = {Any = true}
+				autoServerHopState.Utility.AutoAcceptTradesCriteriaSpecificMutations = {}
+				autoServerHopState.Utility.AutoAcceptTradesCriteriaSpecificTraits = {}
+				autoServerHopState.Utility.AutoAcceptTradesCriteriaTokens = 0
 			end
 			if autoServerHopState.Utility.AutoEquipBestBrainrot ~= true then
 				autoServerHopState.Utility.AutoEquipModeHold = false
@@ -1978,12 +2589,16 @@ if IS_MINIGAME_PLACE then
 			-- profile cannot inherit selections from the other profile.
 			table.clear(minigameAutoplayState)
 			table.clear(autoOfferState)
+			table.clear(regularAutoOfferState)
 			table.clear(autoAcceptState)
+			table.clear(tradeRequestCriteriaState)
 			table.clear(autoSitState)
 			table.clear(autoCancelState)
 			mergeInto(minigameAutoplayState, defaultSnapshot.MinigameAutoplay)
 			mergeInto(autoOfferState, defaultSnapshot.AutoOffer)
+			mergeInto(regularAutoOfferState, defaultSnapshot.RegularAutoOffer)
 			mergeInto(autoAcceptState, defaultSnapshot.AutoAccept)
+			mergeInto(tradeRequestCriteriaState, defaultSnapshot.TradeRequestCriteria)
 			mergeInto(autoSitState, defaultSnapshot.AutoSit)
 			mergeInto(autoCancelState, defaultSnapshot.AutoCancel)
 			local defaultServerHop = defaultSnapshot.ServerHop or {}
@@ -2185,12 +2800,16 @@ if IS_MINIGAME_PLACE then
 			if type(defaults) ~= "table" then return false end
 			table.clear(minigameAutoplayState)
 			table.clear(autoOfferState)
+			table.clear(regularAutoOfferState)
 			table.clear(autoAcceptState)
+			table.clear(tradeRequestCriteriaState)
 			table.clear(autoSitState)
 			table.clear(autoCancelState)
 			mergeInto(minigameAutoplayState, defaults.MinigameAutoplay)
 			mergeInto(autoOfferState, defaults.AutoOffer)
+			mergeInto(regularAutoOfferState, defaults.RegularAutoOffer)
 			mergeInto(autoAcceptState, defaults.AutoAccept)
+			mergeInto(tradeRequestCriteriaState, defaults.TradeRequestCriteria)
 			mergeInto(autoSitState, defaults.AutoSit)
 			mergeInto(autoCancelState, defaults.AutoCancel)
 			local defaultServerHop = defaults.ServerHop or {}
@@ -2285,7 +2904,7 @@ screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = guiParent
 -- Settings are deduplicated by the periodic safety flush and explicit commit actions;
 -- avoid serializing/writing the full profile on every mouse or touch release.
-if IS_MINIGAME_PLACE then
+if MINIGAME_MODE then
 	do
 		local oldUniversalKeys = {
 			"__TSUNAMI_UNIVERSAL_SMART_MINIGAMES_V11",
@@ -2798,11 +3417,23 @@ ensureCorner(
 )
 rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(searchHolder)
 local EMBEDDED_ICONS={
-	Home=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAADSElEQVR4nO2bvWsUQRjGnzGaBILR1mASPxBRE4KKWNhFUIhYBKzERlQICfFvsLQL2lmIgoWVaEATtQhYiIWViGmSEOMR0E4TLPLB/SxuI+Gcud3b27m5mP2VczvPPO+7s+/szu5JOdsbE2JQ4IikfkndkpC0IGnKGDMbwk/dAM4A73AzBZwO7dMLwDCwViH4DVaB4dB+MwNoAu4mCLycB8DO0P5rAmgDxlMEv8E40BY6jlQA+4CPNQS/wSegM3Q8VQH0AYWYwCaBfuA88Drm2ALQFzquRAAXgF8xAd0Dmjb1McCdmD7LwOWQscUC3KJypV8HRn31DwbJKn2iM0hpBv2M0WqcFYJSpX8RY3gROFWFZi+wEKM5CbT7jC2J0SSVPlUV96mdCfU4S3iYXZlAikpfw1iNtUIQqFKHGnezgcwqfQ0ewqwQNNC1SL1XCBqwGtfNE9BD/D19kCc2kj1pFoCetAN0AT9iBhgjg0qfFkp1aSzG4/dUMwF4W0F0HRjxEFMqgJHIk4uJagXPVRBbAgY8xZIaYCDy5uJsNWL3HSIN/VxO5X2IsWqEPlgEikCvR/+ZAJx0JOB9NSKzFoFvHn1nimMWzNiO3eHQsL0wWcvOondWLW3WWF0J2DZ43VUBWiXdkDQo6YCSv4pD0ryk55IeGmNWvBh0jg5zlmtorkqNbmDaUZCq4TPQ5cu/l0sAaJE0IelYBnI9kl5FmpnjqwbclHQ8Q70eSdcz1PuLrwQMbhFNb0Ww29K2JqmQsH+npF1lbQdrcuTAVwJsM6tgjDmcpHNUsA6VNXt56tz29wF5AkIbCE2egNAGQpMnILSB0OQJCG0gNHkCQhsITZ6A0AZCkycgtAFPJP4fhCsBvy1tHcCedH7qB7BXUoflpyXb8a4EfLG0tUp6FA3QkETeHkuybaBO2/pYpwpwTdITxzgrkhZjvNi2tGrdEkvSf7+kZsdvV40xT8sbXQlokTQTGfkf+CrpqDHmn1dm1ksgehMzJKno11ddKEoasgUvVVgFjDETkm5rayehKGnUGPMmtQKlLy/iPktrROaBi3HxJVovgWZJVyRdknRC0u4E3do3HbcsxzKUcf9llVawl5KeuaZ9Tk5OTk7EH99GZ0d1FvDFAAAAAElFTkSuQmCC]],
+	Home=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAADc0lEQVR4nO2by28NURzHvz/UgtJYIBEEkZII0YaF/6AhHonHQiIhHgubNrGQIGElttgg8Q+QkqAeG1bSDSIeiYUQj5K0EmmVTcvHYm6J68zcuTNz7mnT+SQ3uTmP3/n+fnPO78ycuVcqmdxYiEGBaZLWSFpSKXor6ZmZ/Qyhp2EALcAZYID/6QdOAy2hdXoBaAfeOxyv5h3QHlpvoQAdwGAK58cYBraG1l0IQBcwWofzY4wCXaH1ZwaYCpzL4Hg1l4iS5sQBmAX01Li6x4DZlc8JkmdJDzArtF+pABYAjxOcca5vaueJZ8DiED6lBlhDcqb/BKzz1T8oRV1BMs6goACdJK/he9RxgwM0AzcS7P0CTnl0KbXQNJk+Uxavw3aTD9/SCGwGbiaIGwWOFjDOIWAkYZy6Zlch0OB1ynjaIQiUqUONWy2iAxgKdSUIuUOQLtPP9jL4vzoau0PgMdM3QFO+HaIS7dsJgwR9YqP2k2YP0JzVeBPwIMH4MLClYJ+y6NxS0RLH/UwzATiZYLSPcXRqQ3Ta1Jeg93i9BluAbzHGngILPfmSGWBhRZuLQepJ0MCeGEN3GMfP5UTnEHdjtO+ux9B5h4HPwAyP+gsBmEl0wlzNWVf7KTF25jnKes3sR3FS/WBm3yU9dFTNd7WPC4DrhcloVlEBGHGUOX2NC8CkwfvdG9EDyg5JS5X+VRyS3ki6amZPfGmTPAYAmC7poqS9OcwcBS5LOmxmrmmdG58z4ILyOS9FM+ZA5fvBnLaceMkBwHpJ+wo0uR9oK9DeH3wlwe0F2zNFeaRwfC2BJY6yj5J6U/bfIKn6dntZHkFx+AqAa2b1mtmuNJ2BK5J2VhVPza3KwaS/DygDEFpAaMoAhBYQmjIAoQWEpgxAaAGhKQMQWkBoygCEFhCaMgB1tA3y34KMpNYaF4BhR9nybFqCsMJRNuRqGBeAl46ytUBnZkkNAjgiabWj6oWrvXOqAK2SXsXUP6/UJeE60sp7JJam/0q5nUdSq5m9rq6IXSvAdUnbagw4Ueg2M+ehalIAFkl6LGmuL1UNol9Su5n1uSpjdwEz+yBpo6QvnoQ1ggFJm+Kcl2psg2b2SFK7pGuK1tFEAUndktoqPsSSer8ElkvaLGmVpDQ/N5mjv2f5byR9TTtWjv5DirL9LVfCKykpKSmp4jcmJq1CdrrMbwAAAABJRU5ErkJggg==]],
 	Main=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAD70lEQVR4nO2bT6gVVRzHv0eflVmEoqYkRAVvo0/QdeHVQpC3yKXmQqKVL6i2uc3auHBn4EIIKqhFK99Cwv4Ltmhh/nmRUNGrCHkUZfog431azBm4XeY3c2bmzMy70/vu7r2/f59zzj3nzm/mSiv6f8t1XcCogJ2S9kh6RNKfkr6S9JFz7m6nhTUtYDvwKdn6CXiu6xobEzAAbhnww3qj61qjy8PfDoBPdajrmqOpAjzAj8BE17XXVkX4VM/EqmNVrEBlBAwkzUq63zD5WslJ8Jbx+e4GympHATN/GdjobfcaNq/FqqfVFRA480875xb86wOG3S+RS2teZWbe268C5g3bHV2ylBbwFPnn/H/gvc/AsL3eFUclVYH3fmcM+1e74KikGvD3AAsZ9kvAY12wlFZVeO970PD5om2OSqoD7/3fM/xm2uSopAjwD5J9WtwFNrfJUlp14X2Mo4bvbFsclRQD3sc5b/gfaYOjkiLCbyZZ6qO6DTzQBktpxYL3sV4yYrzTNEclxYT38S4ZcaabYqjcFKX8hU1RvCck3cioaVHSPklFTdGfnXO/huSqLUpe2ATGfCUnXqjmgBma7Bg1Ae/jnogwAKk+B9aPDbyPfTjiAAB8RsyV0CS8j38f8F3kQTgWC35Pk/BDebYD30ccgGtFOQtPAWCrpKuSNhgmpXb7gHxrJR2UtEPS6kC3dZJekLQ247OHnXM36xR0uumZjyHgTaPGnXWCrgZ+HwP4jcC3Rp2P1wk8aQSdW2bwl406F4DczndRW9y6ALkQ6ztfR34SLkiylvnbzrmlvBi5myDJBpjVg1+UdFbSXwF1StKSpOuSPnDO3Qn0yVUA/E1JU7U2QJ9ozlheVfQDMFWrIBUue0iO7Cfr5kmTzUQcgHQQso6rmPCDKPA+4QTJz8qYqvS0R+vwQ4k3RB6EE2MDP1TABHAMuBZhAF4umbsx+EoNEZL29LYC/zVKdumshsmkc+5GYK6i3f6OpGnn3Cch8VoTMG3M1pclYmwKmPl9TXJUFvBuneU/7vDryG6W/gNsCfAfX3hJAo4YhZ8P8B1veEkCZo3ijxb49QJ+E/B3RvGLwEMFfuMNL0nAiwbA+zk+/YCXJOCiAfGsYd8r+EdJHmMZ1W/AvRn2/YGXJOC4AXImw7Zf8JIEXDFgBiN2vYSfMmDmGerL0fVVXVPCvrd/cshm2cHHfFbY+ol7Tlq+V3UxbyPfMt5/nuQm5SlJVj9weV7SlhGwP2dp52k8v/OjAtZgP93db/hUlLvH3y/4VMDrAfB/9BI+FXCI5N9dWfoQmOy6xlSN/XWWZOcfSNolab2keUkfO+e+aSrnilZUXv8C6X11gNREwPYAAAAASUVORK5CYII=]],
-	Settings=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAGx0lEQVR4nO2ba6hVRRTH/5Nve/qgUjOzfKQ91AxCNEGyNPIVaiWRldlLKEUL/RBUSKFm9LCo0B6EaAoFKpmv0jAzRIp836TCzFKuaamV18f59WH2pcO5M3P23mcfj5F/OF9mr1nrv2bP7FlrzRzpDP7fMJUwCnSQ1EtS66hpj6T1xpjvK8HnlAEYDGzAj6+A2yrNM3MAjYG5AccL8T7QuNK8MwHQAFiewPlaLAXqV5p/yQCmpXC+Fs9Vmn9JADoAx0sYgGPA5eXkeFY5lUsaJ8k1jXOSZksaJGmwpDlRWyEaSHq0bOzKDWCn580+4JB9yCNbVQnuJQNoCuQcDn0b6LPFIZ8DmpSLZzmXQE+5A62NgT4bHG1GUvdMGDmQeJsBWkvqIKmhpCOSthpjDhfINJD0rEfFpoD6rZ72qcBAY8yJAjvnSrpK0jmSjknaaYz5tbgXCYENZMYDmx1T9DiwDLgD6IKN9r7wrGeAjgE7XQL91gKDIpk7sbGFa4fZBDxOVoEUcB3+j1lSLIthb2VGtqqAHqU63xc4khGho8DVMWx2A2oysnkY6JPW+TbA/oyI5ID7Etgei3sHSYNq7Hcr8QDMy4jAX8DoFPbvB/7OiMO8pMbbAyc9yqqBl4DJwHzs1HbhBPAh0Cmp83k8OgMfRbpcOIp9UZOBl/HP2BPApS4bzoIIMEnSTMej7ZL6GWP25ck2l3STpGsktZR0QFKVpFVZbUlAK0k3S+ooqbmk/ZK2RDYO5sldLGm1pCsdaiYYY16Ja3C+ZyT7l+pMuQHc4uE+1yXvC4QucrSdlLSmRHL1JPWWNERSF0lto0e7JW2TtFjSl8aYkyWYWS0J1Z3dFyYhuswxgjmgWVpW2ADpO8/byUcVMBJIVa8EWnj0fuyS9+UCPzjajKQxKQg1jqbfYtk1XAydJC2UtABomtSepDqZZgSXT25gQ00XaoB7Euhpii10psV6EmSCwGj8QdTwJAPQFPgtQOyZGDoMsLAE52sxPybnqQEd1SRNqYGJRYgFlwMwIoZze6NfMdxexNaDRfqPT+R8pLQesCqg9BB2f/b19X3wjgPTgbZ58m2BGfgDnh3YHcRlqzXhfGU5kK7uAZwHfB5QPs3Tr2/Aee/BBzAkMAjOpAaYGeC3GlszSA9sXX+2x8CuhKSmx7Dn6zvDI7/HI/8WtjBTOoD62GnowiUO+U8ccjnypn3AVjvcmWCdfTySdWErniVTiFhrIypFLfI8djnlSj+rjTG7Y9jaJRvrF6KNo63O4EdYEjeaTPJxSBKZUWJ/Fy+XTldbqD2Wobra7BndUM9j11t1ZYEt8aSkBbbaSWrhePSLo22PR81QYp4rFh0AoKHsKY4rr99ljPnZ0b7F0WYkPRaDk2/PrqMzWi6uQegi6c2Ie3oAFxCu8D7v6XejR/4EMDhgbxj+bbC3p8+MAL+1wPlpna8PrAko/wNwpc21gVBVYBBmYqd6rXw74MWA89vxBDNAK2xQ5sOnxNwRChU/GVAKcG+R/sOL9AfYF/2KYVgRW2OK9J+Y1PmzgQMBhU/F0GHwV5aSwFnJcdh7OqBjP0mSIWCUR9FRYFQCPU2wKW1arEtCHLgbf5F2ZJIBeMOjZEJsJf/qaoy985MUH5CiIAJM8uh7PYmSFQ4FOdJ+Ua3O/thzu2LYQWklseYevc6SmC9YcCUROUl/piElScaYVdizul6yRdGuqlsUXSR7X9B1WyQuDnva4ydG/LfL4gM83BOVxTdKusvRPgvoZ4zZm2ewhaQBkq6V1EzS77IHIyvjJD9xgM0i+0vqHNnYL2mzpBXGmAN5cq0lvepR47p84TUYOho7AMwCpgAL8BchTwKLga4lON410uHjUhNxmAK8Bhz0yHmPxkLGs9jDwW5LY1M4Pxb/lpYUsWKJQgJZH48/nMD2I2R3PL4PT+0yDpE+2EsGWaAGKHrZCeiOvSCZBQ4BvVI5n0eoBzYZyQIrY9j7LCNbW4FuJTmfR6ohMA74xmGoBnuxeQT2auxAwllk54CdroF+a4BbIxsjsXVH10z5GruEsimIOki2xC6N/kBPHOEqNpV2RZMQCKeBJzx9luNIabFJ2/URlz7YLfn0ANDb48zbgT7vevrccCq5ZwL8V2U3e+QNsM0hX9arsmUF/uOxOlsi9hvjwo5KcM8E2DKXCzngHexR2FDgPc9sgRinSactgCsobU+vAdqXk2NZ/zAR/Q3uhRJUTDfG/JgVn4oAuyUuTfH2l5Cmmns6AmiEXfNxMQdoVGnemQMbJa4LOL4WuOVUcqrUX2cvky2N1ZbEfpIthTnvG5zBGZQP/wDjdMAWBVCAjgAAAABJRU5ErkJggg==]],
+	Settings=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAHCUlEQVR4nO2bWaxeUxTH//vSGlpaLTFGi5irVR7aIqYSUwwlQgyVxhzU/CQSUSElRGNKPKBFxFBDqZpijKqS3N5SBBFNh1uUlpbetnp/HvZ3Of3u2vvb53zn9Jr+j/usvf5r7bPOPmuvdY70P/7bcD1BCuwoaaikvrWhFZLanHPtPWHPBgMwBphFGDOBE3vaztIBbAI8HnG8HlOATXra7lIAtADP5XC+C1OBHnlESwVwWQHnu3BJ1fZVusK1MJ4vaduCKtolDXbOrSnPqvXRUpXiGkbLdn6mpP1cDZKGSfrAkNte0hEV2lctgJuMsF4BDDRktwZWGvI3Vmlj1RGwjTHW6pz7sX7QObdU0hxDvujjk4SqF6CvMbYqIv+bMbZFSbaY2DjvBKCfpJ0krZE0P7RBAQMkHWdcWhhRv8gYOx4YaEVNjaePpF3lfVlQi6RyAWwKjAdagc7M89kBzACOr5MfAcwNvNrOi/CMC8yZBxyakXP4rPJt4HdD9lpgs7KcHwJ8HjAsi1nAHcD0ukXKYhkQDGlgy5qMhU7gdWASMCfBni+Boc06vw/wYwJZKq5M4BxfIt8yYN+izvcCPi3RmCdISG3x4Z3n3NAI84DeRRbgmpIM6ATuApI3XGAjYCKwriQbrs/r/BbATwFn7gSGA0cAzxJ+3sHvCyNzr/5fdgwH3onoX4ePrJH4vWpiwJ6fAOuVHCQeGyCcZMgOASYArwAfA28Cd5PZtZsFMKrm3Mu1RX0BuAHY3ZC9K2D72XkIHzQULAX6l+VUVcC/SZYa9j9gyYeeyx2NsVedc8tLMLCfpGMlDZFPqCSfHH0qaYZz7pdm9DvnfgHekHRG3aUdLPnQAljZXVN3H9hF0gRJp0sK7cprgKck3eic+7YJuq2NsdXJs4HbjRBaCxxWxBrgUmB14Nm00AFcXJDrGOy3xy15lBwZMGw1/ojbK4euO3I4Xo+JOXg2q3GtDeg6OM8COKAtYthbJLxWgPObcL4LDctiwADgo4iO2cnOZ5SOAtZElE4jktkBuxAP+0X4c8N0YHFEbhUwKMLTgr8hIXQAB+RegJrycwmHFMBZkbmPBeYsBE4ms3j4iDultigWpkR4LojYtxo4vZDzGYLDgW8CBK2BOf2w7/5CYCdrTm3eztjR0AFsGZjzRcC2z2kiC60n6YPP9Cx0C0/gjIDsSQlcYwJzu91JYPeA7FQSD0BJJTHn3K+Srghcto6b+xljiyW9mED3gnw5PEXn3gEdV6WW0pNrgs65ryR1Gpes0LSyrjbnHAk8nZLajEtWdtrHGFvnnFvQiKcLVRVFLUfzNGEsuxouXhEkLwCwW0B+hTFmhfAw0goiLfKt83osNsZWGmMbAYMb8XQhaQHwBcZ7A5fnGWNzjbHtJZ2cQDdG0naJOj8L6LiXEouiRwJfB3Zbq5HRdSS1XoOLgJ0jXIOAdmNeB4FiKuGy3dfA4c06P47uZecszonMfTQwZzFwKj7Uu2RbgNMCzgNMjvCcF7FvLTC2qPOHEM8CXyKeCg/G37kQ2vE9hRnAkojcKuJR00I4RwGfzo/K63wL8ElE6TtE6vsZPaFGRx5clMDTD3gvoqOVPB9bAKMDijrw9b/kMjO+llcUt+bg6Q3cQvgAll7LIFwQOSRZyfr6LsKHcipWAecX5DoMe9+6LY+S5w0F04sYlNE5CP/xU2xf6AAmE3nmE7leM3Q/bcmGaoJWxefnZoxyzs2XNBa4XN2Logvki6KvOOesxCovrOJtchXrn14W74/d1Lnfkg9FwHuSLqwbGyjpZknj6wiHSTpT0oGSBsh/5DBH0vOS3ko5AMWA371Hy2eRQ+UPQMskzZb0pHOuPkOcIGkrQ9W7eUj7YneFO/Ht6VHA0dh7RRazgBGFPPd2jAQ+bMDxHHAUcBBwX0BmKbB5XvIym6OTyNcc7QXcQ7zvmAfXFFn9XoS/8iiCp8ikvxHeFnxFpyy0kaOMX2/MXth9tqK4OoHzuhL5vgf2KOR8xqC98R8ZNMJMfAI1jXDoLidQ3Kxx9Qd+DsztxHeFb69xNcJcYM+mnM8Y1hvf3vqI9dtOv+EPRcfUyY8g3FgZF+EJlbhbqdtMgePwPYVshrkOmA1cTNGwT1iMzYFd8ae9IAmwFT4E6/FQZM4jhvwSIvkHfq8aXLMp305fNfBpbT1ei8i/bsg/XKWNVX8patXsYqUq69qvJdliouoF+MEYGw50698D20gabsh/V7pVGVS9ALOMsT6SpuFTaEkSsL+kaZKsZ/jDimyTVP0PE73lf5iwqrwpaJc0yDm3tjyrNjCASwKvthQ0LIf97YFvfRdJbZ/h3/DTlPTnb3NTcjj/CP+W3+ayAE7Ep7FWqtwJvA+csCFt6qlfZ7eTb3d3ZXjLJX3inFvSE/b8j/8y/gDXsy9oq2YXvAAAAABJRU5ErkJggg==]],
 	Search=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAE00lEQVR4nO2bzW9VRRjGnyHYVsGIFi1sbZFQm+iG1GiVIm4a0pBoCMbAxn8AV25Uov8AC4O6cKU2TdzUj6CJMaFFF7AwYgohROPGBtoSiOWjl7Zc/bmYg1zKmTlzeuacW/H+km7uPed9nveduWfmzEylFi1a/J8xVYgAbZIel9QlaV3y96ekmqQpY8xUFT7SKKUAQKekIUk7JQ3IJr/Wc8t1SWckjUs6JmnCGFMvw1tpAAYYAr4AFinGNHAY6G52XkEAe4CfCyadRh0YAXqanWMqQDfwbQmJL+cG8C7Q0eyc/wV4BZirIPlGzgBPNjvxNcD7FSfeyFVgKFY+uUYB7HD2qaR9OW5bkHRS0mlJv0m6Kjv8bZDUKWmrpO2S8rTsTUmvG2NGctxTjKTlPw9spTowhn04Bv1ugc3AQWAyUOMvYG/ZeTcaDO32o8CWAjoGGAbOBmgtAIMR03Saei3AzBSwK6LmfcAh4GaG7gywKZZumpFu7IPHxwSwsST9HcDlDP3vgXKm9WSP819T8vgM9AIXMnwcKEN4T0DLVzI5AZ4Grni8zAAPxhb9ySM4RUnd3uNnGPjb4+nNmGJDGa0f7YGX09fHGb3g/lhCYx6h0SgiK/PVCVzyeMszSXOKPIIdY9OoA09EyKWIv7c9BTgaQ2C/R2AsQg5F/W0Aag5/i8ADobHWOD7f6bnnk3x242OMmZP0lePrNknPhcZyFWDA8fmCpO9Cg5fMl57vng8NclcBuL2AmcZJY8xCaPCSmfB8ty00SFoP6JZ7AfN0aOCyMcbMSpp1fL01NE5aAR71XP97aOCKcPnx5XAHaQXwTSfnQgNXhMtP8JQ4rQBtnusXQwNXhOt51B4aIK0ANc/160IDV4SrpedDA6QV4Jrn+sdCA1eEy8/V0ABpBfjDc31Tp8CNYBdAXBsmwXuNaQU4L7tXl8b20MAV0Cf3T/JcaJC7CmCMQe7xvhfYHBq8ZHyv48HzFddUeMLxuVG+PYEy8fkYLxQZ2OV5G5ykrAXIcH99uFeGZgFXwwYLrMVuUbsYjpTLSv2NerwdiSVy2CNyFvvSVDlAP3ZXyEV/LKEe7OqPi0NRhPJ5agd+8Xg6EVtwxCNWB3ZEFcz284HHD8Du2II92MMJLi4DvVFF3V4+zEj+OGU8nIH3MoQvAE9FF77Tw0cZHpaAvrLEO4BTGQauAC+XoN1OdrcHeCe29nIjW8jeIAW7adEZSbMf/wPvFnXAt4gbB+xO0VKAoUvAW8BDK9Tpw47zvqFuOfNUdE5gfw5jtSSRV4EuT0yTJP0GcCJH0lGKkPupiT2W8plyrLokXJT0q+y7+rykhyVtlH3FDt7IyKAmadgYcyxSvHSwhxZmCrRWEXyTM7A94cVSC5AUYRP2ZEZVLGGPzLwAXMu4trIiGOAA5feG4zSM88AAq6UIiaH12CNu5yMnfgrYS8oMb9UVITHVAewDjrLyE+MXgSPAMwF6hYtQ2sIGdot6IPnbJvu075K0Xrf/YeK67ALmOdllrHFJk8myXKjOoKRv5B9JapKGjDE/5E7kvwAwmLS0j2liHZ9ZjQQW4aXl9xVbO1tFGGMmJO2Wf2fr3sfTE+7tn0AjyegwvSz5Z9OuberydpkkrX3rqMyPxpgbzfTTokWL1ck/FJbYJ0STWJAAAAAASUVORK5CYII=]],
 	ChevronRight=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAA8ElEQVR4nO3aMU7DMACF4d8MnKfHAKmiQ+/AkTpwB7YehNsQWF6HRkIqEV1qx9T/t2WJ/Z7sDI5BkiRJkgZUar04yQZ4nR/fSikftcbqTpJNks/8mJJs155XM0kO+e2rxxIeGo71CLz3WMLNzVtgWlgF3a6Em0vydPEduCxht/Ycq7MELAGwBMASAEsALAGwBMASAEsALAGwBACSbOewS6acD1ju25USDjXGbHkeoL8MvQWSPF/5CL6sPcdqDG94wxve8IY3vOHvkuEHDj/2z9Es3w/oMnzL84BvYF9KOTYccx35R1dkvCQlSZIkSSM6AfHCWA0+H77KAAAAAElFTkSuQmCC]],
+	Autofarm=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAADPElEQVR4nO2aO2gVQRSG/xPiA8TCJ6LiC2ziA0EQtbNLI4qghbY+KhvB2Ghhq4hYiBAEKxGSzlZBEAsFQZEkggoqKILGIhFBUPNZbIw3cZKZ3Z27Y3C+7s7OOfvPubtn5/57pUwmk8lkMpkIAHuAAWCMcD4B51Jrrw2wFBgtsfCpHEmhuyNirp2SFtaI744lpAwxC/C6Zvy8KCpKEq0AZjYo6WKsfE1hsRMCXZK6PLlPqbhlWuk3s0Ox9fyTAH2OJtiXQkvMHjAryQVILSA1nVWCAFPR6NZKWlAhxWrXGHCwQq4RSa/N7GWF2HIAC4HzwPsaO752MQScAEpd1cGPQWCLpNuS1pWsW9M8kLTfzD6HTA4qALBR0kNJi2sIa5IBSbvN7Itvovdyobjfb2n2LF6SNku6FjIx5H45IGl7LTlpOAzsqJ0F6Hc0nDHgLLAogtC6+lYCN6dpjL0xTvDWkfhGBO3RADqA+w6dL3yxIbfACsfY3fIy24eZjUlyfSlrfLEhBZjrGPseENc0Xx1jXo/hv98K5wKkFpCaXIB2JQbOUXj+lXz/uvHRmGaDMaN3BxxxxAT7/lXigUMuob5z/eUHEGZq+nB5/N2SbjYUPwF/PAYkDZnZUOvxzimTL0g6XfYkDlzP3zK+f934ViaZrcAFMzvz+3NHy4FNCl+8y9FJTaimnvGrXNLkJri+xMmWl5jbFGU0Tay1tQAPJXkNhHHa77+VJ1TTqIq1SmopgJkNS9onaVBFw5iJ0EI1iU/TmIq1TbLLJjVBM7unwk2ZIORR4mA4cKxd8ROY2YxPs3ZthHolfWv5/G18rKn4YCq9F/BhZk+BXZKOjw/1mtnTpuKjUmUnmIKqO8H8Yyi1gNTkAqQWkJqQAow4xrxuawKWOMZGa2cFHjua6wdgVe3kkQDmA08cOp/5YkP2Abf196uxFZIeAZckvaugOSbLJB2TtM1x7I4v2Gt6AMslvVK9P0Gm4KekrVMNkKl4e4CZfZTUE0tVg1z1Lb4UwOVpdoX/IneAOdEW31KEk8CXxIubiR/AFcD1Os9JaeOTovsflbRX0gZJqV+Rj0p6o+KF7XUze55WTiaTyWQymdnCL1MOZ6Tfnu5tAAAAAElFTkSuQmCC]],
+	Games=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAFMUlEQVR4nO2aTYiVVRjH/8/MOKMGMaJjalroJigzW/ShJEFl0EIm7MPCdSaBElHuJsGKQDfhIm2mDKM2bYIWggsxijaJZohKi2wcM8MZLSwcZ5yZX4tz7/DOe8+597z3vjNX8P3BwNznPuf5es857/m4UkFBQUFBQUFBwe2J1dsQMEkrSn+duUWUjb8l/S7pnJkxIx6BJ4DPgUFuHS4DB4C105n4KuC75uYZxRFgZd7JbwNGmpxYFm4Ab+SV/O5mZ9MAHzaa/I5mZ5ADb9Wb/FpgrIrhQ8CLwNKGqlwngAHLgE3A4Spx3gQezWq8BfglYPAi8NQ05VU3wHrgUiDmn4GWLMZeDhg6D9w7jXk0BLAcuBCIfWMWQ0c8BsYyd6UmAKwBxj3xH441MA//2D8wzbHnBnDQE/8ocGdM4+cCXajm0wc6gZ3AF8DmXLKpA9wE7mN9TOPtnobXqDGJAG24ySZJT25ZZQBoBf7z5LEtretL6h6PrN/MJmr4XSdpdUpW4XAmMLNxSb95vqqYwGMLcD7Cb1ekLBeAHtyGbAjYhdudJhnwNKvIrS1GKWCsaZTml10JUY+kfknJidoX87K0oO4CAG1y3X5BSfR4INiXyv9KOmNmZ3x6GXk2IEsW4IJHp3oBgA5JizwNB1J6nZKOqnLM+/g61XaPme2IaFeNcxGyPzw6i4FZZnbTaxVYEXh9rEvp7QzoxfJAfXlP+u9k6hvnFDA/pfNkwPeUiTA9BO4O+Ex3pxWNJCBpuaTT1RSA1ZK2yE3UfWZ2vPydmf0DPCI3BFskfe95qr4eIElLFZrUgVc9FRsH2lN6mxt4+teABd4AEskDw4k2I6WEowE6gAmP/01JvfRrcLHH1pCZjSYFZvaVpHclDWWJSe6pd5tZrXZbJM1OfG6XtDWDL5nZSCC+Kdv3dAF8e3tvVzKz98ysy0pI2hTQK9NiZivN7GhE/Hlx0SNbkvyQLsASVfJnbuHE0yvpRuLzqKT9ddjxxT6ll6cnQd8QiC2Ab6lca/nsxcxOAmsUmAQzkEsBLkU6Oxspi8LMTkpq9GTXF/uUHNNDwLcIiiqAmZ2WtCch+lfS9pi208hfHpkvRwmYE3htPZ/FI3A/sIHUwqQZAC8Ecuoo6ySHQGjnNpjFaWmtn8d6Pw8uB+RdKr3dkkMg9MSyvOtvNa4E5JO5JgswL6B8tR7PuDP7D3Br9uFAV6zGcKnt+0DFLi6SUOyVuQLdtcZLDLgLi3fqTLpaMd6m8tCjVixzA/Y2lHWSPaDdY6O8pIxOXm7BsltTl7KNMlvuDbMvYxGGA/LJh5osgFcZCA2NtJ5J+kRu8TJdvC5pf4YihOa16+V/kgXoDyg/XctLIvnXIgNrhC2KL8IzAXl/+Z9JI7gjrkFV/tzlhKTHzGzMZyki+QFJHym8Pw+xTNKb8hxjleiVtDX00xjcFv6YpFWpr65IWug95cb9zMTHQWCWR78V+LTK5HUW8K+8IgAWl2yE6MVzXwG0A18G2vRVc/gQ/ns1gBO4S9P5uNvjh6l+Ld1Q8hmKcKgUdwuwAHiF8M32GLWO44B9VZzFkkvyGYoQy94YZ3fgnvYtkXyORfgJmBPrbCFwvA4nJ4G78k4+Edci3AlwVo4B2W6pcKuojwnPCWm+Ieb6uUFwR+LfRsY0Duwl9skHHD4IfAZc9TiYAH4AunPMMTaujcCP+E9+h4A+Iu4fopeVQKuk++TO9OfKrRlOmVloxzUjlLr2SrkruutyN0S/RtxmFxQUFBQUFBQU3Nb8D/l/xMjiW4l4AAAAAElFTkSuQmCC]],
+	Matchmaking=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAFM0lEQVR4nO2b+4tVVRTHv9sxMTMzXyHjK2UKexkJiTBJOBmFZUIURWEg9AeUBGpBJUURgT1+EIsgCUvDQoUKwwoi7GEPHZkkUxwfjYyWk/ZDL2c+/XDu1HRnr3P2nnPuHcrz/emy7v6utb77ztl7n7XXSCVKlChxFsMV7RBoktQiqVHSpIr5iKQOSdudc/sH4HOspGZJByXtcc5RULrFABgOLAPayEYb8CAwPNB3C3C6D78dWAlcUGtdQQDuAA4FCK9GO3B7gP+9Bv84cG89NFqJOeCxAQivxvPAkJQ4f2TwXwaG1lN7r/jXChDfi3Upsd4N4G8CGuo5AQ9nJNRD8qy/UxHQVrGlYbkRayKwDejO4D9TL/FzU5L5BXgUaPTwGoHHK2N86AbmpMQdD6wAfjb4PcD1NRVfSeQjI4E9wMUB/OmVsT58HMCfDHxp8HeTsp7kBrDACPw9MCbCz1hgv+GrJYA/GnvLvSWfyvTAL3kCdgOzB+DrWvzrwtpA/izgjIe/KV5ZWMAhwLEiAwJve/x1EPhnDLzu4Z+iFjsCMNUTDAIOMyk+7zR8TspmS8BCg39ZaA4xC8ZEw/5FhI9qfGbY++0iBj437JmLcS9iJmCCYT8e4aManYb9ohCyc+5HSd2er0aFJhAzAacNe3AwD0Yb9lMhZOBcSb7n/ffQBGIm4JhhvzTCRyi3I5B/eU5+1AQclvSbx35bhI8Q7q9K6gchWOSxdUtqG3BGaSA521fjNGCtD2m+xlW2rGpsDeSPInklrsanMXnEHhs3e2znS3oRCK4uVcaukX/92BLoZrWk8R77xtA8ogGMAH4w9t7nCDiAAA3AC4aPo8CIDL4DnjT4XdS6UgTcbwQH+AC4KoU7C/tlCmBpRuwm/I9hLx6K1RNdFCX5ld+TtMAY0qPkgLNd0qGKbWpl/BzZj902SQudc//a10kel3skLZE0X/5tT0oORc3OuTNhSnIAuBDYl/JLxOI7wHsmIKzsdhhPDaLWkzCV5P07L74BpqTEOZnBPwDMqKf2vsmNBDbkEL8eOC8jRlcKfyswrl5605KcB+yIEL4DaA70/YSHvxtYXETuhd4MATOVnO56b4YmV746IumopA8lbXHO7Y3w6SQtlXRDxc9m59yOIvMuUaJEibMWUbsASbV2tqS5ki6RXSaLRaekfZI+kbQr9v6ff/oH2iW1Ft4/QHIR8QhwJGKvHygOklyBBZXa6N8/EMUPCbAEOFEH4dXoBO4OyM/qH+gE7soj/BzglXqpTcFaUu7/ye4fWJPGt5w2AG/VWlkENmLcFhHWP7DB4nsXQeBZSctS5qhbUquSRSfv+/dQSdMlXSH7XV+SnnbOrag2AhMlvarkqJxW4nvKObcyMxtgPnYzQxewnGTVLRTABJLGC1+hFJJL2Hk5+ddlJTEEaDUc7CTwzi4PgCnA10YOu8govmbwv0rlA7caxD3UsS2NpOL0rZHLzYF8a3e4KY3oW/j+BK4sVGEAgKvx3/8Hlb2Bawz+GxahAf/zs75QZRHAX23qIrx/4E0P/ycvH5jpGQywsHBlgQAWGTk1BfIXZ/H7zsQ0w8/OHBrywuo9CL3/t/oHpvV+6DsBI43BJwKD1QJW70HoOd/i/72g950A7/YwmJ3Zzrke46ugNaD6ksXHr11P3X8E5QQMdgKDjXIC+nzu8nzvs9UbefMK4wPD6P8itCoiUE0ArKrKqRUYVhTfVQ0eI+kBSTMkvS9p3WD/gxLJ29t9km6UdEDSaufcyXrxS5QoUeJ/jb8ADbKAq06uay8AAAAASUVORK5CYII=]],
+	Offers=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAEEElEQVR4nO2b24tVVRzHP2twKC9E0UXRIumODSZdiLGHKHsoyRBKo6LXiB58jAoJiqCnIJD6B3oINFK7MEFOFDTp9FBEMwUxeCEzKiMTxxRpPj3sGTidWWufvc9xzx51fx7XWr/v+v1+Z5+1f3vttaGhoaHhAib0KqAuBtYDdwMrgD7gN2AcGA4hTPSofyOwDlgFLAWmgF+AfcBQCGGyF/1eHFukvqb+bT4j6oYu9DeqeztoH1NfURdWEWOec9erP3Rwrp2P1asKaC9TPympPaZeNxexo16jHi7p4Aw/q7fmaK/uUXtF1cH3mV3SvfC7ektEe0A92qP2F2rP61peAp7Kmfyo+oG6Ux3v4OiEelmL7uXqgQ42Y9PaH6p/5ox7vMoE7EtM+oZ6cdvYgWlnU2xvGbsrZ9xudVWb9kL1zcT4kaqCX6pORSZ8p4PdiznBbVQ3Jfqm1Oc7aL+bsLvi7EafTbYu4ehAAdtXE7YH1EOJvq0FdNckbO87O1H/f7LHEpP1FbDtU/ck7GMMWWAxUxck7B8tGldH51s4lWi/spNhCGEKeCZHo5V/gGdDCBYYm6orThawBcolIFXSPl3EOISwH3i7wNBtIYRDBX1Kzd1T+R1FDWbFRjuT6r0FNZarp3Mu/VMWqBante5XT0Y0DpaJa0FRx4E1wChwdVv3ImBY/Qr4HjjdQe5X4NpE3xHgBc29+i8CVgNriV/Bo+qDwGgI4a8OvuSj3ql+13nNmpf8a1a13pwXY3KlVdcDuyl4lcxjTgAPhRC+jHVGE2BWpo4Byyt0bC6ZAG4LIcy6O6TuAo9w/gQPcAPwcKwjlYA7qvOlNgZjjakELIu07QhnCWBHxfrvRfTb7165CTjXmSo68HxNQGGaBNTtQN2kipwTkba16i7gJmAx2d7/wS7nja3Ig7bsEpVkJdk7g0ngJ+D2yJji7w/U52osYatiSyzW1F9giOy5/HzhDPBprCOagBDCAeDlKj2aY14PIfxYysLs+X+L2TP6ucoZs/3I/lScRfbdVgIPAE8Csc3GWFXXiUFmV2aHgb1daG2KtH0OvA/sKf3Lp1A3x1Lcpdb2iFRXd4DEL7+5qP0FXwc0CajbgbppElC3A3XTJKBuB+qmSUDdDtRNk4C6HaibJgF1O1A3TQJKjO3q0bdKTJ8jKuxrmQTEdopnTnPXRerd//GiAmUSMJ5of8vsyPycoi4BtiW6U77OotS5WvVbsqMy7fwBjJDtvhah1y2xfuAe4ifUvgkhVPN2W32ix03KuaDSs8LB7OzufGVnZcG3JGGJ+lndkUYYNlsXqkftV7eqx+uNWc0+2XlJ7eowV08fF6iXABuAuyh/puhSYOYzl/3AsZL2R4CvgY9CCIVvew0NDQ0NLfwHddtVC5Zr1ToAAAAASUVORK5CYII=]],
+	Accept=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAF8UlEQVR4nO2bTWxVRRTH/0OxVSnyUb6jCwmCrkQQqAu1QDSSkEA07Nxq3Gl0QUSQT79CWIgfCCYa4xaDUaMYv1i4gAUBEwOlGDcIRWmrthVpbfm5mPvax2Xm3vvum/teUf5Jk757Z875n5m5M2fOnJGu4/8NU2uFwG2SZkqaLKk5etwv6Q9JvxpjztSST6ENAMyQ1Bb9LZM0X6NG+9AvqUPSEUnfSTpkjLlQHMvAAG4C1gGfAv9QPYaB74EngYn1ts8LYBqwHfg9gNE+9ADbgJZ62zsCoAnYBPQXaHgcfcALQFO9jV8BdNTQ8DhOAW3V2JBrEgQaJG2RtEHSuAxVOmUntCOS2iX9LKlbdsKT7MTYImmupLtkJ8zlkmZlkH1Z0g5J24wxw5mNyAtgMvBtht7pAl4HFlehawmwO5KVhq+BSSFtdRGaDfyQQuQM8DRwc0C9E4BngLMpuo8DWUZNLhKzgZ8SlA8Ar4Q03MFhAvAaMJjA43TwRsAO+6SebwfuDqo0mc89JE++xwj1OQANwDcJyvYDad5dcAATgY8TeH2FnayrVrQ9Qcl7wPgA9uTl1gC8k8Bvc7UKVmBdURf2BLKjKgAG2OfhOAQ8mFdwE/7vbH+Q4RUI0UjwfQ4ngcY8Ql/0COwAbinAjqoANGMnYxeer1TYNNy+/QA1nO0rBbAI9xLZC0ytRNAOT0u+XCD/IAB2erhvySqgGfeW9hcKdHJCIeLv8hh7gAnx8q6NzGOy4ao4dhpjLgZnHBjGmH5JuxyvpkhamyoAt9PTdS30fglYl7nbYceXaRVn4F73d9eIezAAbzrsGCIWTYp/Am2OZ5L0QVFEXcA6N5ujkdeFXZIrjV186HjWIMnvGAF7HK12Lofy3MDv2T2eQ855h5w3ysvFe3upQ9YhYwyVGpIHUUPvlfSE4/VDlciKOB9yvGot/zHSAJHy+Y4KhytRnBcpxks2jFYpXNwXOEc0cKtjuAA8nENxRUgY9iWcAFxLc5rcVR55c1yFl3oKz81p1ELg7ehvYUK5NONPkjPCA8zzyFziKrzSUzi7Dz0qayHwd5mMS8DqWhofyZ/mkbvcVXitp3DFW0lsr8cxUN4IRRsf6WjyyF5TKpMlph8KjZI+AlaTPuG1S1pujDlfM3aE/wQueeQNAJ8X2fNlPFI/gfIR0OeRU/Hsa4w5LrvxuOR43ShplafqKUkrA/a8j/uIreUNcM5TeF4ezcaYg5LWSRrMWKVdUpsxxscjD+7wPD9b+mdc7GH/1WV1Z17txpjPJK2ReySUI3TPl7DA8azXGNNZ+jHSAJHreMpRodXxLDMyjIQier6E+xzPXDZa4F6+zhNgMwQ8wpW+Adgg5tVeWQCQcTMUr7TOM2te7TnlI7US+BG4iA1jzwwh16Or1WPLo0mVpvPfCYi85bBjiLRlHXumFkcXjoDiWAU2MOoKiX0RL+vyBF2RlBb5vbaxiKckuXraZduVwAYUexytd/ZaGAXYU+NOB/9usgZ2saloLrxaMP+qAezycM9+Ugy0YFPR4hgkYW9fbwD34k7O/BOYUqmwjZ6WPM3YPBydiE2bc2F9HoFNCQIPMLaOx8cDn3i4niDP8XgkuA1/gsQ+ahguT+BogHc9HIeA+6tVsNUjHOB96p8iszeB36ZQSlzOUQkHqMOcAEzCP+wBDgJhIl6RsmMJyjqARUGUZeOzmOScxaPBOwWYhV0BfBjEJicUljKHnel3kXwPoYOiNllRIySNBLBnic8S0GvE+vbP4fbw4j1f2A6zRGYSyXNCCd3YI+pl5FgtsLN7K3ZX59rYxHGQHDdKqkmX3yhpk+yRcxp+k02XP6zRdPkLkv6K3jdLmi7pdtl0+VbZdPnpGWQPS9oq6SVjzOXsVgQA8AA2jF0vnKDadT5AIzQCG7CpaLVCL7AeuKGuxpcDmApswb2VDoVubOZIZRubWgK4keKuzQVfYou+ONkim5OzQqMXJ9MclF7Zi5OHNXpxsqcojvW4OjtH0mzZY6vSstUne3W2s6Dzgeu4Dg/+BSPxtbygFOeDAAAAAElFTkSuQmCC]],
+	AutoAcceptTrades=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAE5klEQVR4nO2aTWhdRRTH/9O00SoibWoUFRFFd01TihVx4Tc0NrW1oZFKkW5EaYViXFjRigsXRUE3XfmxKtIqNC3iouBG/OqmGLqqdFkEk5BCSSvJS01+Lu5Lvb3M3Dt35t73En1/eJt758w55//OOXPmvCd10EEHHfyPYdptgCQBqyVtltQv6QFJvZK6JDUkTUi6IOmspHPGmPl22VkpgBXAduAk8Bd+mAI+Bx5tt/1RAIaB3z2dduGHWogADLAXOAPMRhpZNxaAL4E7Qv29oQYAqyQdl7QzlsgWY1rSj5JmLO8akn6T9JUxZjL7MkvAh5LercNCT8xKOi/poqQ5SaslPSjpYSVFMQZXJL1mjDlmfQvcBlxtQxjPAUeB54Buh223Ay8B30fqmge2uAh4JnLzEPwM3F/mawQeA85G6LwAXI/8lam91zp0DpcxMIVNkt7K6FjE35LeNsZ8UnZTY8wZkur/qqQPJN1ZcouHlPQbY1KqBgDDkr62KCzdLAGDkk5IsoX0nKQhY8x3Zfe16LlJ0oCkxyXdK3ud2GV5NmSMGc1uNmyLlwCjBoAZR/g1gBfK7hkDhx3Xo3pFxcoGJI1Kutnyek7SLmPMt1XqjEVlBCxH5yV7gSoN4FlJp1RzzteB6AggaUOPaRk6L1UTAQclrbM893YeWCOpT8k1WJImlVx9L1dgnx9CTgFgJXDJUe0HPWT3kDRD85Y95oGfgJeB4Da46BSIJWCjQ8EbBXL9wDmHrA1jQF8dBMTWgPscz4/mGLRV0i9KQt4X/ZJ+BZ4vIeOFWAJKNUokaTEq6ZYAXbdKOklBapVFLAEXHc/3Zh+Q3x77olvSiapJkBRVBKcsYg3gALAG6AFGms9smAc+I6knXc3PJuAL7MVxcX8vEopqQBQBTbmPHUp8kHs3IBmauojzIqEVBKwDJgKd93FgMIaEIgKiO0FjzJSk3Upmb75oyLNJaq4ZUtJYZVFdTQiNgJT8056RMA48GWBfUCQURUBlBDT36AE+AiYtW00AhwHX5Mln/9IktJSA1F5dQB+wrflZD1Ry9S5LQlsIqBvAFvKnTttTa3MJqHQiVAWADcCLQK9rjTHmtJJZn6swfgPsB2zzQMnWwQI7HWyFtK1BAD5N6b2aDWfL+rx0yMNTts02Oxa/XpvHN+rfYNHtc86XJWEa25cKdAOXQ4yoAsAOh8FVk3Aob6MjoUbEAujF/dOcDwkHPJw/Tt5wBbgL++WmVSQEt73AWofcDP9Olop/5CH5kTLqAhKDAhIWgPcccj0Oma0hRnifs3WggASANy0yI46160ONqIUEPM755rqiSBghCfu8ecMEMR1o1SQQds4vOPT74HCw8xkjomsC9nPemdMpuUOBzo8TcfGqnATc5zxYcjoje7qk87MEXLmLHIidzOSd8wvAjhzZV0o4Pw48UanzKUNiScjL6WsuefzSYJzIeYMXKiAhz5kGsC2z/h7gT8vaMWqYN3ihAhLycvoayZh8D/C+w3mAd1rlr8uJmLa1TE7bME3Ev0MrQygJhB9ti9jfal+d8CDBN6d9caRdvjpRQIJvTtsmyWlcAfa121cnCkgowjRwN7AbOAX80STuEskfKA6yFHK+CBEkLJ2cjkWTBNcFyoall9OxAB4Bzhc4vrRzOhbAKpZ7TnfQQQcd/NfxD3GPMj9hDqFhAAAAAElFTkSuQmCC]],
+	Cancel=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAFVUlEQVR4nO2bb2hWZRjGr2duc6sMbVFtVGD4Jyf9cxKykDAoMldL1IXRB0HIyqDPfYwCbQVBWESfE8uahRjUt1JLUQqVDCtTCcFCreZcbnN7f30459XXd8855znnPX8m7oJ92P2e+76u+36f55zned77SJO4tmGKIgbuknSP/+8hY8zxorTkCuA+YCfj8Q1wb9H6MgXwDDBoSb6MQWBl0TpTBzAVeAcohSRfRgl4G2gsWncqABYChxwSr8YB4IGi9ScGcAvwATCaIPkyRoFNwM1F5+MMoBXYCAxEJPcvsBRYBvRHXHsOeAO4tej8rACagW7gM2DE4Zs9BMyp8L8b+MnBbxj42C/a1DS0x1oHANMkLZI0XVKLpJmSOiR1Smp2CFGS9K6kV40xQ1WxmyW9KellR12Dkr6X9KOkE5LOSvpH0l5jzHkHf3cADf4QPO/wLQXhANDpwLXYcTQEYQB4DahPK3kD9NUg6CSwDpgSg7MeeBE4VQPvVqD2lS6wJqGA34D1eEM7Kfd1wCvAsYQankujAHtiEPYDHwGPAXU1k1/WUAc8AWwh+ulSid1RsSOHCHBBUpPlowFJpyT9KukHSbsk7TLGjMTMLxaAJkmL/b8FkmZLapU0zXL5f8aY62sltGFVTUEzALDKJjTKL+kwLWwbHYJEmlKbp1crJgtQtICiMVmArAmAduBJoCWGT4vv056lNlcxNvQ4+vZW+JwDljn4LPOvLaPXkasnyWPQJXCiAgDzLX7DQFeIT5d/TTXmO/AlKkCWU2CmxdYoqc9WBN/W51/jEisVZFmAvfKWy9UYV4SI5Af8WJkgswIYY85IWi3Jtje4VISI5EckrfZjFYOk94AK/8eBCwFxLgbM+fL94qkYPBPuHiBJMsZ8JWm5pCHLx/UK/uZXGWO2Z6lNymkhFFGEauSWvJTjSrCiCGHnBaPKMXkp/6Wwy5Y11612bgUAlkraJvucL6Ne0lagOx9VORWgInnb0Vo1GpVjEVwKMGaxxTniDkt+VMHrhLhFaLDYLkY5uRRg0GKzHUCOA97m5wvZkx+Rd1NcofAiRG6gfNxosdlWolfApQCnLbbWKCe87e8WBT/nVxhjdhhjdii8CFtw20q3WWxno5xcCnDSYpvl4LdI9pFyKfmyIaII5d8jozDbYvsjysmlAEcstg4Hv2MW27jky4gogi1WNWzNFL84+IUDeN6yxC4BLtNgY4VP0gORjQ4+twfsJ9a65hkWvD0g+DpH/3l4u764R2JdwDzH69cHaJwT7e1GcNwSfE8qwVMAsN+i76iLr+tCqM9iWwQ85C4zGwAPS1po+ejTNEnasbe4fUsav8En12WA7yy6SsDctMm+Dphna1IliqdpbYCmL7Mg6wwg6wdc1gVp65nLlU+Lym//waxItwYU4WfgpkxI7TpagCMBWjZnSdwG/B1AvA+YkRn5ZQ0zfC4bzgC3ZS1gZQA5wEHgjgy57yS47bYEPJ0Vd7WQ3gARAH8CSzLgXAL8FcK7IW3OMDF1eA1LQRgD3qKGDrEKrma/4GMhfJtJsSnLVVgDwTfFMn4HltfA0Q0cjeD4BLAdhmQPYArwXoRAgN3AozHiPoL9rZJqbCJGA2ZmwOvqHHIQvB94FkujM96I6sGtL3EIeKGIXAMBLAAOO4gHOI33Bsn9eJ3iG3Bviz3MRH2RAmgCXsdtNMTFMF7DtsvJcrEAZuG9O+DyjlAUSsA2wHbkNbEBdACfE/4IC0t8O2Db6l5dwJvn72PfvFRjEPgQh7aYqw7ADXhb2J2Mnx77gJeA6XlqKvIwo03e6XKdpIPGmBNFaZnEtYz/AbOqnJClBmeyAAAAAElFTkSuQmCC]],
+	Fallbacks=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAC7UlEQVR4nO2aPWsVQRSGnyMxTYKFhSGCF0QkYiWChYhFhBgsLBMUG0EIQRCxVn+DiAomRLDxB4iNRkkjgk2IBCRGEEXBoIJIqoDia3Fzw2bZ2Tu7dzdz1XnKnZ1z3vPOxw67C5FIJBKJRCKRSCTyH2JFbpa0F7gPNIBZYNLMVKD/TuAKMFQkr4MvwEvgkZmtVhAvH0kNSWvazLwkLxMl9UpaVPWsSromqafO4gckfXAImJG0zSPGSA3FJ5mT1F9X8a/bJG9rwhYYIEkP5TkjfYsflLTkmXwqL7nqWwJpzhSpMU/wADAHHCwQ7x4wYWa/HTGr2gR7gGPAroy2BTM73FF0FRv5NLkzoSok9UmadWjY00lgnzXfDq+NsVMkDTnyj5YNWEXxW2aCJHPkHvONsSFQzefoY9xr/pnj+hvH9QvAVV8hZcg5hHkvweQIHQcOOe6bBmYcbSdwm3DJV0gofKboNDAJZLptZivkm9DVJA14DrxKtU/jcd7PMeFWxwprZuP8bGa/JA0Dl4F9wBMze+AbyMxWJB0t27/rkTSetd12ga4sxn371/6s7naiAaEFhCYaEFpAaKIBoQWEJhoQWkBo6nuVXCGSzgGjwDvgppn92Mr+rSBBjsKSrqdSLkkaTLQ7j8LrL0ymUm0LKvMNIaABXzPSbpjgMsBRfIvhVvy/dQ84AMwlZ0IKA+4CE5VlDDgD0ksgPROyeJrTp/QSGAtkgEm6k1NQEZYl7S4r5JQj6P6Ka87KXYUJ5YtfF9FwBJ6V1Fdhva78eZtaOzY9OZIU/T9ggew3x9+AF8DP4qVtYhm4YWbfHfkNuA1cLBDzLTBsZp871AaSzpYcgSIsSurN0VBkJjhHvqwBpuYn6LoZ8dDRzoRqi08k71fzZ4RgBiRMcG2Mn9TJhueRfLuav6Ws1lB87hLIMGE+1X9NUsO3lo4+Y0vaAZwGjgBVOJ67CTo0tE59J4GPwHkze1+BlkgkEolEIpFIJBL5d/kDUdV/DcuLxjwAAAAASUVORK5CYII=]],
+	Messages=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAD40lEQVR4nO2ZTYgURxTHf28VPZiI0WjwkIOIIAEVxUBAQc0hLgS/UPToKYuCIepBL0ogwYsHveqCYAiBEEIILAFZP3BvHlbETQ5B0MSLIohfieiuZv859OzQtlUz3T1d3TOz8zvNVFXXe+/fXa++oMf0xpo1kDQXWA0sCuTDa+BvYMzM/gtkIzuSVkn6RdKEyuGBpBM1wSsP/itJr0oKPMldSaurDP5gRYHHeSRpeRnxvpEDJK0CRoGZZRhvwg3g49B5oS/x/2vaI3iIEu/O0qxJmit3wrsvabOkGYHszpN0XNKkw/avIWz6HNngGY+bS7J/3mH7Xmi78SGw0NPmcmgnalx0lIVae9Tp8/yuY2avQztR45WjLMiwi+MMejrRE6BqB6qmJ0DVDlRNT4CqHaiangBVO1A17bLzy4yktcAAMM/T5AFwDRgys2dpOtzt2gkV53Jx9iWtlfTSs3lL8kzSMUnOl92pQ2AAmJ2y7bvAt8CwpHeSle0kwHuOsvEC+98E/CDpjVOwthBA0myit5rkL88jg+QTZyuwJ16QOwlKmgVswJ+E0jKfKPg1jrorrgfMbFTSevxJcCawDvd5whHgx7dKMyahxZLGUiahvEwqOqTNhaQ5koY9fX841S7zEJC0mOjNrMjrXErOmtnNvA+b2XPgS0/1R1M/MgkQCz70mf0IcLiAfm55yuu3T6kFKCn4SeAM0G9mL1rtzMx865j6TJAqCQYOfgK4U+t/sJXPPg9NBZD0AXAJf/DngAEzmyzSsbJIMwSuEksaCQaBLzo1eEgnQKM3v7/BOOsI8q4EO/qzj5NHgK4JHrIvhTMHr2jzsRf4DLgNnDazRxnthkeepXCMs0rspFL2+02inzFF+4hS8MSye6o+7RBoJeEdSPxfQbSJagviAjz2tGl1qnPt811llRAXYAT4PVE/COzr9KmuEfUkaGYTkjYCh4ClwDDwXTcHD4lZoJadjxds418geRa3rGAbuSnjSOwPR9khSaHPE1JRxr3AEPBJomwBcF3SCP7km5anRIcnoy32EwZJ70t60mSN0SrjkrZ47BeyDsiNmT3EfzRVFLOAn30iNKKUY3Ez+x44CoScUXKJUNq9gJmdBPqBPwOaySxC5rV9q0jqI1oKfwosIXI6DwZswX1FNgHsMrMhyXm0v8fMfsppt32Q1C/pRYPEuK1ZEux4JH0u/03xeOWzQGjM7DdgO/DSUd10eHW8AABmdgHYgVuEhnSFAJBfhK4RAOoi7CLD1XlXCQBNc8JbdJ0AkOpL6OozjjoNpsiVVftWGjUR/okFf6pqn0pH0kJJO6bVm++Rkv8ByBAlnNvdOJUAAAAASUVORK5CYII=]],
+	Inventory=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAFI0lEQVR4nO2bX4hVVRTGvzWTjESlYaiUPVhjMw7SlCIEgZoQlFngQ9GLvkjhWwRp9mZRD6MU1VtSPdSTA2k09Aciw0FIiiYHLE2tGBjkakXOODTONDO/Hva5dT2de8/e594z58bMB/Nyzz7f/tY6e6+9Z+21pXnMbVgRnQKtktZIWhlp+FnSKTObLkLPrAFYBLwCXOK/uAi8DCwqWmfDAbQCT0dGpuFi1La1aN0NAbAZOOlheByDwOai9WcG0A4cyWB4HEeA9qLt8QZunu8HJhpgfBkTwAGaOT4A1+EC3O8eBo0AuyNn3QzsAS57vNec8QHYAox5GDANvAcsS+BYArwBTHnw/AA8XIStcdHtQK+HYICjwD0enKuBTz05Pwe6ZsPWuMgbgH3AuIfIGeBj4KbAPh4FznvwT+JGTv7xAWgBdgAlzy9UiRLwFAHzF1gAPINffPgtaptPfAAeINt6Hsd3wKbAvouLD8DtwGFP404Axz3b9gF3BmrpxsUSHxwGVtRr/Hrc0ErDeWBbxXu5zl9gmyf/JWBdVuPvIj3IjeDW8LaE93Odv0Abbi+Rxj9Olp0kcK4G6RRwkIT1PIEnZP4OABsDdS4F3krhPxtqfEeK0H6gI5CzC/jMwwng4sMdgXr7Uzj9RwHwnIfISeA1YHGgI3zjwwRu5FTdPwCLIw2THnzPhoh814OwjF+BXWRb30c8+a+JD7j8wq7omS/eDnGA7/a2EqcJXH+BWwiLDxvIvh/prdcBFzw7yrK+rwWOZTCqGpIyT4kOaAnQeVzSg5K+T2m3VdJpAtZ3Mxsws42SHpf0S4CmOM5JekLSsTo4qo6A3ujZAtz/5D7zL8v6vhB4AbgS8MX/AJ4n2o/U0h9HyAiQJJnZX2Z2UFKHpDclTdVovkTS65K+ATZ48l+V9IWkHz2az0h6X1KHmfWY2YRPH6kI8SDQCXzi+aX6gJU1+l2BS5jMeHANAN316g8eAXGY2Rkz2yLpMUk/pTTfKukMLj7cWCH4emCfpLOStqv2gc1VSa+a2VozG6xPfRWEeDD2XhtuLo56fMFhYHv0N+zRfpSKeZ6H/oYRAMuBd3A5wHoxHXEtz0N/3VMgCWZWMrOdktZL6q+D6mtJ95vZTjMrNUbdtcjFAWWY2YCkTZKelDQU8OpQ9M59ZnYiB2n/IFcHSJKZYWaHJK2WtFfSlRrN/5TUI2mNmR0yM/LWl7sDyjCzcTPrkdQpdxwex7CkLjPba2Zjs6Vr1hxQhpldkPRtwqOvzCxkmjQEs+6AZsO8A4oWUDTmHVC0gKIx74CiBRSNEAcUUlOYEd5aqzkgabu6KpuWQtCZ8NtoUsNqDkhKfHYTcrhQEIDdclWocZwKIVlF9bTUUaqkogL460tYJHPWOjqfJuCorUz4QY0kxRTuQHJpRrENcwCwDHdQW+twJZwbl6BMqumtxGXcEXVqmirGXbcDcOm3PaQfr5WAW8Os/7eTdR5OgFiBhAdvvSk33wKJEnBvJuMrOrsN/xIZr/iQ1QGEl8hk+/JVOvc9lCwXQ1ZNYoY6gPAiqYcaZnhMSEiZ3BiulnBhVgfQTGVyMWEhhZJDwI5QB9CMhZJxEFYq+yVRqWwtBxBWKht8FJ8LCI8PHyU8+5BmmOdZQdi1mKSaHp86n+Ysl68E7g7AARp/YWI/zXxhIg7m6pWZOHCXpgYzGH6S//OlqUowl6/NVQIXH16q4ogS8CKzPM+LujrbIuluSY9EP/XJXZ2dKULPPOYy/gaDmMma0bBY9AAAAABJRU5ErkJggg==]],
+	Booth=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAEoUlEQVR4nO2bSYgcVRjH/1+SSVzGSdwdiEbEYHBBQw4eBh1NiHEJipdBGRciBE+KEQRXPKiHIBiJ4jEeBCF6CaIXxSWQaFDjMskoIsQliolZhokt2jMmPw9VNdRUXi3TXdWvm+kfDHS9+t73/t9X3W+tkbrMbqwsR8B8SddIulDSnLL8Jjghab+kb8xsoqI2ZgbQD7wGHKN1jAOvAhf4Dn4NcLSFgSc5AtzkK/i1QN1j8BF1YO1sDT6idUkAbgH+8RywizpwR9XBZz35OrAeOLXC9k8DHszRUM03gewnXwdur6Rht5abc7SU+01op+BjmlqThHYMPqat2iS0c/AxjdUkoROCjyg9CZ0UfERpSejE4CMaSYIlHGyRtK5liv3wupk9EF1MJQAYkLTDi6TWM2Bmn0rT1+2PeBLjg6lY4wn4xYMQX/wafYgn4HMPQnwxFeu8AsZDFQppBW9l3cxNgJm9XZ6W1gNk3q9q87Jj6CbAtwDfxPuA7B9LAoJzgMHwcnvWPj1wnqQBSfvM7Nscv1dLukTSTjP7s5n2gbRzj5NjDdcALpY6bM8FRmI2I6Ts0RNso9Vitq+4hAFzCPb6I2rAbSk++x3tn+OwW5YS0xqX04tSjN8HTo/ZrQBGHXb7gfuBRaHdUuBFYNJh+wFwPdAT/g0CHzrsJoGNwKWhzzOBdcDvDtu9wPKYzt6wHReLI7vkYuhrBcdbSf6SNC6pR9L5rqfSRhyUNClpoaQzHPe/MrMV0UUyAXdLerNSef65y8y2RhfJBJikbZLads3fJNvM7M54wbRh0MyQNCzp44IOkVQvaHukoJ0kHS1o96+Kj14fSbq3kGXYMT1N9onvDuA6YAlB7304xW4EeAhYAKwG3gMmHHZ14F1gFXAK8DCwJ8XnIWAzQcc9COzM0DkOPAk4p/2Z7wcAfQo6vySPmtmmhO1cSVcoGMN7JNUk7TGz3xx+exV0tv1h0R8KzvxrDtvFkq6S1Kugc9snadTMjifsNkh6yaF1oZkdy4ozk5Sstt0KERhyCc2rN+unwt0E+Bbgm24CWtEIweLpKWAX8HfGkFUDPgMeB85uhbZcmh0FCBYv4xlBpzEG3DODdtpvFACekLRFUl8D1RdJegN4rFxV06ksAcCtkl4owdVGYHUJfpxUkgCCWeHLKudNVJO0GahEa5FzgUa4UdJJO0mSDkvaJOnHlHqXSdog6axE+TIF219FF2mFqSoBKx1lE5JuMLPRrIrAO5K+VLCeSPosPQFV9QFLHGWf5AUvSWY2Imm749bFzYpyUVUCkk9Pcq8q0xhzlC1oUEsm3ZmgbwG+6SbAtwDfFEnACUdZVcNnM7g63uOOsmkUScAhR5mf/9LIxqUp9WwxokgCdjnK7gOeITwG8wnBcdmzcm95u7RPI3euHi59t+bZtSlDeW+4FEnAXElfSFqeZ9tm7JZ0bXL7PEnuTyB0MCz37KxdGZM0nBe8VHAYNLPvJa1SZ7xL+LOklWb2Q+megT7geeBgA1tcVXMAeA5wHYmn0tCGBUG/cKWCFdr8FLN5ki4PP38n6b8ZNlO0/oSknyTtNTPXnKVLlwz+B+wDSaNxRBhjAAAAAElFTkSuQmCC]],
+	System=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAEM0lEQVR4nO2a3YtVVRjGn1XOoA6CmcpIEkhIBhmoifhxIUpkfl0YohdhMNDHH2DUVUIXYVDQldBcjF5olKQgTAgFiigmGlFKClqhjR8XIcjk15jTz4u9z6jH9a69z8xeZ8+Zc56rw97r3ev5vXud9bmllppbrmwDIQHPSnpR0jRJ7enlfyRdknTROUdZ3qIIaAPWAT3AJcK6AfQC76eJalwBHcBHwJUMaEt3gB3AxLJZahawGbg6TPBq7SibJ7dI3vrXBYFXdLlWH+NiwGUJmC7poKT5BT/6WsHPK17AVOD3jDd5K20dbwEvAePT2PXAfSNmAFhRNl9QQDtwLADeD3wMPOOJXZtCWvBry2CqScCXAfjDwPNG3JiAXwoMGhA9gLc/GivwDjhlQOwBnjLiRgQPrAROkgyz5c0TgDUGxG+kHZwnZqTwvvhy5gnAQQ/EIPCqUT4GPMBtYEocStvMDPxD1zdG+YXA3QjwFb0bh9Q21GUYWWyUPxoRHuBAHFLb1E6PiYvAE0txoDMyPMB1X93RBPzsMdFjlF1kmO7KqCMvfEUzK7He4adgzfJcO2OUvWFc/wDo9N1IW8Y+PdwweVSDWZ6iJiBtapM9t6xFywVJfZ7rcyQdrk5CBvw9SZuMeuozEgBPG01wQyDmvUDTPVdJQkazH+ozjPsb65KA1IDP5JZAeQd8lZGErpzwk4wya+qZgD6PgW0ZMQ7oDiTB0mOjBfCKUc47AYsi4JDHQG+OuFqT8MRQiT0H8fVLcQR85jHwLzkWJjUkwTtPAPZ6yv4Rh9SGWGWYNvuBqvisPuGOAT+FZO5fre7iKcMAGwzjuaekaRLe4fGzgv9J/l7zjJhPjHpXF0eXbTw0VH07jOc5YDawAJgaKDeLZF+xWpcxNl4KVwb8AMZiqIB624HjRr1bY9TpM1HKNhbJxGu3UW8f9dgRKhG+A/jOqBcCs88iTZQFvwQ4G4DfGaPeahMj3cZaTDJuHwDeBjoyyjtgGbCPZESw9BMwwXpOIRsDZK/K3nTOmbM/I/62pCOSfpH0p6SbktokzZQ0V9Ly9HdIpyWtcM5dzwUyHBXw5mvdzMirQ3hOmJoBfhDYTuzxfpTCHwcWRgUfhfD3ge+B16OD1wF+gGTt8BrwKfAD8BcPp7X/AdeAEySrxC3AtLqAp+bfIFl9WebXx4wvVS34Fnxzwq8mboc3ej9uAOYAN5sSXpKAH5sZ/uWmhZck4EMDILipMCbgJQnY5QE4mRHTkPDW6bBvA8F3aitp5PsBo04kn5RV62+gzVO2Id98UNhnat2PJgHYNObgpaEPmq3Z2xVgP/Crcb+x4SsCvggAhtT48NLQPvuZpoSvCHiuhiT0A6vK9ly40pbwOf6jZkj25HuBF8r2OhzlPhcg+cZ2naQFkjol9Us6K6nXOXc+jr2WWmqppZai6gHSPD+ZwpRCXQAAAABJRU5ErkJggg==]],
 	Chevron=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAABFElEQVR4nO3Yyw3CMBBFUYcF9VAGSAi6oKQs6CG90A1k9dh4RBQgP2yDzT07hMjMPNsI7BwAAAAAAAAA/JFq6QclbZxzJ//yXFXVJUxLGdSXtJF01cNN0j5h/b2vaa4+kGQN1HrWpgjBD9++qF8ved4qYG9r51wTMwT/7MbX+h5/BG4vViHaThhYeTuC6Y6Ab2jb+x7oh3AMWGs3UusQqtbcxqKH8LPDdxqMFsLPD29ihJDN8CZkCNkNb0KEkO3w5pMQsh/eLAmhmOHNnBCKG95MCaHY4Y2Gf8K2I+8l+4cZ1chOKHPl+0Z2Qpkr3zchhHKHNwPHobxt/46er7SSXql1Lb4U/ZS+fKkKAAAAAAAAAH/pDieCbEdaAWghAAAAAElFTkSuQmCC]],
 }
 local BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -3171,21 +3802,27 @@ menuLayout.Padding = UDim.new(
 menuLayout.SortOrder = Enum.SortOrder.LayoutOrder
 menuLayout.Parent = menuHolder
 local menuItems = {}
-local TRACKED_TAB_NAME={Home="H O M E",Main=IS_MINIGAME_PLACE and "M I N I G A M E S" or "M A I N",Settings="S E T T I N G S"}
-local TRACKED_FEATURE="F E A T U R E"
+local TRACKED_TAB_NAME={
+	Home="HOME",
+	Autofarm="AUTOFARM",
+	Games="GAMES",
+	Matchmaking="MATCHMAKING",
+	Offers="MINIGAME OFFERS",
+	AutoAcceptTrades="REGULAR TRADE OFFER",
+	Cancel="CANCEL CRITERIA",
+	Fallbacks="FALLBACKS",
+	Messages="MESSAGES",
+	Inventory="INVENTORY",
+	Booth="BOOTH",
+	System="SYSTEM",
+	Settings="SETTINGS",
+}
+local TRACKED_FEATURE="FEATURE"
 local function formatPanelTitle(title)
-	if type(title) ~= "string" or title == "" then
-		return TRACKED_FEATURE
-	end
-	local words = {}
-	for word in string.gmatch(string.upper(title), "%S+") do
-		local letters = {}
-		for i = 1, #word do
-			letters[#letters + 1] = string.sub(word, i, i)
-		end
-		words[#words + 1] = table.concat(letters, " ")
-	end
-	return table.concat(words, "    ")
+	if type(title) ~= "string" or title == "" then return TRACKED_FEATURE end
+	-- Keep words intact. The old letter-spaced title format made every letter a
+	-- legal wrap point, so narrow panels could split a title in the middle of a word.
+	return string.upper(title)
 end
 local selectedTabTitle = New("TextLabel")
 selectedTabTitle.Name = "SelectedTabTitle"
@@ -3576,6 +4213,12 @@ local function selectMenuItem(item)
 	if refreshUnsupportedPanels then
 		refreshUnsupportedPanels()
 	end
+	-- Shared acceptance criteria appear in both offer tabs. Refresh from state on
+	-- tab changes so edits made in one tab are immediately reflected in the other.
+	local refreshAllSettings = rawget(_G, "__TUFFHUB_REFRESH_ALL_SETTINGS_UI")
+	if type(refreshAllSettings) == "function" then
+		task.defer(refreshAllSettings)
+	end
 end
 local function createSidebarItem(
 	name,
@@ -3773,27 +4416,34 @@ local function createSidebarItem(
 	end)
 	return item
 end
-local homeItem = createSidebarItem(
-		"Home",
-		1,
-		"⌂"
-	)
-homeItem.Label.Text = "Home"
-local mainItem = createSidebarItem(
-		"Main",
-		2,
-		"ϟ"
-	)
-mainItem.Label.Text = IS_MINIGAME_PLACE
-	and "Minigames"
-	or "Main"
-local settingsItem = createSidebarItem(
-		"Settings",
-		3,
-		"⚙"
-	)
-settingsItem.Label.Text = "Settings"
-selectedMenuItem = homeItem
+local tabs = {}
+tabs.Home = createSidebarItem("Home", 1, "⌂")
+tabs.Home.Label.Text = "Home"
+tabs.Autofarm = createSidebarItem("Autofarm", 2, "A")
+tabs.Autofarm.Label.Text = "Autofarm"
+tabs.Games = createSidebarItem("Games", 3, "G")
+tabs.Games.Label.Text = "Games"
+tabs.Matchmaking = createSidebarItem("Matchmaking", 4, "M")
+tabs.Matchmaking.Label.Text = "Matchmaking"
+tabs.Offers = createSidebarItem("Offers", 5, "O")
+tabs.Offers.Label.Text = "Minigame Offers"
+tabs.AutoAcceptTrades = createSidebarItem("AutoAcceptTrades", 6, "✓")
+tabs.AutoAcceptTrades.Label.Text = "Regular Trade Offer"
+tabs.Cancel = createSidebarItem("Cancel", 7, "C")
+tabs.Cancel.Label.Text = "Cancel Criteria"
+tabs.Fallbacks = createSidebarItem("Fallbacks", 8, "F")
+tabs.Fallbacks.Label.Text = "Fallbacks"
+tabs.Messages = createSidebarItem("Messages", 9, "M")
+tabs.Messages.Label.Text = "Messages"
+tabs.Inventory = createSidebarItem("Inventory", 10, "I")
+tabs.Inventory.Label.Text = "Inventory"
+tabs.Booth = createSidebarItem("Booth", 11, "B")
+tabs.Booth.Label.Text = "Booth"
+tabs.System = createSidebarItem("System", 12, "S")
+tabs.System.Label.Text = "System"
+tabs.Settings = createSidebarItem("Settings", 13, "⚙")
+tabs.Settings.Label.Text = "Settings"
+selectedMenuItem = tabs.Home
 for _, item in ipairs(
 	menuItems
 ) do
@@ -3958,6 +4608,8 @@ local function createEmptyCollapsiblePanel(
 	headerTitle.FontFace = PANEL_FONT_FACE
 	setResponsiveTextSize(headerTitle, 15)
 	headerTitle.TextScaled = false
+	headerTitle.TextWrapped = true
+	headerTitle.TextTruncate = Enum.TextTruncate.None
 	headerTitle.TextXAlignment = Enum.TextXAlignment.Left
 	headerTitle.TextYAlignment = Enum.TextYAlignment.Center
 	headerTitle.ZIndex = 45013
@@ -4186,7 +4838,31 @@ local function createEmptyCollapsiblePanel(
 		end
 		return total
 	end
+	local currentHeaderHeight = PANEL_HEADER_HEIGHT
+	local function syncPanelHeaderHeight()
+		local panelWidth = panelData and tonumber(panelData.LayoutWidth) or panel.AbsoluteSize.X
+		if not panelWidth or panelWidth <= 1 then return end
+		local available = math.max(px(80), panelWidth - px(58))
+		local measured = TextService:GetTextSize(
+			headerTitle.Text,
+			headerTitle.TextSize,
+			MENU_FONT,
+			Vector2.new(available, 10000)
+		)
+		local desired = math.max(PANEL_HEADER_HEIGHT, math.ceil(measured.Y) + px(16))
+		if desired == currentHeaderHeight then return end
+		currentHeaderHeight = desired
+		header.Size = U2(1, 0, 0, currentHeaderHeight)
+		headerTitle.Position = U2(0, px(14), 0, currentHeaderHeight * 0.5)
+		headerTitle.Size = U2(1, px(-48), 1, 0)
+		chevron.Position = U2(1, px(-18), 0, currentHeaderHeight * 0.5)
+		headerDivider.Position = U2O(0, currentHeaderHeight)
+		body.Position = U2O(0, currentHeaderHeight + LINE_THICKNESS)
+		body.Size = U2(1, 0, 1, -(currentHeaderHeight + LINE_THICKNESS))
+		if panelData then panelData.HeaderHeight = currentHeaderHeight end
+	end
 	local function relayoutRows(skipPanelRefresh)
+		syncPanelHeaderHeight()
 		local y = featureTopPadding
 		for _, rowData in ipairs(featureRows) do
 			if not rowData.Row.Visible then
@@ -4237,14 +4913,14 @@ local function createEmptyCollapsiblePanel(
 			rowData.Row.Size = U2(1, -(px(28) + rowIndent), 0, baseHeight + extra)
 			y += baseHeight + extra + featureRowGap
 		end
-		local expandedHeight = PANEL_HEADER_HEIGHT + LINE_THICKNESS
+		local expandedHeight = currentHeaderHeight + LINE_THICKNESS
 			+ featureTopPadding + featureBottomPadding
 			+ math.max(0, y - featureTopPadding - featureRowGap)
 		if panelData then panelData.ExpandedHeight = expandedHeight end
 		if panelData then
 			panel.Size = U2O(
 				panel.Size.X.Offset,
-				panelData.Expanded and expandedHeight or PANEL_HEADER_HEIGHT
+				panelData.Expanded and expandedHeight or currentHeaderHeight
 			)
 		else
 			panel.Size = U2O(panel.Size.X.Offset, expandedHeight)
@@ -4316,7 +4992,8 @@ local function createEmptyCollapsiblePanel(
 				rowData.Row.Visible = rowData.Row.Visible and type(entry) == "table" and entry.Enabled == true
 			end
 			if rowData.VisibilityAcceptKey ~= nil then
-				local entry = type(autoAcceptState) == "table" and autoAcceptState[rowData.VisibilityAcceptKey] or nil
+				local stateTable = type(rowData.AcceptStateTable) == "table" and rowData.AcceptStateTable or autoAcceptState
+				local entry = type(stateTable) == "table" and stateTable[rowData.VisibilityAcceptKey] or nil
 				rowData.Row.Visible = rowData.Row.Visible and type(entry) == "table" and entry.Enabled == true
 			end
 			if rowData.VisibilityAutoCancelTarget ~= nil then
@@ -4549,6 +5226,11 @@ local function createEmptyCollapsiblePanel(
 		local hasDropdown = definition
 			and (definition.Options ~= nil or definition.OptionsProvider ~= nil)
 		local isAutoAccept = definition and definition.AcceptKey ~= nil
+		local acceptStateTable = autoAcceptState
+		if definition and type(definition.AcceptStateProvider) == "function" then
+			local ok, provided = pcall(definition.AcceptStateProvider)
+			if ok and type(provided) == "table" then acceptStateTable = provided end
+		end
 		local isAutoSit = definition and definition.SitKey ~= nil
 		local isDropdownOnly = definition and definition.DropdownOnly == true
 		local isAutoCancel = definition and definition.AutoCancel == true
@@ -4571,6 +5253,11 @@ local function createEmptyCollapsiblePanel(
 		local isTradeChatOfferManager = definition and definition.TradeChatOfferManager == true
 		local isSpecificCriteriaManager = definition and definition.SpecificCriteriaManager == true
 		local isAutoOfferSourceManager = definition and definition.AutoOfferSourceManager == true
+		local autoOfferSourceTable = autoOfferState
+		if isAutoOfferSourceManager and definition and type(definition.AutoOfferStateProvider) == "function" then
+			local ok, provided = pcall(definition.AutoOfferStateProvider)
+			if ok and type(provided) == "table" then autoOfferSourceTable = provided end
+		end
 		local isAutoCancelRarity = definition and definition.AutoCancelRarityKey ~= nil
 		local componentLabelGap = px(18)
 		local utilityParents = utilityParentKeys(definition)
@@ -4602,6 +5289,7 @@ local function createEmptyCollapsiblePanel(
 		local utilityExclusiveGroup = definition and definition.UtilityExclusiveGroup or nil
 		local utilityExclusiveRequired =
 			definition and definition.UtilityExclusiveRequired == true
+		local specificCriteriaRefresh = nil
 		featureRow.Visible = not isSimpleAutofarmWarning and (
 			not isServerHopChild
 			or (autoServerHopState and autoServerHopState.Enabled == true)
@@ -4622,7 +5310,7 @@ local function createEmptyCollapsiblePanel(
 			or (type(autoOfferState) == "table" and type(autoOfferState[visibilityAutoOfferSource]) == "table" and autoOfferState[visibilityAutoOfferSource].Enabled == true)
 		) and (
 			visibilityAcceptKey == nil
-			or (type(autoAcceptState) == "table" and type(autoAcceptState[visibilityAcceptKey]) == "table" and autoAcceptState[visibilityAcceptKey].Enabled == true)
+			or (type(acceptStateTable) == "table" and type(acceptStateTable[visibilityAcceptKey]) == "table" and acceptStateTable[visibilityAcceptKey].Enabled == true)
 		) and (
 			visibilityAutoCancelTarget == nil
 			or (type(autoCancelState) == "table" and type(autoCancelState.Targets) == "table" and autoCancelState.Targets[visibilityAutoCancelTarget] == true)
@@ -4641,7 +5329,7 @@ local function createEmptyCollapsiblePanel(
 		if isAutoSit then
 			stateEntry = autoSitState and autoSitState[definition.SitKey] or nil
 		elseif isAutoOfferSourceManager then
-			stateEntry = autoOfferState and autoOfferState[definition.Source] or nil
+			stateEntry = autoOfferSourceTable and autoOfferSourceTable[definition.Source] or nil
 		elseif isAutoCancelRarity then
 			stateEntry = autoCancelState
 		elseif isAutoCancel or isDropdownOnly then
@@ -4651,7 +5339,7 @@ local function createEmptyCollapsiblePanel(
 		elseif hasDropdown then
 			stateEntry = autoOfferState and autoOfferState[definition.Source] or nil
 		elseif isAutoAccept then
-			stateEntry = autoAcceptState and autoAcceptState[definition.AcceptKey] or nil
+			stateEntry = acceptStateTable and acceptStateTable[definition.AcceptKey] or nil
 		elseif isServerHop then
 			stateEntry = autoServerHopState
 		elseif isUtilityToggle
@@ -5172,6 +5860,8 @@ local function createEmptyCollapsiblePanel(
 			stateEntry.Targets = type(stateEntry.Targets) == "table" and stateEntry.Targets or {}
 			stateEntry.Amounts = type(stateEntry.Amounts) == "table" and stateEntry.Amounts or {}
 			stateEntry.SpecificTargets = type(stateEntry.SpecificTargets) == "table" and stateEntry.SpecificTargets or {}
+			stateEntry.SpecificMutations = type(stateEntry.SpecificMutations) == "table" and stateEntry.SpecificMutations or {}
+			stateEntry.SpecificTraits = type(stateEntry.SpecificTraits) == "table" and stateEntry.SpecificTraits or {}
 			stateEntry.Tokens = math.clamp(math.floor(tonumber(stateEntry.Tokens) or 0), 0, 1000000)
 			stateEntry.OfferAllTokens = stateEntry.OfferAllTokens == true
 			local managerHeight = px(1)
@@ -5390,8 +6080,36 @@ local function createEmptyCollapsiblePanel(
 				makeToggleRow("Offer Specific Brainrot", y, function() return stateEntry.OfferModeSpecific == true end, function(v) stateEntry.OfferModeSpecific = v end)
 				y += featureRowHeight
 				if stateEntry.OfferModeSpecific == true then
+					local mutationOptions = autoServerHopState.BoothMutationOptions()
+					local mutationButton = makeDropdownRow("Mutations", y, "Select")
+					local mutationNames = {}
+					for _, option in ipairs(mutationOptions) do if stateEntry.SpecificMutations[option] == true then mutationNames[#mutationNames + 1] = option end end
+					fitWholeDropdownNames(mutationButton, mutationNames, "Any")
+					mutationButton.MouseButton1Click:Connect(function()
+						openManagedMultiDropdown(mutationButton, mutationOptions, stateEntry.SpecificMutations, tostring, "Any", function()
+							for id, selected in pairs(stateEntry.SpecificTargets) do
+								if selected == true and not autoServerHopState.OwnedTradeableItemMatchesFilters(id, stateEntry.SpecificMutations, stateEntry.SpecificTraits) then stateEntry.SpecificTargets[id] = nil end
+							end
+							saveAutoOfferSource()
+						end, nil, rebuildAutoOfferSource)
+					end)
+					y += featureRowHeight
+					local traitOptions = autoServerHopState.BoothTraitOptions()
+					local traitButton = makeDropdownRow("Traits", y, "Select")
+					local traitNames = {}
+					for _, option in ipairs(traitOptions) do if stateEntry.SpecificTraits[option] == true then traitNames[#traitNames + 1] = option end end
+					fitWholeDropdownNames(traitButton, traitNames, "Any")
+					traitButton.MouseButton1Click:Connect(function()
+						openManagedMultiDropdown(traitButton, traitOptions, stateEntry.SpecificTraits, tostring, "Any", function()
+							for id, selected in pairs(stateEntry.SpecificTargets) do
+								if selected == true and not autoServerHopState.OwnedTradeableItemMatchesFilters(id, stateEntry.SpecificMutations, stateEntry.SpecificTraits) then stateEntry.SpecificTargets[id] = nil end
+							end
+							saveAutoOfferSource()
+						end, nil, rebuildAutoOfferSource)
+					end)
+					y += featureRowHeight
 					local specificButton = makeDropdownRow("Offer", y, "Select")
-					local options = autoServerHopState.RefreshOwnedOfferableBrainrotOptions()
+					local options = autoServerHopState.FilterOwnedOfferableBrainrotOptions(stateEntry.SpecificMutations, stateEntry.SpecificTraits)
 					local names = {}
 					for _, id in ipairs(options) do if stateEntry.SpecificTargets[id] == true then names[#names + 1] = autoServerHopState.OwnedBrainrotOptionLabel(id) end end
 					fitWholeDropdownNames(specificButton, names, "Select")
@@ -5418,9 +6136,9 @@ local function createEmptyCollapsiblePanel(
 			secondaryContainer.Visible = featureEnabled
 			secondaryContainer.ZIndex = 45013
 			secondaryContainer.Parent = featureRow
-			local entriesKey = "AutoOfferTradeChatOffers"
+			local entriesKey = definition.TradeChatOffersKey or "AutoOfferTradeChatOffers"
 			local function blankTradeChatOffer()
-				return {LookFor="", Targets={}, Amounts={}, SpecificItems={}, TokenAmount=0, OfferAllTokens=false}
+				return {LookFor="", Targets={}, Amounts={}, SpecificItems={}, SpecificMutations={}, SpecificTraits={}, TokenAmount=0, OfferAllTokens=false}
 			end
 			if type(stateEntry[entriesKey]) ~= "table" or #stateEntry[entriesKey] == 0 then
 				stateEntry[entriesKey] = {blankTradeChatOffer()}
@@ -5434,6 +6152,8 @@ local function createEmptyCollapsiblePanel(
 				entry.Targets = type(entry.Targets) == "table" and entry.Targets or {}
 				entry.Amounts = type(entry.Amounts) == "table" and entry.Amounts or {}
 				entry.SpecificItems = type(entry.SpecificItems) == "table" and entry.SpecificItems or {}
+				entry.SpecificMutations = type(entry.SpecificMutations) == "table" and entry.SpecificMutations or {}
+				entry.SpecificTraits = type(entry.SpecificTraits) == "table" and entry.SpecificTraits or {}
 				if entry.BrainrotId ~= nil then entry.SpecificItems[tostring(entry.BrainrotId)] = true entry.BrainrotId = nil end
 				entry.TokenAmount = math.clamp(math.floor(tonumber(entry.TokenAmount) or 0), 0, 1000000)
 				entry.OfferAllTokens = entry.OfferAllTokens == true
@@ -5490,9 +6210,16 @@ local function createEmptyCollapsiblePanel(
 				end
 				for entryIndex, rawEntry in ipairs(entries) do
 					local entry=normalizeTradeChatEntry(rawEntry) entries[entryIndex]=entry
+					local clearButton
+					local function hasClearableOffer()
+						return entry.LookFor ~= "" or entry.TokenAmount > 0 or entry.OfferAllTokens == true or next(entry.Targets) ~= nil or next(entry.SpecificItems) ~= nil
+					end
+					local function refreshClearStyle()
+						if clearButton then clearButton.TextColor3 = hasClearableOffer() and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR end
+					end
 					local function specificCount() local c=0 for _,v in pairs(entry.SpecificItems) do if v==true then c+=1 end end return c end
 					local function rarityUnits(except) local c=0 for _,r in ipairs(OUTGOING_BRAINROT_RARITY_OPTIONS) do if r~=except and entry.Targets[r]==true then c+=math.clamp(math.floor(tonumber(entry.Amounts[r]) or 1),1,6) end end return c end
-					local input=textBoxBase(entry.LookFor,"Trade Chat To Look For",y) input.FocusLost:Connect(function() entry.LookFor=input.Text saveTradeChatOffers() end) y+=px(31)
+					local input=textBoxBase(entry.LookFor,"Trade Chat To Look For",y) input.FocusLost:Connect(function() entry.LookFor=input.Text refreshClearStyle() saveTradeChatOffers() end) y+=px(31)
 					local rarityButton=labeledDropdown("Rarity Based Offer",y)
 					fitWholeDropdownNames(rarityButton,selectedTargetList(entry,OUTGOING_BRAINROT_RARITY_OPTIONS),"Select")
 					rarityButton.MouseButton1Click:Connect(function()
@@ -5505,17 +6232,45 @@ local function createEmptyCollapsiblePanel(
 							y+=amountControlsHeight+px(3)
 						end
 					end
+					local mutationOptions=autoServerHopState.BoothMutationOptions()
+					local mutationButton=labeledDropdown("Specific Offer Mutations",y)
+					local mutationNames={} for _,option in ipairs(mutationOptions) do if entry.SpecificMutations[option]==true then mutationNames[#mutationNames+1]=option end end
+					fitWholeDropdownNames(mutationButton,mutationNames,"Any")
+					mutationButton.MouseButton1Click:Connect(function()
+						openManagedMultiDropdown(mutationButton,mutationOptions,entry.SpecificMutations,tostring,"Any",function()
+							for id,on in pairs(entry.SpecificItems) do if on==true and not autoServerHopState.OwnedTradeableItemMatchesFilters(id,entry.SpecificMutations,entry.SpecificTraits) then entry.SpecificItems[id]=nil end end
+							saveTradeChatOffers()
+						end,nil,rebuildTradeChatOffers)
+					end)
+					y+=featureRowHeight
+					local traitOptions=autoServerHopState.BoothTraitOptions()
+					local traitButton=labeledDropdown("Specific Offer Traits",y)
+					local traitNames={} for _,option in ipairs(traitOptions) do if entry.SpecificTraits[option]==true then traitNames[#traitNames+1]=option end end
+					fitWholeDropdownNames(traitButton,traitNames,"Any")
+					traitButton.MouseButton1Click:Connect(function()
+						openManagedMultiDropdown(traitButton,traitOptions,entry.SpecificTraits,tostring,"Any",function()
+							for id,on in pairs(entry.SpecificItems) do if on==true and not autoServerHopState.OwnedTradeableItemMatchesFilters(id,entry.SpecificMutations,entry.SpecificTraits) then entry.SpecificItems[id]=nil end end
+							saveTradeChatOffers()
+						end,nil,rebuildTradeChatOffers)
+					end)
+					y+=featureRowHeight
 					local specificButton=labeledDropdown("Specific Brainrot/Item Offer",y)
-					local specificOptions=autoServerHopState.RefreshOwnedTradeableItemOptions()
+					local specificOptions=autoServerHopState.FilterOwnedTradeableItemOptions(entry.SpecificMutations,entry.SpecificTraits)
 					local specificNames={} for _,id in ipairs(specificOptions) do if entry.SpecificItems[id]==true then specificNames[#specificNames+1]=autoServerHopState.OwnedTradeableItemOptionLabel(id) end end
 					fitWholeDropdownNames(specificButton,specificNames,"Select")
 					specificButton.MouseButton1Click:Connect(function()
 						openManagedMultiDropdown(specificButton,specificOptions,entry.SpecificItems,autoServerHopState.OwnedTradeableItemOptionLabel,"Select",function() saveTradeChatOffers() end,function() return rarityUnits(nil)+specificCount()<6 end,rebuildTradeChatOffers)
 					end)
 					y+=featureRowHeight
-					makeOfferSlider("Token Amount",entry.TokenAmount,0,1000000,y,function(v) entry.TokenAmount=v return v end) y+=amountControlsHeight+px(3)
+					makeOfferSlider("Token Amount",entry.TokenAmount,0,1000000,y,function(v) entry.TokenAmount=v refreshClearStyle() return v end) y+=amountControlsHeight+px(3)
 					checkboxRow("Offer All Tokens",y,function() return entry.OfferAllTokens==true end,function(v) entry.OfferAllTokens=v end) y+=featureRowHeight
-					local clear=buttonBase("Clear Custom Offer",y) clear.MouseButton1Click:Connect(function() entries[entryIndex]=blankTradeChatOffer() saveTradeChatOffers() task.defer(rebuildTradeChatOffers) end) y+=px(31)
+					clearButton=buttonBase("Clear Custom Offer",y)
+					refreshClearStyle()
+					clearButton.MouseButton1Click:Connect(function()
+						if not hasClearableOffer() then return end
+						entries[entryIndex]=blankTradeChatOffer() saveTradeChatOffers() task.defer(rebuildTradeChatOffers)
+					end)
+					y+=px(31)
 					if entryIndex>1 then local remove=buttonBase("Remove Custom Offer",y) remove.TextColor3=MUTED_TEXT_COLOR remove.MouseButton1Click:Connect(function() table.remove(entries,entryIndex) if #entries==0 then entries[1]=blankTradeChatOffer() end saveTradeChatOffers() task.defer(rebuildTradeChatOffers) end) y+=px(31) end
 					y+=px(12)
 				end
@@ -5536,7 +6291,7 @@ local function createEmptyCollapsiblePanel(
 			secondaryContainer.Parent = featureRow
 			local entriesKey = definition.SpecificCriteriaStateKey
 			if type(stateEntry[entriesKey]) ~= "table" or #stateEntry[entriesKey] == 0 then
-				stateEntry[entriesKey] = {{Item = nil, Mutations = {}, Traits = {}}}
+				stateEntry[entriesKey] = {{Item = nil, Mutations = {}, Traits = {}, Amount = 1}}
 			end
 			local managerHeight = px(1)
 			dynamicSecondaryHeight = function() return managerHeight end
@@ -5699,9 +6454,9 @@ local function createEmptyCollapsiblePanel(
 				for _, child in ipairs(secondaryContainer:GetChildren()) do child:Destroy() end
 				local entries = stateEntry[entriesKey]
 				if type(entries) ~= "table" then entries = {} stateEntry[entriesKey] = entries end
-				if #entries == 0 then entries[1] = {Item = nil, Mutations = {}, Traits = {}} end
+				if #entries == 0 then entries[1] = {Item = nil, Mutations = {}, Traits = {}, Amount = 1} end
 				if entries[#entries].Item ~= nil then
-					entries[#entries + 1] = {Item = nil, Mutations = {}, Traits = {}}
+					entries[#entries + 1] = {Item = nil, Mutations = {}, Traits = {}, Amount = 1}
 				end
 				while #entries > 1 and entries[#entries].Item == nil and entries[#entries - 1].Item == nil do
 					table.remove(entries, #entries)
@@ -5734,9 +6489,10 @@ local function createEmptyCollapsiblePanel(
 					allItems = autoServerHopState.AllDeletableItemOptions()
 				end
 				for entryIndex, entry in ipairs(entries) do
-					if type(entry) ~= "table" then entry = {Item = nil, Mutations = {}, Traits = {}} entries[entryIndex] = entry end
+					if type(entry) ~= "table" then entry = {Item = nil, Mutations = {}, Traits = {}, Amount = 1} entries[entryIndex] = entry end
 					entry.Mutations = type(entry.Mutations) == "table" and entry.Mutations or {}
 					entry.Traits = type(entry.Traits) == "table" and entry.Traits or {}
+					entry.Amount = math.clamp(math.floor(tonumber(entry.Amount) or 1), 1, tonumber(definition.SpecificCriteriaMaxAmount) or 6)
 					local emptyChoiceText = (entryIndex > 1 and entry.Item == nil) and "Select Another" or "Select"
 					local itemButton = makeButton(entry.Item and tostring(entry.Item) or emptyChoiceText, y)
 					itemButton.MouseButton1Click:Connect(function()
@@ -5749,7 +6505,7 @@ local function createEmptyCollapsiblePanel(
 						end)
 					end)
 					y += px(31)
-					if entry.Item ~= nil and isBrainrotName(entry.Item) then
+					if entry.Item ~= nil and isBrainrotName(entry.Item) and definition.SpecificCriteriaSimple ~= true then
 						local mutationNames = selectedNames(entry.Mutations, autoServerHopState.BoothMutationOptions())
 						local mutationButton = makeButton(#mutationNames > 0 and ("Mutations: " .. table.concat(mutationNames, ", ")) or "Mutations: Select", y)
 						mutationButton.MouseButton1Click:Connect(function() openCriteriaDropdown(mutationButton, autoServerHopState.BoothMutationOptions(), entry.Mutations, nil) end)
@@ -5759,6 +6515,67 @@ local function createEmptyCollapsiblePanel(
 						traitButton.MouseButton1Click:Connect(function() openCriteriaDropdown(traitButton, autoServerHopState.BoothTraitOptions(), entry.Traits, nil) end)
 						y += px(31)
 					end
+					if entry.Item ~= nil and definition.SpecificCriteriaWithAmount == true then
+						local maxAmount = tonumber(definition.SpecificCriteriaMaxAmount) or 6
+						local amountFrame = New("Frame")
+						amountFrame.Position = U2O(0, y)
+						amountFrame.Size = U2(1, 0, 0, px(40))
+						amountFrame.BackgroundTransparency = 1
+						amountFrame.ZIndex = 45014
+						amountFrame.Parent = secondaryContainer
+						local amountLabel = New("TextLabel")
+						amountLabel.Size = U2(1, -amountValueWidth - componentLabelGap, 0, px(15))
+						amountLabel.BackgroundTransparency = 1
+						amountLabel.Text = "Amount"
+						amountLabel.TextColor3 = MENU_TEXT_SELECTED
+						amountLabel.FontFace = MENU_FONT_FACE
+						setResponsiveTextSize(amountLabel, 14)
+						amountLabel.TextXAlignment = Enum.TextXAlignment.Left
+						amountLabel.Parent = amountFrame
+						local valueBox = New("TextBox")
+						valueBox.AnchorPoint = V2(1,0)
+						valueBox.Position = U2(1,0,0,0)
+						valueBox.Size = U2O(amountValueWidth, px(20))
+						valueBox.BackgroundColor3 = FEATURE_OFF_COLOR
+						valueBox.BorderSizePixel = 0
+						valueBox.ClearTextOnFocus = false
+						valueBox.Text = tostring(entry.Amount)
+						valueBox.TextColor3 = MENU_TEXT_SELECTED
+						valueBox.FontFace = MENU_FONT_FACE
+						setResponsiveTextSize(valueBox,14)
+						valueBox.Parent = amountFrame
+						ensureCorner(valueBox,px(5))
+						rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(valueBox)
+						local track = New("Frame")
+						track.Position = U2O(0,px(27))
+						track.Size = U2(1,0,0,px(5))
+						track.BackgroundColor3 = FEATURE_OFF_COLOR
+						track.BorderSizePixel = 0
+						track.Active = true
+						track.Parent = amountFrame
+						ensureCorner(track,px(3))
+						local fill = New("Frame")
+						fill.BackgroundColor3=PINK fill.BorderSizePixel=0 fill.Parent=track ensureCorner(fill,px(3))
+						local knob = New("Frame")
+						knob.AnchorPoint=V2(0.5,0.5) knob.Size=U2O(px(11),px(11)) knob.BackgroundColor3=MENU_TEXT_SELECTED knob.BorderSizePixel=0 knob.Parent=track ensureCorner(knob,px(6))
+						local function setAmount(value, updateBox)
+							entry.Amount=math.clamp(math.floor(tonumber(value) or 1),1,maxAmount)
+							if updateBox then valueBox.Text=tostring(entry.Amount) end
+							local alpha=maxAmount<=1 and 0 or ((entry.Amount-1)/(maxAmount-1))
+							fill.Size=U2S(alpha,1) knob.Position=U2(alpha,0,0.5,0)
+						end
+						setAmount(entry.Amount,true)
+						valueBox.FocusLost:Connect(function() setAmount(valueBox.Text,true) saveSpecificCriteria() end)
+						track.InputBegan:Connect(function(input)
+							if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
+								beginSliderDrag(input,function(pointX)
+									local alpha=math.clamp((pointX-track.AbsolutePosition.X)/math.max(1,track.AbsoluteSize.X),0,1)
+									setAmount(1+math.floor(alpha*(maxAmount-1)+0.5),true)
+								end)
+							end
+						end)
+						y += px(40)
+					end
 					if entryIndex == 1 or entry.Item ~= nil then
 						local clearChoice = makeButton("Clear Choice", y)
 						clearChoice.TextColor3 = MENU_TEXT_SELECTED
@@ -5766,6 +6583,7 @@ local function createEmptyCollapsiblePanel(
 							entry.Item = nil
 							entry.Mutations = {}
 							entry.Traits = {}
+							entry.Amount = 1
 							saveSpecificCriteria()
 							task.defer(rebuildSpecificCriteria)
 						end)
@@ -5788,6 +6606,7 @@ local function createEmptyCollapsiblePanel(
 				task.defer(relayoutRows)
 			end
 			rebuildSpecificCriteria()
+			specificCriteriaRefresh = rebuildSpecificCriteria
 		end
 		if isUtilityText and stateEntry then
 			secondaryContainer = New("Frame")
@@ -5918,6 +6737,14 @@ local function createEmptyCollapsiblePanel(
 				end
 				for option in pairs(selected) do
 					if not allowed[option] then selected[option] = nil end
+				end
+				if definition.AlwaysAnyDefault == true then
+					local anyOption = definition.AnyOption or "Any"
+					local hasSpecific = false
+					for option, enabled in pairs(selected) do
+						if enabled == true and option ~= anyOption then hasSpecific = true break end
+					end
+					if hasSpecific then selected[anyOption] = nil else selected[anyOption] = true end
 				end
 			end
 			local function syncUtilityDropdownText()
@@ -6197,7 +7024,19 @@ local function createEmptyCollapsiblePanel(
 					optionButton.MouseButton1Click:Connect(function()
 						if isUtilityMultiDropdown then
 							local selected = utilitySelectionTable()
-							selected[option] = selected[option] ~= true and true or nil
+							if definition.AlwaysAnyDefault == true then
+								local anyOption = definition.AnyOption or "Any"
+								if option == anyOption then
+									table.clear(selected)
+									selected[anyOption] = true
+								else
+									selected[anyOption] = nil
+									selected[option] = selected[option] ~= true and true or nil
+									if next(selected) == nil then selected[anyOption] = true end
+								end
+							else
+								selected[option] = selected[option] ~= true and true or nil
+							end
 							syncUtilityDropdownText()
 							refreshUtilityOptionVisuals()
 							return
@@ -6972,6 +7811,10 @@ local function createEmptyCollapsiblePanel(
 				return math.clamp(value, minValue, maxValue)
 			end
 			local function sliderValueText(value)
+				if type(definition.ValueFormatter) == "function" then
+					local ok, formatted = pcall(definition.ValueFormatter, value)
+					if ok and formatted ~= nil then return tostring(formatted) end
+				end
 				if decimals <= 0 then return tostring(math.floor(value + 0.5)) end
 				local formatted = string.format("%." .. tostring(decimals) .. "f", value)
 				formatted = string.gsub(formatted, "0+$", "")
@@ -7343,6 +8186,9 @@ local function createEmptyCollapsiblePanel(
 						stateEntry[definition.UtilityToggleKey] = featureEnabled
 					end
 					local toggledUtilityKey = definition.UtilityToggleKey
+					if toggledUtilityKey == "FallbackOffers" then
+						stateEntry.FallbackToNextLowerRarityBrainrot = featureEnabled
+					end
 					if toggledUtilityKey == "AutoEquipModeHold"
 						or toggledUtilityKey == "AutoEquipModeMount"
 						or toggledUtilityKey == "AutoEquipModeHoldMount"
@@ -7411,6 +8257,11 @@ local function createEmptyCollapsiblePanel(
 			elseif isAutoOfferSourceManager or hasDropdown or isAutoAccept or isAutoSit then
 				if stateEntry then stateEntry.Enabled = featureEnabled end
 				refreshUtilityChildVisibility()
+				if isAutoAccept then
+					for _, rowData in ipairs(featureRows) do
+						if rowData.RefreshFromState then rowData.RefreshFromState() end
+					end
+				end
 			elseif definition and minigameAutoplayState then
 				minigameAutoplayState[definition.Id] = featureEnabled
 				if activePanelDropdown then closeActivePanelDropdown() end
@@ -7529,7 +8380,7 @@ local function createEmptyCollapsiblePanel(
 				)
 				and (
 					visibilityAcceptKey == nil
-					or (type(autoAcceptState) == "table" and type(autoAcceptState[visibilityAcceptKey]) == "table" and autoAcceptState[visibilityAcceptKey].Enabled == true)
+					or (type(acceptStateTable) == "table" and type(acceptStateTable[visibilityAcceptKey]) == "table" and acceptStateTable[visibilityAcceptKey].Enabled == true)
 				)
 				and (
 					visibilityAutoCancelTarget == nil
@@ -7656,6 +8507,7 @@ local function createEmptyCollapsiblePanel(
 			VisibilityUtilityParentKeys = visibilityUtilityParents,
 			VisibilityAutoOfferSource = visibilityAutoOfferSource,
 			VisibilityAcceptKey = visibilityAcceptKey,
+			AcceptStateTable = acceptStateTable,
 			VisibilityAutoCancelTarget = visibilityAutoCancelTarget,
 			VisibilitySitKey = visibilitySitKey,
 			VisibilityAutoSitTarget = visibilityAutoSitTarget,
@@ -7668,6 +8520,7 @@ local function createEmptyCollapsiblePanel(
 			ToggleKnob = toggleKnob,
 			FeatureLabel = featureLabel,
 			RefreshFromState = refreshFeatureRowFromState,
+			RefreshSpecificCriteria = specificCriteriaRefresh,
 		}
 		if isUtilityToggle then
 			autoServerHopState.RuntimeUtilityToggleRows = autoServerHopState.RuntimeUtilityToggleRows or {}
@@ -7729,7 +8582,8 @@ local function createEmptyCollapsiblePanel(
 		Order = order,
 		PersistenceKey = panelPersistenceKey,
 		Expanded = initialPanelExpanded,
-		ExpandedHeight = PANEL_HEADER_HEIGHT + LINE_THICKNESS + featureTopPadding + featureBottomPadding
+		HeaderHeight = currentHeaderHeight,
+		ExpandedHeight = currentHeaderHeight + LINE_THICKNESS + featureTopPadding + featureBottomPadding
 			+ (#featureRows * featureRowHeight) + (math.max(0, #featureRows - 1) * featureRowGap),
 		Title = panelTitle,
 		SearchText = string.lower(searchTerms),
@@ -7771,42 +8625,17 @@ local function createEmptyCollapsiblePanel(
 		)
 	end)
 end
-local function createSixPanelsForTab(
-	tabItem
-)
-	for panelIndex = 1, 6 do
-		local column = (
-				(panelIndex - 1)
-				% 2
-			)
-			+ 1
-		local order = math.ceil(
-				panelIndex
-					/ 2
-			)
-		createEmptyCollapsiblePanel(
-			tabItem,
-			panelIndex,
-			column,
-			order
-		)
-	end
-end
-if IS_MINIGAME_PLACE then
+
+-- Build all tab panels in an isolated function scope. The main UI chunk already
+-- carries many long-lived locals; Luau caps each function/chunk at 200 local
+-- registers. Keeping panel-definition temporaries here prevents register
+-- pressure from accumulating in the top-level chunk.
+;(function()
+
 	createEmptyCollapsiblePanel(
-		mainItem,
-		18,
-		1,
-		1,
-		"Pause Minigames",
-		{
-			{Label = "Pause All Minigame Features", UtilityToggleKey = "PauseMinigameFeatures"},
-		}
-	)
-	createEmptyCollapsiblePanel(
-		mainItem,
+		tabs.Autofarm,
 		23,
-		2,
+		1,
 		1,
 		"Simple Autofarm",
 		{
@@ -7816,7 +8645,7 @@ if IS_MINIGAME_PLACE then
 		}
 	)
 	createEmptyCollapsiblePanel(
-		mainItem,
+		tabs.Games,
 		1,
 		1,
 		1,
@@ -7839,26 +8668,28 @@ if IS_MINIGAME_PLACE then
 		}
 	)
 	do
-		local autoOfferFeatures = {
+		local rarityOfferFeatures = {
 			{Label = "Auto Offer", UtilityToggleKey = "AutoOfferMaster"},
 		}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
-			autoOfferFeatures[#autoOfferFeatures + 1] = {
-				Label = rarity,
-				Source = rarity,
-				AutoOfferSourceManager = true,
+			rarityOfferFeatures[#rarityOfferFeatures + 1] = {
+				Label = rarity, Source = rarity, AutoOfferSourceManager = true,
 				VisibilityUtilityParentKey = "AutoOfferMaster",
 			}
 		end
-		autoOfferFeatures[#autoOfferFeatures + 1] = {Label = "Token Offer", UtilityToggleKey = "AutoOfferTokensEnabled"}
-		autoOfferFeatures[#autoOfferFeatures + 1] = {Label = "Match Tokens With Tokens", UtilityToggleKey = "AutoOfferMatchTokensWithTokens", UtilityParentKey = "AutoOfferTokensEnabled"}
-		autoOfferFeatures[#autoOfferFeatures + 1] = {Label = "Token Add Ratio", UtilitySliderKey = "AutoOfferTokenAddRatio", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithTokens"}, MinValue = 1, MaxValue = 10, UnitLabel = "Multiplier"}
-		autoOfferFeatures[#autoOfferFeatures + 1] = {Label = "Lowest Tokens To Match", UtilitySliderKey = "AutoOfferLowestTokensToMatch", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithTokens"}, MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"}
-		autoOfferFeatures[#autoOfferFeatures + 1] = {Label = "Match Tokens With Brainrots", UtilityToggleKey = "AutoOfferMatchTokensWithBrainrots", UtilityParentKey = "AutoOfferTokensEnabled"}
-		autoOfferFeatures[#autoOfferFeatures + 1] = {Label = "Token Amount", UtilitySliderKey = "AutoOfferTokenAmount", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithBrainrots"}, MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"}
-		autoOfferFeatures[#autoOfferFeatures + 1] = {Label = "Offer", UtilityDropdownKey = "AutoOfferTokenRarity", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithBrainrots"}, Placeholder = "Select", Options = OUTGOING_BRAINROT_RARITY_OPTIONS}
-		autoOfferFeatures[#autoOfferFeatures + 1] = {Label = "Trade Chat Offer", UtilityToggleKey = "AutoOfferBasedOnTradeChat", TradeChatOfferManager = true}
-		createEmptyCollapsiblePanel(mainItem, 2, 1, 2, "Auto Offer", autoOfferFeatures)
+		createEmptyCollapsiblePanel(tabs.Offers, 2, 1, 1, "Rarity-Based Offers", rarityOfferFeatures)
+		createEmptyCollapsiblePanel(tabs.Offers, 24, 2, 1, "Token Matching", {
+			{Label = "Token Matching", UtilityToggleKey = "AutoOfferTokensEnabled"},
+			{Label = "Match Tokens With Tokens", UtilityToggleKey = "AutoOfferMatchTokensWithTokens", UtilityParentKey = "AutoOfferTokensEnabled"},
+			{Label = "Token Add Ratio", UtilitySliderKey = "AutoOfferTokenAddRatio", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithTokens"}, MinValue = 1, MaxValue = 10, UnitLabel = "Multiplier"},
+			{Label = "Lowest Tokens To Match", UtilitySliderKey = "AutoOfferLowestTokensToMatch", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithTokens"}, MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Match Tokens With Brainrots", UtilityToggleKey = "AutoOfferMatchTokensWithBrainrots", UtilityParentKey = "AutoOfferTokensEnabled"},
+			{Label = "Token Amount", UtilitySliderKey = "AutoOfferTokenAmount", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithBrainrots"}, MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Offer", UtilityDropdownKey = "AutoOfferTokenRarity", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithBrainrots"}, Placeholder = "Select", Options = OUTGOING_BRAINROT_RARITY_OPTIONS},
+		})
+		createEmptyCollapsiblePanel(tabs.Offers, 25, 1, 2, "Trade Chat Offers", {
+			{Label = "Trade Chat Offers", UtilityToggleKey = "AutoOfferBasedOnTradeChat", TradeChatOfferManager = true},
+		})
 	end
 	do
 		local autoSitFeatures = {
@@ -7875,54 +8706,128 @@ if IS_MINIGAME_PLACE then
 		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "AutoSitSpecificItems", VisibilitySitKey = "OneOfTwo", SpecificCriteriaOptionsProvider = function() return autoServerHopState.BoothBrainrotOptions() end}
 		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Opponent Must Own All Selected Brainrots", UtilityToggleKey = "AutoSitMustOwnAllSelected", VisibilitySitKey = "OneOfTwo"}
 		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Opponent Must Own One Of Selected Brainrots", UtilityToggleKey = "AutoSitMustOwnOneSelected", VisibilitySitKey = "OneOfTwo"}
-		createEmptyCollapsiblePanel(mainItem, 3, 2, 2, "Auto Sit", autoSitFeatures)
+		createEmptyCollapsiblePanel(tabs.Matchmaking, 3, 1, 1, "Auto Sit", autoSitFeatures)
+	end
+	local function appendAcceptCriteria(features, parentKey, acceptStateProvider, mutationPrefix, specificStateKey, allKey, oneKey)
+		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+			features[#features + 1] = {
+				Label = rarity, AcceptKey = rarity, VisibilityUtilityParentKey = parentKey,
+				AcceptStateProvider = acceptStateProvider,
+			}
+			features[#features + 1] = {Label = "Mutations", UtilityMultiDropdownKey = mutationPrefix .. rarity .. "Mutations", UtilityParentKey = parentKey, VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end}
+			features[#features + 1] = {Label = "Traits", UtilityMultiDropdownKey = mutationPrefix .. rarity .. "Traits", UtilityParentKey = parentKey, VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end}
+		end
+		features[#features + 1] = {Label = "Tokens", AcceptKey = "Tokens", VisibilityUtilityParentKey = parentKey, AcceptStateProvider = acceptStateProvider}
+		features[#features + 1] = {Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = specificStateKey, UtilityParentKey = parentKey}
+		features[#features + 1] = {Label = "Require All Selected Criteria", UtilityToggleKey = allKey, UtilityParentKey = parentKey, UtilityExclusiveGroup = parentKey .. "CriteriaMode", UtilityExclusiveRequired = true}
+		features[#features + 1] = {Label = "Require At Least One Selected Criterion", UtilityToggleKey = oneKey, UtilityParentKey = parentKey, UtilityExclusiveGroup = parentKey .. "CriteriaMode", UtilityExclusiveRequired = true}
+		return features
+	end
+	local function sharedAcceptStateProvider() return autoAcceptState end
+	local function tradeRequestStateProvider() return tradeRequestCriteriaState end
+	do
+		local features = {{Label = "Accept Offer", UtilityToggleKey = "AutoAcceptMaster"}}
+		appendAcceptCriteria(features, "AutoAcceptMaster", sharedAcceptStateProvider, "AutoAccept", "AutoAcceptSpecificItems", "AutoAcceptMustHaveAll", "AutoAcceptMustHaveOne")
+		createEmptyCollapsiblePanel(tabs.Offers, 4, 2, 2, "Accept Offer", features)
 	end
 	do
-		local autoAcceptFeatures = {
-			{Label = "Auto Accept", UtilityToggleKey = "AutoAcceptMaster"},
+		local acceptOfferFeatures = {{Label = "Accept Offer", UtilityToggleKey = "AutoAcceptTradesAcceptOffers"}}
+		appendAcceptCriteria(acceptOfferFeatures, "AutoAcceptTradesAcceptOffers", sharedAcceptStateProvider, "AutoAccept", "AutoAcceptSpecificItems", "AutoAcceptMustHaveAll", "AutoAcceptMustHaveOne")
+		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 32, 1, 1, "Accept Offer", acceptOfferFeatures)
+
+		local requestFeatures = {{Label = "Accept Trade Request", UtilityToggleKey = "AutoAcceptTradesAcceptRequests"}}
+		appendAcceptCriteria(requestFeatures, "AutoAcceptTradesAcceptRequests", tradeRequestStateProvider, "AutoAcceptTradesRequest", "AutoAcceptTradesRequestSpecificItems", "AutoAcceptTradesRequestMustHaveAll", "AutoAcceptTradesRequestMustHaveOne")
+		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 33, 2, 1, "Trade Request Criteria", requestFeatures)
+
+		-- Regular Trade Offer mirrors the reactive Minigame Offers tools, but uses
+		-- an independent offer namespace so configuring one trade type never changes the other.
+		local regularRarityOfferFeatures = {
+			{Label = "Auto Offer", UtilityToggleKey = "RegularAutoOfferMaster"},
 		}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
-			autoAcceptFeatures[#autoAcceptFeatures + 1] = {Label = rarity, AcceptKey = rarity, VisibilityUtilityParentKey = "AutoAcceptMaster"}
-			autoAcceptFeatures[#autoAcceptFeatures + 1] = {
-				Label = "Mutations", UtilityMultiDropdownKey = "AutoAccept" .. rarity .. "Mutations",
-				UtilityParentKey = "AutoAcceptMaster", VisibilityAcceptKey = rarity, Placeholder = "Select",
-				OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end,
-			}
-			autoAcceptFeatures[#autoAcceptFeatures + 1] = {
-				Label = "Traits", UtilityMultiDropdownKey = "AutoAccept" .. rarity .. "Traits",
-				UtilityParentKey = "AutoAcceptMaster", VisibilityAcceptKey = rarity, Placeholder = "Select",
-				OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end,
+			regularRarityOfferFeatures[#regularRarityOfferFeatures + 1] = {
+				Label = rarity,
+				Source = rarity,
+				AutoOfferSourceManager = true,
+				AutoOfferStateProvider = function() return regularAutoOfferState end,
+				VisibilityUtilityParentKey = "RegularAutoOfferMaster",
 			}
 		end
-		autoAcceptFeatures[#autoAcceptFeatures + 1] = {Label = "Tokens", AcceptKey = "Tokens", VisibilityUtilityParentKey = "AutoAcceptMaster"}
-		autoAcceptFeatures[#autoAcceptFeatures + 1] = {Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "AutoAcceptSpecificItems", UtilityParentKey = "AutoAcceptMaster"}
-		autoAcceptFeatures[#autoAcceptFeatures + 1] = {Label = "Opponent Must Own All Selected Brainrots", UtilityToggleKey = "AutoAcceptMustHaveAll", UtilityParentKey = "AutoAcceptMaster"}
-		autoAcceptFeatures[#autoAcceptFeatures + 1] = {Label = "Opponent Must Own One Of Selected Brainrots", UtilityToggleKey = "AutoAcceptMustHaveOne", UtilityParentKey = "AutoAcceptMaster"}
-		createEmptyCollapsiblePanel(mainItem, 4, 2, 1, "Auto Accept", autoAcceptFeatures)
+		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 37, 1, 2, "Rarity-Based Offers", regularRarityOfferFeatures)
+		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 38, 2, 2, "Token Matching", {
+			{Label = "Token Matching", UtilityToggleKey = "RegularAutoOfferTokensEnabled"},
+			{Label = "Match Tokens With Tokens", UtilityToggleKey = "RegularAutoOfferMatchTokensWithTokens", UtilityParentKey = "RegularAutoOfferTokensEnabled"},
+			{Label = "Token Add Ratio", UtilitySliderKey = "RegularAutoOfferTokenAddRatio", UtilityParentKeys = {"RegularAutoOfferTokensEnabled", "RegularAutoOfferMatchTokensWithTokens"}, MinValue = 1, MaxValue = 10, UnitLabel = "Multiplier"},
+			{Label = "Lowest Tokens To Match", UtilitySliderKey = "RegularAutoOfferLowestTokensToMatch", UtilityParentKeys = {"RegularAutoOfferTokensEnabled", "RegularAutoOfferMatchTokensWithTokens"}, MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Match Tokens With Brainrots", UtilityToggleKey = "RegularAutoOfferMatchTokensWithBrainrots", UtilityParentKey = "RegularAutoOfferTokensEnabled"},
+			{Label = "Token Amount", UtilitySliderKey = "RegularAutoOfferTokenAmount", UtilityParentKeys = {"RegularAutoOfferTokensEnabled", "RegularAutoOfferMatchTokensWithBrainrots"}, MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Offer", UtilityDropdownKey = "RegularAutoOfferTokenRarity", UtilityParentKeys = {"RegularAutoOfferTokensEnabled", "RegularAutoOfferMatchTokensWithBrainrots"}, Placeholder = "Select", Options = OUTGOING_BRAINROT_RARITY_OPTIONS},
+		})
+		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 39, 1, 3, "Trade Chat Offers", {
+			{Label = "Trade Chat Offers", UtilityToggleKey = "RegularAutoOfferBasedOnTradeChat", TradeChatOfferManager = true, TradeChatOffersKey = "RegularAutoOfferTradeChatOffers"},
+		})
+
+		local regularOpeningFeatures = {
+			{Label = "Autoshow Best Brainrots", UtilityToggleKey = "RegularOpeningAutoshowBestBrainrots", UtilityExclusiveGroup = "RegularOpeningBrainrotMode"},
+			{Label = "Custom Opening Brainrots", UtilityToggleKey = "RegularOpeningCustomBrainrots", UtilityExclusiveGroup = "RegularOpeningBrainrotMode"},
+			{Label = "Opening Brainrot Mutations", UtilityMultiDropdownKey = "RegularOpeningSpecificMutations", UtilityParentKey = "RegularOpeningCustomBrainrots", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Opening Brainrot Traits", UtilityMultiDropdownKey = "RegularOpeningSpecificTraits", UtilityParentKey = "RegularOpeningCustomBrainrots", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+		}
+		for slotIndex = 1, 6 do
+			regularOpeningFeatures[#regularOpeningFeatures + 1] = {
+				Label = "Brainrot " .. tostring(slotIndex),
+				UtilityDropdownKey = "RegularOpeningBrainrot" .. tostring(slotIndex),
+				UtilityParentKey = "RegularOpeningCustomBrainrots",
+				Placeholder = "None",
+				OptionsProvider = function() local u = autoServerHopState.Utility return autoServerHopState.FilterOwnedOfferableBrainrotOptions(u.RegularOpeningSpecificMutations, u.RegularOpeningSpecificTraits) end,
+				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
+				ClearIfMissing = true,
+			}
+		end
+		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Autoshow All Tokens", UtilityToggleKey = "RegularOpeningAutoshowAllTokens", UtilityExclusiveGroup = "RegularOpeningTokenMode"}
+		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Custom Opening Tokens", UtilityToggleKey = "RegularOpeningCustomTokens", UtilityExclusiveGroup = "RegularOpeningTokenMode"}
+		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Custom Token Amount", UtilitySliderKey = "RegularOpeningTokenAmount", UtilityParentKey = "RegularOpeningCustomTokens", MinValue = 0, MaxValue = 1000000, MaxValueProvider = function() return autoServerHopState.CurrentTradeTokenBalance() end, UnitLabel = "Tokens"}
+		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 34, 2, 3, "Opening Offer", regularOpeningFeatures)
+		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 35, 1, 4, "Trade Delays", {
+			{Label="Custom Delays", UtilityToggleKey="AutoAcceptTradesCustomDelays"},
+			{Label="Accept Trade Request Delay", UtilitySliderKey="AutoAcceptTradesInitialDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Delay After Trade Message", UtilitySliderKey="AutoAcceptTradesDelayAfterTradeMessage", UtilityParentKey="AutoAcceptTradesCustomDelays", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Reaction Delay", UtilitySliderKey="AutoAcceptTradesReactionDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Add Brainrot Delay", UtilitySliderKey="AutoAcceptTradesAddBrainrotDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Remove Brainrot Delay", UtilitySliderKey="AutoAcceptTradesRemoveBrainrotDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Add Token Delay", UtilitySliderKey="AutoAcceptTradesAddTokenDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Remove Token Delay", UtilitySliderKey="AutoAcceptTradesRemoveTokenDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Accept Offer Delay", UtilitySliderKey="AutoAcceptTradesAcceptDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+		})
 	end
 	do
-		local autoCancelFeatures = {
+		createEmptyCollapsiblePanel(tabs.Cancel, 5, 1, 1, "Cancel After Time", {
 			{Label = "Auto Cancel", UtilityToggleKey = "AutoCancelMaster"},
-			{Label = "Check Opponents Brainrots", UtilityToggleKey = "AutoCancelCheckOpponentsBrainrots", UtilityParentKey = "AutoCancelMaster"},
+			{Label = "Cancel Trade After", UtilityToggleKey = "AutoCancelTradeTimeoutEnabled", UtilityParentKey = "AutoCancelMaster"},
+			{Label = "Trade Time Limit", UtilitySliderKey = "AutoCancelTradeTimeout", UtilityParentKeys = {"AutoCancelMaster", "AutoCancelTradeTimeoutEnabled"}, MinValue = 1, MaxValue = 60, UnitLabel = "Seconds"},
+			{Label = "Cancel If No Value Is Offered", UtilityToggleKey = "AutoCancelNoValueTimeoutEnabled", UtilityParentKey = "AutoCancelMaster"},
+			{Label = "No Value Time Limit", UtilitySliderKey = "AutoCancelNoValueTimeout", UtilityParentKeys = {"AutoCancelMaster", "AutoCancelNoValueTimeoutEnabled"}, MinValue = 1, MaxValue = 30, UnitLabel = "Seconds"},
+		})
+		local inventory = {
+			{Label = "Cancel Based On Rarities Owned", UtilityToggleKey = "AutoCancelCheckOpponentsBrainrots", UtilityParentKey = "AutoCancelMaster"},
 		}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
-			autoCancelFeatures[#autoCancelFeatures + 1] = {Label = rarity, AutoCancelRarityKey = rarity, VisibilityUtilityParentKeys = {"AutoCancelMaster", "AutoCancelCheckOpponentsBrainrots"}}
+			inventory[#inventory + 1] = {Label = rarity, AutoCancelRarityKey = rarity, VisibilityUtilityParentKeys = {"AutoCancelMaster", "AutoCancelCheckOpponentsBrainrots"}}
 		end
-		autoCancelFeatures[#autoCancelFeatures + 1] = {Label = "Tokens", AutoCancelRarityKey = "Tokens", VisibilityUtilityParentKeys = {"AutoCancelMaster", "AutoCancelCheckOpponentsBrainrots"}}
-		autoCancelFeatures[#autoCancelFeatures + 1] = {Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "AutoCancelSpecificItems", UtilityParentKeys = {"AutoCancelMaster", "AutoCancelCheckOpponentsBrainrots"}}
-		autoCancelFeatures[#autoCancelFeatures + 1] = {Label = "Cancel If Player Does Not Own All Selected", UtilityToggleKey = "AutoCancelPlayerMustOwnAllSelected", UtilityParentKeys = {"AutoCancelMaster", "AutoCancelCheckOpponentsBrainrots"}, UtilityExclusiveGroup = "AutoCancelOwnershipMode", UtilityExclusiveRequired = true}
-		autoCancelFeatures[#autoCancelFeatures + 1] = {Label = "Cancel If Player Does Not Own At Least One Selected", UtilityToggleKey = "AutoCancelPlayerMustOwnAtLeastOneSelected", UtilityParentKeys = {"AutoCancelMaster", "AutoCancelCheckOpponentsBrainrots"}, UtilityExclusiveGroup = "AutoCancelOwnershipMode", UtilityExclusiveRequired = true}
-		autoCancelFeatures[#autoCancelFeatures + 1] = {Label = "Cancel Trade After", UtilityToggleKey = "AutoCancelTradeTimeoutEnabled", UtilityParentKey = "AutoCancelMaster"}
-		autoCancelFeatures[#autoCancelFeatures + 1] = {Label = "", UtilitySliderKey = "AutoCancelTradeTimeout", UtilityParentKeys = {"AutoCancelMaster", "AutoCancelTradeTimeoutEnabled"}, MinValue = 1, MaxValue = 60, UnitLabel = "Seconds"}
-		autoCancelFeatures[#autoCancelFeatures + 1] = {Label = "Cancel If Value Not Offered After", UtilityToggleKey = "AutoCancelNoValueTimeoutEnabled", UtilityParentKey = "AutoCancelMaster"}
-		autoCancelFeatures[#autoCancelFeatures + 1] = {Label = "", UtilitySliderKey = "AutoCancelNoValueTimeout", UtilityParentKeys = {"AutoCancelMaster", "AutoCancelNoValueTimeoutEnabled"}, MinValue = 1, MaxValue = 30, UnitLabel = "Seconds"}
-		createEmptyCollapsiblePanel(mainItem, 5, 1, 3, "Auto Cancel", autoCancelFeatures)
+		inventory[#inventory + 1] = {Label = "Cancel Based On Specific Brainrots / Items", UtilityToggleKey = "AutoCancelBasedOnSpecificItems", UtilityParentKey = "AutoCancelMaster"}
+		inventory[#inventory + 1] = {Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "AutoCancelSpecificItems", UtilityParentKeys = {"AutoCancelMaster", "AutoCancelBasedOnSpecificItems"}}
+		inventory[#inventory + 1] = {Label = "Cancel If Player Does Not Own All Selected", UtilityToggleKey = "AutoCancelPlayerMustOwnAllSelected", UtilityParentKey = "AutoCancelMaster", UtilityExclusiveGroup = "AutoCancelOwnershipMode", UtilityExclusiveRequired = true}
+		inventory[#inventory + 1] = {Label = "Cancel If Player Does Not Own At Least One Selected", UtilityToggleKey = "AutoCancelPlayerMustOwnAtLeastOneSelected", UtilityParentKey = "AutoCancelMaster", UtilityExclusiveGroup = "AutoCancelOwnershipMode", UtilityExclusiveRequired = true}
+		createEmptyCollapsiblePanel(tabs.Cancel, 28, 2, 1, "Cancel Based On Inventory", inventory)
+		createEmptyCollapsiblePanel(tabs.Cancel, 29, 1, 2, "Cancel Based On Tokens", {
+			{Label = "Tokens", AutoCancelRarityKey = "Tokens", VisibilityUtilityParentKey = "AutoCancelMaster"},
+		})
 	end
 	createEmptyCollapsiblePanel(
-		mainItem,
+		tabs.Matchmaking,
 		6,
 		2,
-		3,
+		1,
 		"Auto Server Hop",
 		{
 			{Label = "Auto Server Hop", ServerHopKey = "Enabled"},
@@ -7934,7 +8839,7 @@ if IS_MINIGAME_PLACE then
 				MaxValue = 60,
 			},
 			{
-				Label = "Time Since Last Game Until Hop",
+				Label = "Time Without Game Until Hop",
 				ServerHopKey = "TimeSinceLastGameEnabled",
 				SliderKey = "TimeSinceLastGame",
 				MinValue = 1,
@@ -7945,39 +8850,39 @@ if IS_MINIGAME_PLACE then
 		}
 	)
 	createEmptyCollapsiblePanel(
-		mainItem,
+		tabs.Matchmaking,
 		22,
-		1,
-		4,
+		2,
+		2,
 		"Blacklist Servers",
 		{
 			{Label = "How long to blacklist joined servers", ServerHopSliderKey = "ServerBlacklistMinutes", ServerHopSliderAlwaysVisible = true, MinValue = 1, MaxValue = 60, UnitLabel = "Minutes"},
 		}
 	)
 	createEmptyCollapsiblePanel(
-		mainItem,
+		tabs.Matchmaking,
 		20,
+		1,
 		2,
-		4,
 		"Check Server",
 		{
-			{Label = "Server Hop If Nobody In Server Has These Brainrots", UtilityToggleKey = "CheckServerHopNobodyServer"},
-			{Label = "Server Hop If You Played Everyone In Server With These Brainrots", UtilityToggleKey = "CheckServerHopPlayedEveryoneServer"},
-			{Label = "Server Hop If Nobody In Minigames Area Has These Brainrots", UtilityToggleKey = "CheckServerHopNobodyMinigamesArea"},
-			{Label = "Server Hop If You Played Everyone In Minigames Area With These Brainrots", UtilityToggleKey = "CheckServerHopPlayedEveryoneMinigamesArea"},
+			{Label = "Hop If No Matching Player Is In Server", UtilityToggleKey = "CheckServerHopNobodyServer"},
+			{Label = "Hop After Playing Every Matching Player In Server", UtilityToggleKey = "CheckServerHopPlayedEveryoneServer"},
+			{Label = "Hop If No Matching Player Is In Minigame Area", UtilityToggleKey = "CheckServerHopNobodyMinigamesArea"},
+			{Label = "Hop After Playing Every Matching Player In Minigame Area", UtilityToggleKey = "CheckServerHopPlayedEveryoneMinigamesArea"},
 			{Label = "Rarities To Check For", UtilityMultiDropdownKey = "CheckServerBrainrotRarities", Placeholder = "None", Options = BRAINROT_RARITY_OPTIONS},
-			{Label = "Must Have One Of These Mutations", UtilityMultiDropdownKey = "CheckServerMutations", Placeholder = "None", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Must Have One Of These Traits", UtilityMultiDropdownKey = "CheckServerTraits", Placeholder = "None", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Specific Brainrots / Items To Check For", UtilityMultiDropdownKey = "CheckServerSpecificItems", Placeholder = "None", OptionsProvider = function() return autoServerHopState.AllDeletableItemOptions() end},
-			{Label = "Opponent Must Own All Of These Brainrots", UtilityToggleKey = "CheckServerMustOwnAll", UtilityExclusiveGroup = "CheckServerOwnershipMode"},
-			{Label = "Opponent Must Own One Of These Brainrots", UtilityToggleKey = "CheckServerMustOwnOne", UtilityExclusiveGroup = "CheckServerOwnershipMode"},
+			{Label = "Required Mutations", UtilityMultiDropdownKey = "CheckServerMutations", Placeholder = "None", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Required Traits", UtilityMultiDropdownKey = "CheckServerTraits", Placeholder = "None", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "CheckServerSpecificItems"},
+			{Label = "Player Must Own All Selected Criteria", UtilityToggleKey = "CheckServerMustOwnAll", UtilityExclusiveGroup = "CheckServerOwnershipMode"},
+			{Label = "Player Must Own At Least One Selected Criterion", UtilityToggleKey = "CheckServerMustOwnOne", UtilityExclusiveGroup = "CheckServerOwnershipMode"},
 		}
 	)
 	createEmptyCollapsiblePanel(
-		mainItem,
+		tabs.Messages,
 		7,
 		1,
-		4,
+		1,
 		"Auto Chat",
 		{
 			{Label = "Auto Chat", UtilityToggleKey = "AutoChat"},
@@ -8014,10 +8919,10 @@ if IS_MINIGAME_PLACE then
 		}
 	)
 	createEmptyCollapsiblePanel(
-		mainItem,
+		tabs.Messages,
 		8,
 		2,
-		4,
+		1,
 		"Auto Trade Message",
 		{
 			{Label = "Auto Trade Chat", UtilityToggleKey = "AutoTradeChat"},
@@ -8084,10 +8989,10 @@ if IS_MINIGAME_PLACE then
 		}
 	)
 	createEmptyCollapsiblePanel(
-		mainItem,
+		tabs.Inventory,
 		9,
-		2,
-		5,
+		1,
+		1,
 		"Auto Delete Inventory",
 		{
 			{
@@ -8121,6 +9026,8 @@ if IS_MINIGAME_PLACE then
 				UtilityToggleKey = "NeverDeleteEnabled",
 				UtilityParentKey = "AutoDeleteWorstInventory",
 			},
+			{Label = "Specific Brainrot Mutations", UtilityMultiDropdownKey = "NeverDeleteSpecificMutations", UtilityParentKeys = {"AutoDeleteWorstInventory", "NeverDeleteEnabled"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Specific Brainrot Traits", UtilityMultiDropdownKey = "NeverDeleteSpecificTraits", UtilityParentKeys = {"AutoDeleteWorstInventory", "NeverDeleteEnabled"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
 			{
 				Label = "Brainrots / Items",
 				UtilityMultiDropdownKey = "NeverDeleteItems",
@@ -8133,38 +9040,48 @@ if IS_MINIGAME_PLACE then
 		}
 	)
 	createEmptyCollapsiblePanel(
-		mainItem, 10, 1, 6, "Auto Equip",
+		tabs.Inventory, 10, 2, 1, "Auto Equip",
 		{
 			{Label = "Auto Equip (Hold)", UtilityToggleKey = "AutoEquipModeHold", UtilityExclusiveGroup = "AutoEquipMode"},
 			{Label = "Equip Best Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
 			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
-			{Label = "Brainrot To Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Hold Mutations", UtilityMultiDropdownKey = "HoldSpecificBrainrotMutations", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Hold Traits", UtilityMultiDropdownKey = "HoldSpecificBrainrotTraits", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Brainrot To Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() local u=autoServerHopState.Utility return autoServerHopState.FilterOwnedBrainrotOptions(u.HoldSpecificBrainrotMutations,u.HoldSpecificBrainrotTraits) end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
 			{Label = "Auto Equip (Mount)", UtilityToggleKey = "AutoEquipModeMount", UtilityExclusiveGroup = "AutoEquipMode"},
 			{Label = "Equip Best Mountable Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
 			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
-			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedMountableBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Mount Mutations", UtilityMultiDropdownKey = "MountSpecificBrainrotMutations", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Mount Traits", UtilityMultiDropdownKey = "MountSpecificBrainrotTraits", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() local u=autoServerHopState.Utility return autoServerHopState.FilterOwnedMountableBrainrotOptions(u.MountSpecificBrainrotMutations,u.MountSpecificBrainrotTraits) end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
 			{Label = "Auto Equip (Hold + Mount)", UtilityToggleKey = "AutoEquipModeHoldMount", UtilityExclusiveGroup = "AutoEquipMode"},
 			{Label = "Equip Best Brainrot + Mountable Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
 			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
-			{Label = "Brainrot To Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
-			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedMountableBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Hold Mutations", UtilityMultiDropdownKey = "HoldSpecificBrainrotMutations", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Hold Traits", UtilityMultiDropdownKey = "HoldSpecificBrainrotTraits", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Brainrot To Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() local u=autoServerHopState.Utility return autoServerHopState.FilterOwnedBrainrotOptions(u.HoldSpecificBrainrotMutations,u.HoldSpecificBrainrotTraits) end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Mount Mutations", UtilityMultiDropdownKey = "MountSpecificBrainrotMutations", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Mount Traits", UtilityMultiDropdownKey = "MountSpecificBrainrotTraits", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() local u=autoServerHopState.Utility return autoServerHopState.FilterOwnedMountableBrainrotOptions(u.MountSpecificBrainrotMutations,u.MountSpecificBrainrotTraits) end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
 		}
 	)
 	createEmptyCollapsiblePanel(
-		mainItem,
+		tabs.Offers,
 		11,
-		2,
-		6,
-		"Auto Opening Offer",
+		1,
+		3,
+		"Opening Offer",
 		{
 			{Label = "Autoshow Best Brainrots", UtilityToggleKey = "AutoshowBestBrainrots", UtilityExclusiveGroup = "OpeningOfferBrainrotMode"},
-			{Label = "Custom Opening Offer", UtilityToggleKey = "CustomOpeningOffer", UtilityExclusiveGroup = "OpeningOfferBrainrotMode"},
+			{Label = "Custom Opening Brainrots", UtilityToggleKey = "CustomOpeningOffer", UtilityExclusiveGroup = "OpeningOfferBrainrotMode"},
+			{Label = "Opening Brainrot Mutations", UtilityMultiDropdownKey = "OpeningOfferSpecificMutations", UtilityParentKey = "CustomOpeningOffer", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Opening Brainrot Traits", UtilityMultiDropdownKey = "OpeningOfferSpecificTraits", UtilityParentKey = "CustomOpeningOffer", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
 			{
 				Label = "Brainrot 1",
 				UtilityDropdownKey = "OpeningOfferBrainrot1",
 				UtilityParentKey = "CustomOpeningOffer",
 				Placeholder = "None",
-				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
+				OptionsProvider = function() local u = autoServerHopState.Utility return autoServerHopState.FilterOwnedOfferableBrainrotOptions(u.OpeningOfferSpecificMutations, u.OpeningOfferSpecificTraits) end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			},
@@ -8173,7 +9090,7 @@ if IS_MINIGAME_PLACE then
 				UtilityDropdownKey = "OpeningOfferBrainrot2",
 				UtilityParentKey = "CustomOpeningOffer",
 				Placeholder = "None",
-				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
+				OptionsProvider = function() local u = autoServerHopState.Utility return autoServerHopState.FilterOwnedOfferableBrainrotOptions(u.OpeningOfferSpecificMutations, u.OpeningOfferSpecificTraits) end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			},
@@ -8182,7 +9099,7 @@ if IS_MINIGAME_PLACE then
 				UtilityDropdownKey = "OpeningOfferBrainrot3",
 				UtilityParentKey = "CustomOpeningOffer",
 				Placeholder = "None",
-				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
+				OptionsProvider = function() local u = autoServerHopState.Utility return autoServerHopState.FilterOwnedOfferableBrainrotOptions(u.OpeningOfferSpecificMutations, u.OpeningOfferSpecificTraits) end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			},
@@ -8191,7 +9108,7 @@ if IS_MINIGAME_PLACE then
 				UtilityDropdownKey = "OpeningOfferBrainrot4",
 				UtilityParentKey = "CustomOpeningOffer",
 				Placeholder = "None",
-				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
+				OptionsProvider = function() local u = autoServerHopState.Utility return autoServerHopState.FilterOwnedOfferableBrainrotOptions(u.OpeningOfferSpecificMutations, u.OpeningOfferSpecificTraits) end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			},
@@ -8200,7 +9117,7 @@ if IS_MINIGAME_PLACE then
 				UtilityDropdownKey = "OpeningOfferBrainrot5",
 				UtilityParentKey = "CustomOpeningOffer",
 				Placeholder = "None",
-				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
+				OptionsProvider = function() local u = autoServerHopState.Utility return autoServerHopState.FilterOwnedOfferableBrainrotOptions(u.OpeningOfferSpecificMutations, u.OpeningOfferSpecificTraits) end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			},
@@ -8209,7 +9126,7 @@ if IS_MINIGAME_PLACE then
 				UtilityDropdownKey = "OpeningOfferBrainrot6",
 				UtilityParentKey = "CustomOpeningOffer",
 				Placeholder = "None",
-				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
+				OptionsProvider = function() local u = autoServerHopState.Utility return autoServerHopState.FilterOwnedOfferableBrainrotOptions(u.OpeningOfferSpecificMutations, u.OpeningOfferSpecificTraits) end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			},
@@ -8219,28 +9136,28 @@ if IS_MINIGAME_PLACE then
 		}
 	)
 	createEmptyCollapsiblePanel(
-		mainItem,
+		tabs.Offers,
 		12,
-		1,
-		7,
-		"Offer Delay Adjustment",
+		2,
+		3,
+		"Trade Delays",
 		{
 			{Label = "Custom Delays", UtilityToggleKey = "CustomDelays"},
-			{Label = "Initial Join Delay", UtilitySliderKey = "InitialJoinDelay", UtilityParentKey = "CustomDelays", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
+			{Label = "Initial Delay", UtilitySliderKey = "InitialJoinDelay", UtilityParentKey = "CustomDelays", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
 			{Label = "Delay After Trade Message", UtilitySliderKey = "DelayAfterTradeMessage", UtilityParentKey = "CustomDelays", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
 			{Label = "Reaction Delay", UtilitySliderKey = "ReactionDelay", UtilityParentKey = "CustomDelays", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
 			{Label = "Add Brainrot Delay", UtilitySliderKey = "AddBrainrotDelay", UtilityParentKey = "CustomDelays", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
 			{Label = "Remove Brainrot Delay", UtilitySliderKey = "RemoveBrainrotDelay", UtilityParentKey = "CustomDelays", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
 			{Label = "Add Token Delay", UtilitySliderKey = "AddTokenDelay", UtilityParentKey = "CustomDelays", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
 			{Label = "Remove Token Delay", UtilitySliderKey = "RemoveTokenDelay", UtilityParentKey = "CustomDelays", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
-			{Label = "Accept Offer Delay", UtilitySliderKey = "AcceptOfferDelay", UtilityParentKey = "CustomDelays", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
+			{Label = "Accept Delay", UtilitySliderKey = "AcceptOfferDelay", UtilityParentKey = "CustomDelays", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
 		}
 	)
 	createEmptyCollapsiblePanel(
-		mainItem,
+		tabs.Games,
 		13,
 		2,
-		7,
+		1,
 		"Auto Choose",
 		{
 			{Label = "Auto Choose Game", UtilityToggleKey = "AutoChooseGame"},
@@ -8307,17 +9224,17 @@ if IS_MINIGAME_PLACE then
 		}
 	)
 	createEmptyCollapsiblePanel(
-		mainItem,
+		tabs.Games,
 		14,
 		1,
-		8,
+		2,
 		"Auto Leave On Loss",
 		{
 			{Label = "Leave When About To Lose", UtilityToggleKey = "LeaveWhenAboutToLose"},
 		}
 	)
 	createEmptyCollapsiblePanel(
-		settingsItem,
+		tabs.System,
 		3,
 		1,
 		2,
@@ -8328,247 +9245,120 @@ if IS_MINIGAME_PLACE then
 		}
 	)
 	do
-		local autoBoothFeatures = {
+		local boothSettings = {
 			{Label = "Auto Booth", UtilityToggleKey = "AutoBooth"},
 			{Label = "Booth Name", UtilityTextKey = "AutoBoothName", UtilityParentKey = "AutoBooth", Placeholder = "Booth name..."},
 			{Label = "List Best Brainrot First", UtilityToggleKey = "AutoBoothListBestFirst", UtilityParentKey = "AutoBooth", UtilityExclusiveGroup = "AutoBoothSortOrder"},
 			{Label = "List Worst Brainrot First", UtilityToggleKey = "AutoBoothListWorstFirst", UtilityParentKey = "AutoBooth", UtilityExclusiveGroup = "AutoBoothSortOrder"},
-			{
-				Label = "Avoid Brainrots With Traits",
-				UtilityMultiDropdownKey = "AutoBoothAvoidTraits",
-				UtilityParentKey = "AutoBooth",
-				Placeholder = "Select",
-				OptionsProvider = function()
-					return autoServerHopState.BoothTraitOptions()
-				end,
-			},
-			{
-				Label = "Avoid Specific Mutations",
-				UtilityMultiDropdownKey = "AutoBoothAvoidMutations",
-				UtilityParentKey = "AutoBooth",
-				Placeholder = "Select",
-				OptionsProvider = function()
-					return autoServerHopState.BoothMutationOptions()
-				end,
-			},
-			{
-				Label = "Avoid Specific Brainrots",
-				UtilityMultiDropdownKey = "AutoBoothAvoidBrainrots",
-				UtilityParentKey = "AutoBooth",
-				Placeholder = "Select",
-				OptionsProvider = function()
-					return autoServerHopState.BoothBrainrotOptions()
-				end,
-			},
-			{
-				Label = "Message When All Listings Are Completed",
-				UtilityToggleKey = "AutoBoothMessageAllListingsCompleted",
-				UtilityParentKey = "AutoBooth",
-			},
-			{
-				Label = "Message",
-				UtilityTextKey = "AutoBoothAllListingsCompletedMessage",
-				UtilityParentKeys = {"AutoBooth", "AutoBoothMessageAllListingsCompleted"},
-				Placeholder = "Message when configured listings are completed...",
-			},
-			{
-				Label = "Delay Before Sending Message",
-				UtilitySliderKey = "AutoBoothAllListingsCompletedMessageDelay",
-				UtilityParentKeys = {"AutoBooth", "AutoBoothMessageAllListingsCompleted"},
-				MinValue = 0,
-				MaxValue = 30,
-				Step = 0.25,
-				Decimals = 2,
-				UnitLabel = "Seconds",
-			},
-			{
-				Label = "Message When All Possible Listings Are Completed",
-				UtilityToggleKey = "AutoBoothMessageAllPossibleCompleted",
-				UtilityParentKey = "AutoBooth",
-			},
-			{
-				Label = "Message",
-				UtilityTextKey = "AutoBoothAllPossibleCompletedMessage",
-				UtilityParentKeys = {"AutoBooth", "AutoBoothMessageAllPossibleCompleted"},
-				Placeholder = "Message when no more eligible listings can be added...",
-			},
-			{
-				Label = "Delay Before Sending Message",
-				UtilitySliderKey = "AutoBoothAllPossibleCompletedMessageDelay",
-				UtilityParentKeys = {"AutoBooth", "AutoBoothMessageAllPossibleCompleted"},
-				MinValue = 0,
-				MaxValue = 30,
-				Step = 0.25,
-				Decimals = 2,
-				UnitLabel = "Seconds",
-			},
+			{Label = "Avoid Brainrots With Traits", UtilityMultiDropdownKey = "AutoBoothAvoidTraits", UtilityParentKey = "AutoBooth", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Avoid Brainrots With Mutations", UtilityMultiDropdownKey = "AutoBoothAvoidMutations", UtilityParentKey = "AutoBooth", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Avoid Specific Brainrots", UtilityMultiDropdownKey = "AutoBoothAvoidBrainrots", UtilityParentKey = "AutoBooth", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothBrainrotOptions() end},
+			{Label = "Specific Brainrot Mutations", UtilityMultiDropdownKey = "AutoBoothAvoidSpecificMutations", UtilityParentKey = "AutoBooth", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Specific Brainrot Traits", UtilityMultiDropdownKey = "AutoBoothAvoidSpecificTraits", UtilityParentKey = "AutoBooth", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
 		}
+		local boothMessages = {
+			{Label = "Send Message When All Listings Are Listed", UtilityToggleKey = "AutoBoothMessageAllListingsCompleted", UtilityParentKey = "AutoBooth"},
+			{Label = "Message", UtilityTextKey = "AutoBoothAllListingsCompletedMessage", UtilityParentKeys = {"AutoBooth", "AutoBoothMessageAllListingsCompleted"}, Placeholder = "Message when all configured listings are listed..."},
+			{Label = "Delay Before Sending Message", UtilitySliderKey = "AutoBoothAllListingsCompletedMessageDelay", UtilityParentKeys = {"AutoBooth", "AutoBoothMessageAllListingsCompleted"}, MinValue = 0, MaxValue = 30, Step = 0.25, Decimals = 2, UnitLabel = "Seconds"},
+			{Label = "Send Message When All Possible Listings Are Listed", UtilityToggleKey = "AutoBoothMessageAllPossibleCompleted", UtilityParentKey = "AutoBooth"},
+			{Label = "Message", UtilityTextKey = "AutoBoothAllPossibleCompletedMessage", UtilityParentKeys = {"AutoBooth", "AutoBoothMessageAllPossibleCompleted"}, Placeholder = "Message when every possible eligible listing is listed..."},
+			{Label = "Delay Before Sending Message", UtilitySliderKey = "AutoBoothAllPossibleCompletedMessageDelay", UtilityParentKeys = {"AutoBooth", "AutoBoothMessageAllPossibleCompleted"}, MinValue = 0, MaxValue = 30, Step = 0.25, Decimals = 2, UnitLabel = "Seconds"},
+		}
+		local listings = {}
 		for index = 1, 14 do
 			local prefix = "AutoBoothListing" .. tostring(index)
-			local listingParents = {"AutoBooth", prefix .. "Enabled"}
-			local modeGroup = prefix .. "SelectionMode"
-			autoBoothFeatures[#autoBoothFeatures + 1] = {
-				Label = "Listing " .. tostring(index),
-				UtilityToggleKey = prefix .. "Enabled",
-				UtilityParentKey = "AutoBooth",
-				BoothSlotIndex = index,
-			}
-			autoBoothFeatures[#autoBoothFeatures + 1] = {
-				Label = "List By Rarity",
-				UtilityToggleKey = prefix .. "ListByRarity",
-				UtilityParentKeys = listingParents,
-				UtilityExclusiveGroup = modeGroup,
-				UtilityExclusiveRequired = true,
-				BoothSlotIndex = index,
-			}
-			autoBoothFeatures[#autoBoothFeatures + 1] = {
-				Label = "Rarity",
-				UtilityDropdownKey = prefix .. "Rarity",
-				UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByRarity"},
-				Placeholder = "Select",
-				Options = BRAINROT_RARITY_OPTIONS,
-				BoothSlotIndex = index,
-			}
-			autoBoothFeatures[#autoBoothFeatures + 1] = {
-				Label = "List By Brainrot",
-				UtilityToggleKey = prefix .. "ListByBrainrot",
-				UtilityParentKeys = listingParents,
-				UtilityExclusiveGroup = modeGroup,
-				UtilityExclusiveRequired = true,
-				BoothSlotIndex = index,
-			}
-			autoBoothFeatures[#autoBoothFeatures + 1] = {
-				Label = "Brainrot",
-				UtilityDropdownKey = prefix .. "Brainrot",
-				UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByBrainrot"},
+			local parents = {"AutoBooth", prefix .. "Enabled"}
+			local function add(definition) definition.BoothSlotIndex = index; listings[#listings + 1] = definition end
+			add({Label = "Listing " .. tostring(index), UtilityToggleKey = prefix .. "Enabled", UtilityParentKey = "AutoBooth"})
+			add({Label = "List By Rarity", UtilityToggleKey = prefix .. "ListByRarity", UtilityParentKeys = parents, UtilityExclusiveGroup = prefix .. "SelectionMode", UtilityExclusiveRequired = true})
+			add({Label = "Rarity", UtilityDropdownKey = prefix .. "Rarity", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByRarity"}, Placeholder = "Select", Options = BRAINROT_RARITY_OPTIONS})
+			add({Label = "List Specific Brainrot", UtilityToggleKey = prefix .. "ListByBrainrot", UtilityParentKeys = parents, UtilityExclusiveGroup = prefix .. "SelectionMode", UtilityExclusiveRequired = true})
+			add({Label = "Brainrot", UtilityDropdownKey = prefix .. "Brainrot", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByBrainrot"}, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothBrainrotOptions() end})
+			add({Label = "Mutations", UtilityMultiDropdownKey = prefix .. "BrainrotMutations", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end})
+			add({Label = "Traits", UtilityMultiDropdownKey = prefix .. "BrainrotTraits", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end})
+			add({Label = "List When You Have At Least", UtilitySliderKey = prefix .. "MinimumCopies", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByRarity"}, MinValue = 1, MaxValue = 100, UnitLabel = "Owned"})
+			add({Label = "List Above This Inventory Or Higher", UtilitySliderKey = prefix .. "InventoryThreshold", UtilityParentKeys = parents, MinValue = 1, MaxValue = 100, UnitLabel = "Inventory"})
+			add({Label = "Listing " .. tostring(index) .. " Tokens", UtilitySliderKey = prefix .. "Tokens", UtilityParentKeys = parents, MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"})
+			add({Label = "Message When Listed", UtilityToggleKey = prefix .. "MessageWhenListed", UtilityParentKeys = parents})
+			add({Label = "Message", UtilityTextKey = prefix .. "ListedMessage", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "MessageWhenListed"}, Placeholder = "Message to send when listed..."})
+			add({Label = "Delay Before Sending Message", UtilitySliderKey = prefix .. "MessageDelay", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "MessageWhenListed"}, MinValue = 0, MaxValue = 30, Step = 0.25, Decimals = 2, UnitLabel = "Seconds"})
+		end
+		createEmptyCollapsiblePanel(tabs.Booth, 16, 1, 1, "Booth Settings", boothSettings)
+		createEmptyCollapsiblePanel(tabs.Booth, 30, 2, 1, "Booth Messages", boothMessages)
+		createEmptyCollapsiblePanel(tabs.Booth, 31, 1, 2, "Listings", listings)
+	end
+	do
+		-- Each fallback type is independent. Its detailed controls are nested directly
+		-- beneath that toggle so users never have to enable an unrelated fallback first.
+		local features = {
+			{Label = "Next Lower Rarity Fallback Offers", UtilityToggleKey = "FallbackToNextLowerRarityBrainrot"},
+			{Label = "Amount Of Brainrots To Offer", UtilitySliderKey = "FallbackNextLowerRarityAmount", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
+			{Label = "Avoid Brainrots With These Mutations", UtilityToggleKey = "FallbackAvoidMutationsEnabled", UtilityParentKey = "FallbackToNextLowerRarityBrainrot"},
+			{Label = "Mutations To Avoid", UtilityMultiDropdownKey = "FallbackAvoidMutations", UtilityParentKeys = {"FallbackToNextLowerRarityBrainrot", "FallbackAvoidMutationsEnabled"}, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Avoid Brainrots With These Traits", UtilityToggleKey = "FallbackAvoidTraitsEnabled", UtilityParentKey = "FallbackToNextLowerRarityBrainrot"},
+			{Label = "Traits To Avoid", UtilityMultiDropdownKey = "FallbackAvoidTraits", UtilityParentKeys = {"FallbackToNextLowerRarityBrainrot", "FallbackAvoidTraitsEnabled"}, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Specific Brainrots / Items Fallback", UtilityToggleKey = "FallbackToSpecificBrainrotItem"},
+		}
+		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+			local sourceRarity = rarity
+			features[#features + 1] = {
+				Label = sourceRarity .. " Specific Fallback",
+				UtilityMultiDropdownKey = "FallbackSpecific" .. sourceRarity .. "Items",
+				UtilityParentKey = "FallbackToSpecificBrainrotItem",
 				Placeholder = "Select",
 				OptionsProvider = function()
-					return autoServerHopState.BoothBrainrotOptions()
+					local u = autoServerHopState.Utility
+					return autoServerHopState.FilterOwnedTradeableItemOptions(u["FallbackSpecific" .. sourceRarity .. "Mutations"], u["FallbackSpecific" .. sourceRarity .. "Traits"])
 				end,
-				BoothSlotIndex = index,
+				OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end,
 			}
-			autoBoothFeatures[#autoBoothFeatures + 1] = {
-				Label = "List When You Have Atleast",
-				UtilitySliderKey = prefix .. "MinimumCopies",
-				UtilityParentKeys = listingParents,
-				MinValue = 1,
-				MaxValue = 100,
-				UnitLabel = "Owned",
-				BoothSlotIndex = index,
-			}
-			autoBoothFeatures[#autoBoothFeatures + 1] = {
-				Label = "Listing " .. tostring(index) .. " Tokens",
-				UtilitySliderKey = prefix .. "Tokens",
-				UtilityParentKeys = listingParents,
-				MinValue = 1,
-				MaxValue = 1000000,
-				UnitLabel = "Tokens",
-				BoothSlotIndex = index,
-			}
-			autoBoothFeatures[#autoBoothFeatures + 1] = {
-				Label = "List Above This Inventory Or Higher",
-				UtilitySliderKey = prefix .. "InventoryThreshold",
-				UtilityParentKeys = listingParents,
-				MinValue = 1,
-				MaxValue = 100,
-				UnitLabel = "Inventory",
-				BoothSlotIndex = index,
-			}
-			autoBoothFeatures[#autoBoothFeatures + 1] = {
-				Label = "Message When Listed",
-				UtilityToggleKey = prefix .. "MessageWhenListed",
-				UtilityParentKeys = listingParents,
-				BoothSlotIndex = index,
-			}
-			autoBoothFeatures[#autoBoothFeatures + 1] = {
-				Label = "Message",
-				UtilityTextKey = prefix .. "ListedMessage",
-				UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "MessageWhenListed"},
-				Placeholder = "Message to send when listed...",
-				BoothSlotIndex = index,
-			}
-			autoBoothFeatures[#autoBoothFeatures + 1] = {
-				Label = "Delay Before Sending Message",
-				UtilitySliderKey = prefix .. "MessageDelay",
-				UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "MessageWhenListed"},
-				MinValue = 0,
-				MaxValue = 30,
-				Step = 0.25,
-				Decimals = 2,
-				UnitLabel = "Seconds",
-				BoothSlotIndex = index,
-			}
+			features[#features + 1] = {Label = sourceRarity .. " Specific Mutations", UtilityMultiDropdownKey = "FallbackSpecific" .. sourceRarity .. "Mutations", UtilityParentKey = "FallbackToSpecificBrainrotItem", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end}
+			features[#features + 1] = {Label = sourceRarity .. " Specific Traits", UtilityMultiDropdownKey = "FallbackSpecific" .. sourceRarity .. "Traits", UtilityParentKey = "FallbackToSpecificBrainrotItem", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end}
 		end
-		createEmptyCollapsiblePanel(
-			mainItem,
-			16,
-			1,
-			9,
-			"Auto Booth",
-			autoBoothFeatures
-		)
+		features[#features + 1] = {Label = "Token Fallback Offers", UtilityToggleKey = "FallbackToTokens"}
+		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+			features[#features + 1] = {Label = rarity .. " Tokens", UtilitySliderKey = "FallbackTokens" .. rarity, UtilityParentKey = "FallbackToTokens", MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"}
+			features[#features + 1] = {Label = rarity .. " Offer All Tokens", UtilityToggleKey = "Fallback" .. rarity .. "OfferAllTokens", UtilityParentKey = "FallbackToTokens"}
+		end
+		createEmptyCollapsiblePanel(tabs.Fallbacks, 17, 1, 1, "Minigame Trade Fallbacks", features)
+
+		local regularFeatures = {
+			{Label = "Next Lower Rarity Fallback Offers", UtilityToggleKey = "RegularFallbackOffers"},
+			{Label = "Amount Of Brainrots To Offer", UtilitySliderKey = "RegularFallbackNextLowerRarityAmount", UtilityParentKey = "RegularFallbackOffers", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
+			{Label = "Avoid Brainrots With These Mutations", UtilityToggleKey = "RegularFallbackAvoidMutationsEnabled", UtilityParentKey = "RegularFallbackOffers"},
+			{Label = "Mutations To Avoid", UtilityMultiDropdownKey = "RegularFallbackAvoidMutations", UtilityParentKeys = {"RegularFallbackOffers", "RegularFallbackAvoidMutationsEnabled"}, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Avoid Brainrots With These Traits", UtilityToggleKey = "RegularFallbackAvoidTraitsEnabled", UtilityParentKey = "RegularFallbackOffers"},
+			{Label = "Traits To Avoid", UtilityMultiDropdownKey = "RegularFallbackAvoidTraits", UtilityParentKeys = {"RegularFallbackOffers", "RegularFallbackAvoidTraitsEnabled"}, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Specific Brainrots / Items Fallback", UtilityToggleKey = "RegularFallbackToSpecificItems"},
+		}
+		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+			local sourceRarity = rarity
+			regularFeatures[#regularFeatures + 1] = {
+				Label = sourceRarity .. " Specific Fallback",
+				UtilityMultiDropdownKey = "RegularFallbackSpecific" .. sourceRarity .. "Items",
+				UtilityParentKey = "RegularFallbackToSpecificItems",
+				Placeholder = "Select",
+				OptionsProvider = function()
+					local u = autoServerHopState.Utility
+					return autoServerHopState.FilterOwnedTradeableItemOptions(u["RegularFallbackSpecific" .. sourceRarity .. "Mutations"], u["RegularFallbackSpecific" .. sourceRarity .. "Traits"])
+				end,
+				OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end,
+			}
+			regularFeatures[#regularFeatures + 1] = {Label = sourceRarity .. " Specific Mutations", UtilityMultiDropdownKey = "RegularFallbackSpecific" .. sourceRarity .. "Mutations", UtilityParentKey = "RegularFallbackToSpecificItems", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end}
+			regularFeatures[#regularFeatures + 1] = {Label = sourceRarity .. " Specific Traits", UtilityMultiDropdownKey = "RegularFallbackSpecific" .. sourceRarity .. "Traits", UtilityParentKey = "RegularFallbackToSpecificItems", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end}
+		end
+		regularFeatures[#regularFeatures + 1] = {Label = "Token Fallback Offers", UtilityToggleKey = "RegularFallbackToTokens"}
+		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+			regularFeatures[#regularFeatures + 1] = {Label = rarity .. " Tokens", UtilitySliderKey = "RegularFallbackTokens" .. rarity, UtilityParentKey = "RegularFallbackToTokens", MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"}
+			regularFeatures[#regularFeatures + 1] = {Label = rarity .. " Offer All Tokens", UtilityToggleKey = "RegularFallback" .. rarity .. "OfferAllTokens", UtilityParentKey = "RegularFallbackToTokens"}
+		end
+		createEmptyCollapsiblePanel(tabs.Fallbacks, 36, 2, 1, "Regular Trade Fallbacks", regularFeatures)
 	end
 	createEmptyCollapsiblePanel(
-		mainItem, 17, 2, 9, "Fallback Offer",
-		{
-			{Label = "Fall Back Offers", UtilityToggleKey = "FallbackOffers"},
-			{Label = "Fallback To Next Lower Rarity Brainrot", UtilityToggleKey = "FallbackToNextLowerRarityBrainrot", UtilityParentKey = "FallbackOffers", UtilityExclusiveGroup = "FallbackBrainrotMode"},
-			{Label = "Amount Of Brainrots To Offer", UtilitySliderKey = "FallbackNextLowerRarityAmount", UtilityParentKeys = {"FallbackOffers", "FallbackToNextLowerRarityBrainrot"}, MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
-			{Label = "Avoid Brainrots With These Mutations", UtilityToggleKey = "FallbackAvoidMutationsEnabled", UtilityParentKeys = {"FallbackOffers", "FallbackToNextLowerRarityBrainrot"}},
-			{Label = "Mutations To Avoid", UtilityMultiDropdownKey = "FallbackAvoidMutations", UtilityParentKeys = {"FallbackOffers", "FallbackToNextLowerRarityBrainrot", "FallbackAvoidMutationsEnabled"}, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Avoid Brainrots With These Traits", UtilityToggleKey = "FallbackAvoidTraitsEnabled", UtilityParentKeys = {"FallbackOffers", "FallbackToNextLowerRarityBrainrot"}},
-			{Label = "Traits To Avoid", UtilityMultiDropdownKey = "FallbackAvoidTraits", UtilityParentKeys = {"FallbackOffers", "FallbackToNextLowerRarityBrainrot", "FallbackAvoidTraitsEnabled"}, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Fallback To Specific Brainrot / Item", UtilityToggleKey = "FallbackToSpecificBrainrotItem", UtilityParentKey = "FallbackOffers", UtilityExclusiveGroup = "FallbackBrainrotMode"},
-			{Label = "Common", UtilityDropdownKey = "FallbackSpecificCommonItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
-			{Label = "Uncommon", UtilityDropdownKey = "FallbackSpecificUncommonItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
-			{Label = "Rare", UtilityDropdownKey = "FallbackSpecificRareItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
-			{Label = "Epic", UtilityDropdownKey = "FallbackSpecificEpicItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
-			{Label = "Legendary", UtilityDropdownKey = "FallbackSpecificLegendaryItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
-			{Label = "Mythical", UtilityDropdownKey = "FallbackSpecificMythicalItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
-			{Label = "Cosmic", UtilityDropdownKey = "FallbackSpecificCosmicItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
-			{Label = "Secret", UtilityDropdownKey = "FallbackSpecificSecretItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
-			{Label = "Celestial", UtilityDropdownKey = "FallbackSpecificCelestialItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
-			{Label = "Divine", UtilityDropdownKey = "FallbackSpecificDivineItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
-			{Label = "Infinity", UtilityDropdownKey = "FallbackSpecificInfinityItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
-			{Label = "Meta", UtilityDropdownKey = "FallbackSpecificMetaItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
-			{Label = "Paradox", UtilityDropdownKey = "FallbackSpecificParadoxItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
-			{Label = "Eternal", UtilityDropdownKey = "FallbackSpecificEternalItem", UtilityParentKeys = {"FallbackOffers", "FallbackToSpecificBrainrotItem"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end, ClearIfMissing = true},
-			{Label = "Fallback To Tokens", UtilityToggleKey = "FallbackToTokens", UtilityParentKey = "FallbackOffers"},
-			{Label = "Common", UtilitySliderKey = "FallbackTokensCommon", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
-			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackCommonOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
-			{Label = "Uncommon", UtilitySliderKey = "FallbackTokensUncommon", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
-			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackUncommonOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
-			{Label = "Rare", UtilitySliderKey = "FallbackTokensRare", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
-			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackRareOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
-			{Label = "Epic", UtilitySliderKey = "FallbackTokensEpic", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
-			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackEpicOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
-			{Label = "Legendary", UtilitySliderKey = "FallbackTokensLegendary", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
-			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackLegendaryOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
-			{Label = "Mythical", UtilitySliderKey = "FallbackTokensMythical", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
-			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackMythicalOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
-			{Label = "Cosmic", UtilitySliderKey = "FallbackTokensCosmic", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
-			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackCosmicOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
-			{Label = "Secret", UtilitySliderKey = "FallbackTokensSecret", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
-			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackSecretOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
-			{Label = "Celestial", UtilitySliderKey = "FallbackTokensCelestial", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
-			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackCelestialOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
-			{Label = "Divine", UtilitySliderKey = "FallbackTokensDivine", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
-			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackDivineOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
-			{Label = "Infinity", UtilitySliderKey = "FallbackTokensInfinity", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
-			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackInfinityOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
-			{Label = "Meta", UtilitySliderKey = "FallbackTokensMeta", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
-			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackMetaOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
-			{Label = "Paradox", UtilitySliderKey = "FallbackTokensParadox", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
-			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackParadoxOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
-			{Label = "Eternal", UtilitySliderKey = "FallbackTokensEternal", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}, MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
-			{Label = "Offer All Tokens", UtilityToggleKey = "FallbackEternalOfferAllTokens", UtilityParentKeys = {"FallbackOffers", "FallbackToTokens"}},
-		}
-	)
-	createEmptyCollapsiblePanel(
-		mainItem,
+		tabs.Matchmaking,
 		19,
 		1,
-		10,
+		3,
 		"Blacklist Players",
 		{
 			{Label = "Temp Blacklist", UtilityToggleKey = "TempBlacklistPlayersAfterCanceledTrade"},
@@ -8578,7 +9368,7 @@ if IS_MINIGAME_PLACE then
 		}
 	)
 	createEmptyCollapsiblePanel(
-		settingsItem,
+		tabs.System,
 		4,
 		2,
 		2,
@@ -8589,7 +9379,7 @@ if IS_MINIGAME_PLACE then
 		}
 	)
 	createEmptyCollapsiblePanel(
-		settingsItem,
+		tabs.System,
 		1,
 		1,
 		1,
@@ -8599,7 +9389,7 @@ if IS_MINIGAME_PLACE then
 		}
 	)
 	createEmptyCollapsiblePanel(
-		settingsItem,
+		tabs.System,
 		2,
 		2,
 		1,
@@ -8609,7 +9399,7 @@ if IS_MINIGAME_PLACE then
 		}
 	)
 	createEmptyCollapsiblePanel(
-		settingsItem,
+		tabs.System,
 		6,
 		1,
 		3,
@@ -8619,7 +9409,7 @@ if IS_MINIGAME_PLACE then
 		}
 	)
 	createEmptyCollapsiblePanel(
-		settingsItem,
+		tabs.System,
 		5,
 		2,
 		3,
@@ -8628,17 +9418,7 @@ if IS_MINIGAME_PLACE then
 			{Label = "Leave If Script User Is In Server", ServerHopKey = "LeaveIfScriptUserInServer", ServerHopIndependent = true},
 		}
 	)
-else
-	createSixPanelsForTab(
-		homeItem
-	)
-	createSixPanelsForTab(
-		mainItem
-	)
-	createSixPanelsForTab(
-		settingsItem
-	)
-end
+end)()
 local controlHolder
 local function syncRightPanelGeometry(
 	instant
@@ -8784,7 +9564,7 @@ local function syncRightPanelGeometry(
 		end
 		local targetHeight = data.Expanded
 			and (data.ExpandedHeight or PANEL_EXPANDED_HEIGHT)
-			or PANEL_COLLAPSED_HEIGHT
+			or (data.HeaderHeight or PANEL_COLLAPSED_HEIGHT)
 		local x = layoutColumn == 1 and leftX or rightX
 		local y = columnBottom[layoutColumn]
 		data.Frame.Position = U2O(x, y)
@@ -8802,8 +9582,8 @@ local function syncRightPanelGeometry(
 			+ CONTENT_ROW_GAP
 	end
 	local speciallyPlaced = {}
-	if singleColumn and selectedMenuItem == mainItem then
-		local function placeMainPanelFirst(title)
+	if singleColumn and selectedMenuItem == tabs.Autofarm then
+		local function placeAutofarmPanelFirst(title)
 			for _, data in ipairs(activePanels) do
 				if data.Frame.Visible and data.Title == title then
 					placePanel(data, 1)
@@ -8812,8 +9592,7 @@ local function syncRightPanelGeometry(
 				end
 			end
 		end
-		placeMainPanelFirst("Pause Minigames")
-		placeMainPanelFirst("Simple Autofarm")
+		placeAutofarmPanelFirst("Simple Autofarm")
 	end
 	for order = 1, maxPanelOrder do
 		for sourceColumn = 1, 2 do
@@ -8921,6 +9700,9 @@ rawset(_G, "__TUFFHUB_REFRESH_ALL_SETTINGS_UI", function()
 			if type(rowData.RefreshFromState) == "function" then
 				pcall(rowData.RefreshFromState)
 			end
+			if type(rowData.RefreshSpecificCriteria) == "function" then
+				pcall(rowData.RefreshSpecificCriteria)
+			end
 		end
 		if type(data.RelayoutRows) == "function" then
 			pcall(data.RelayoutRows)
@@ -8931,7 +9713,7 @@ rawset(_G, "__TUFFHUB_REFRESH_ALL_SETTINGS_UI", function()
 	end
 	refreshUnsupportedPanels()
 end)
-if IS_MINIGAME_PLACE then
+if MINIGAME_MODE then
 	task.spawn(function()
 		local rarityIndex = {}
 		for index, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
@@ -9015,7 +9797,7 @@ rawset(_G, "__TUFFHUB_REFRESH_DYNAMIC_DROPDOWNS", function()
 		end
 	end
 end)
-if IS_MINIGAME_PLACE then
+if MINIGAME_MODE then
 	task.spawn(function()
 		while screenGui.Parent do
 			local previous = tonumber(autoServerHopState.RuntimeBoothMaxSlots) or 3
@@ -9684,7 +10466,97 @@ UserInputService.InputBegan:Connect(
 		end
 	end)
 end)()
-if IS_MINIGAME_PLACE then
+-- Shared public-ownership snapshot. Auto Sit, Check-style ownership tests, and
+-- Regular Trade Offer and Auto Sit both consume this same resolver so their "Must Own"
+-- semantics cannot drift apart. Only information replicated by Roblox to this
+-- client is considered: visible Backpack/Character tools and public token data.
+;(function()
+	local EconomyMath
+	pcall(function()
+		EconomyMath = require(
+			ReplicatedStorage:WaitForChild("Shared")
+				:WaitForChild("utils")
+				:WaitForChild("EconomyMath")
+		)
+	end)
+	local function parseTokens(value)
+		if type(value) == "number" then return math.max(0, value) end
+		local s = string.upper(tostring(value or "")):gsub(",", ""):gsub("%s+", "")
+		local direct = tonumber(s)
+		if direct then return math.max(0, direct) end
+		local numberText, suffix = string.match(s, "([%d%.]+)([KMBTQ]?)")
+		local number = tonumber(numberText)
+		if not number then return 0 end
+		local mult = {K=1e3, M=1e6, B=1e9, T=1e12, Q=1e15}
+		return math.max(0, number * (mult[suffix] or 1))
+	end
+	local function publicTokens(player)
+		local leaderstats = player and player:FindFirstChild("leaderstats")
+		local stat = leaderstats and leaderstats:FindFirstChild("Trade Tokens")
+		if stat then
+			local ok, value = pcall(function() return stat.Value end)
+			if ok then
+				local parsed = parseTokens(value)
+				if parsed > 0 then return parsed end
+			end
+		end
+		for _, attributeName in ipairs({"TradeTokens", "Trade Tokens", "tradeTokens"}) do
+			local ok, value = pcall(player.GetAttribute, player, attributeName)
+			if ok and value ~= nil then
+				local parsed = parseTokens(value)
+				if parsed > 0 then return parsed end
+			end
+		end
+		return 0
+	end
+	local function toolName(tool)
+		return tostring(
+			tool:GetAttribute("BrainrotName")
+				or tool:GetAttribute("ItemName")
+				or tool:GetAttribute("DisplayName")
+				or tool:GetAttribute("LuckyBlockTool")
+				or tool:GetAttribute("BaseSkinTool")
+				or tool:GetAttribute("BoothSkinTool")
+				or tool.Name
+				or ""
+		)
+	end
+	local function brainrotRarity(tool, brainrotName)
+		if type(brainrotName) ~= "string" or brainrotName == "" then return nil end
+		local explicit = tool:GetAttribute("Rarity") or tool:GetAttribute("BrainrotRarity")
+		if explicit == "Meta" then return "Meta" end
+		local rarity = type(explicit) == "string" and explicit or nil
+		if not rarity and EconomyMath then
+			pcall(function() rarity = EconomyMath.GetBrainrotRarity(brainrotName) end)
+		end
+		local meta = tool:GetAttribute("Meta") == true
+			or tool:GetAttribute("IsMeta") == true
+			or string.find(string.lower(brainrotName), "%f[%a]meta%f[%A]") ~= nil
+		return rarity == "Infinity" and meta and "Meta" or rarity
+	end
+	local function snapshot(player)
+		if typeof(player) ~= "Instance" or not player:IsA("Player") then return nil end
+		local records = {}
+		local function scan(container)
+			if not container then return end
+			for _, child in ipairs(container:GetChildren()) do
+				if child:IsA("Tool") then
+					local brainrotName = child:GetAttribute("BrainrotName")
+					records[#records + 1] = {
+						Tool = child,
+						Name = toolName(child),
+						Rarity = brainrotRarity(child, brainrotName),
+					}
+				end
+			end
+		end
+		scan(player:FindFirstChildOfClass("Backpack"))
+		scan(player.Character)
+		return {Records = records, Tokens = publicTokens(player)}
+	end
+	rawset(_G, "__TUFFHUB_PUBLIC_OWNERSHIP_SNAPSHOT", snapshot)
+end)()
+if MINIGAME_MODE then
 	task.spawn(function()
 		while screenGui.Parent do
 			local emptyEnabled = autoSitState
@@ -9937,54 +10809,6 @@ if IS_MINIGAME_PLACE then
 			end
 			if knownPlayerCount == 1 then return nil end
 		end
-		local function parseTokensAS(rawValue)
-			if type(rawValue) == "number" then return math.max(0, rawValue) end
-			local valueText = string.upper(tostring(rawValue or ""))
-			valueText = string.gsub(valueText, ",", "")
-			valueText = string.gsub(valueText, "%s+", "")
-			local direct = tonumber(valueText)
-			if direct then return math.max(0, direct) end
-			local numberText, suffix = string.match(valueText, "([%d%.]+)([KMBTQ]?)")
-			local value = tonumber(numberText)
-			if not value then return 0 end
-			local multipliers = {K=1e3, M=1e6, B=1e9, T=1e12, Q=1e15}
-			return math.max(0, value * (multipliers[suffix] or 1))
-		end
-		local function publicTokensAS(player)
-			local leaderstats = player and player:FindFirstChild("leaderstats")
-			local stat = leaderstats and leaderstats:FindFirstChild("Trade Tokens")
-			if stat then
-				local ok, value = pcall(function() return stat.Value end)
-				if ok then
-					local parsed = parseTokensAS(value)
-					if parsed > 0 then return parsed end
-				end
-			end
-			for _, attributeName in ipairs({"TradeTokens", "Trade Tokens", "tradeTokens"}) do
-				local ok, value = pcall(player.GetAttribute, player, attributeName)
-				if ok and value ~= nil then
-					local parsed = parseTokensAS(value)
-					if parsed > 0 then return parsed end
-				end
-			end
-			return 0
-		end
-		local function publicBrainrotCategoryAS(tool, name)
-			local explicitRarity = tool:GetAttribute("Rarity")
-				or tool:GetAttribute("BrainrotRarity")
-			if explicitRarity == "Meta" then return "Meta" end
-			local rarity = type(explicitRarity) == "string" and explicitRarity or nil
-			if not rarity then
-				pcall(function() rarity = EconomyMathAS.GetBrainrotRarity(name) end)
-			end
-			local metaMarked = tool:GetAttribute("Meta") == true
-				or tool:GetAttribute("IsMeta") == true
-				or (
-					type(name) == "string"
-					and string.find(string.lower(name), "%f[%a]meta%f[%A]") ~= nil
-				)
-			return rarity == "Infinity" and metaMarked and "Meta" or rarity
-		end
 		local function isBlacklistedAS(player)
 			if typeof(player) ~= "Instance" or not player:IsA("Player") then return false end
 			local userId = tostring(player.UserId)
@@ -10086,33 +10910,23 @@ if IS_MINIGAME_PLACE then
 			local config = autoSitState and autoSitState.OneOfTwo
 			if not config or typeof(player) ~= "Instance" or not player:IsA("Player") then return false end
 			if isBlacklistedAS(player) then return false end
-			local tools = {}
-			local function scan(container)
-				if not container then return end
-				for _, child in ipairs(container:GetChildren()) do
-					if child:IsA("Tool") then tools[#tools + 1] = child end
-				end
-			end
-			scan(player:FindFirstChildOfClass("Backpack"))
-			scan(player.Character)
-			local selected = 0
-			local matched = 0
+			local snapshotter = rawget(_G, "__TUFFHUB_PUBLIC_OWNERSHIP_SNAPSHOT")
+			local ownership = type(snapshotter) == "function" and snapshotter(player) or nil
+			if type(ownership) ~= "table" then return false end
+			local records = type(ownership.Records) == "table" and ownership.Records or {}
+			local selected, matched = 0, 0
 			for _, rarity in ipairs(RARITY_OPTIONS) do
 				if config.Targets and config.Targets[rarity] then
 					selected += 1
 					local criterionMatched = false
 					if rarity == "Tokens" then
 						local required = math.clamp(math.floor(tonumber(config.Tokens) or 1), 1, 1000000)
-						criterionMatched = publicTokensAS(player) >= required
+						criterionMatched = (tonumber(ownership.Tokens) or 0) >= required
 					else
 						local required = math.clamp(math.floor(tonumber(config.Amounts and config.Amounts[rarity]) or 1), 1, 100)
 						local count = 0
-						for _, tool in ipairs(tools) do
-							local name = tool:GetAttribute("BrainrotName")
-							if type(name) == "string" and name ~= ""
-								and publicBrainrotCategoryAS(tool, name) == rarity
-								and toolPassesSitFiltersAS(tool, rarity)
-							then
+						for _, record in ipairs(records) do
+							if record.Rarity == rarity and record.Tool and toolPassesSitFiltersAS(record.Tool, rarity) then
 								count += 1
 							end
 						end
@@ -10127,8 +10941,11 @@ if IS_MINIGAME_PLACE then
 					if type(rule) == "table" and rule.Item ~= nil and tostring(rule.Item) ~= "" then
 						selected += 1
 						local criterionMatched = false
-						for _, tool in ipairs(tools) do
-							if toolMatchesSpecificRuleAS(tool, rule) then criterionMatched = true break end
+						for _, record in ipairs(records) do
+							if record.Tool and toolMatchesSpecificRuleAS(record.Tool, rule) then
+								criterionMatched = true
+								break
+							end
 						end
 						if criterionMatched then matched += 1 end
 					end
@@ -11202,7 +12019,7 @@ if IS_MINIGAME_PLACE then
 		end
 	end)
 end
-if IS_MINIGAME_PLACE then
+if MINIGAME_MODE then
 	task.spawn(function()
 		while screenGui.Parent
 			and not (
@@ -11420,25 +12237,24 @@ if IS_MINIGAME_PLACE then
 		end
 		local function selectedCriteriaAC()
 			local criteria = {}
+			local utility = autoServerHopState.Utility
 			for _, rarity in ipairs(RARITY_OPTIONS) do
-				if autoCancelState.Targets[rarity] == true then
+				local enabled = autoCancelState.Targets[rarity] == true
+				local allowed = rarity == "Tokens" or utility.AutoCancelCheckOpponentsBrainrots == true
+				if enabled and allowed then
 					criteria[#criteria + 1] = {
 						Rarity = rarity,
 						Amount = rarity == "Tokens"
-							and math.clamp(
-								math.floor(tonumber(autoCancelState.Tokens) or 1),
-								1, 1000000
-							)
-							or math.clamp(
-								math.floor(tonumber(autoCancelState.Amounts and autoCancelState.Amounts[rarity]) or 1),
-								1, 100
-							),
+							and math.clamp(math.floor(tonumber(autoCancelState.Tokens) or 1), 1, 1000000)
+							or math.clamp(math.floor(tonumber(autoCancelState.Amounts and autoCancelState.Amounts[rarity]) or 1), 1, 100),
 					}
 				end
 			end
-			for _, rule in ipairs(type(autoServerHopState.Utility.AutoCancelSpecificItems) == "table" and autoServerHopState.Utility.AutoCancelSpecificItems or {}) do
-				if type(rule) == "table" and rule.Item ~= nil and tostring(rule.Item) ~= "" then
-					criteria[#criteria + 1] = {SpecificRule = rule}
+			if utility.AutoCancelBasedOnSpecificItems == true then
+				for _, rule in ipairs(type(utility.AutoCancelSpecificItems) == "table" and utility.AutoCancelSpecificItems or {}) do
+					if type(rule) == "table" and rule.Item ~= nil and tostring(rule.Item) ~= "" then
+						criteria[#criteria + 1] = {SpecificRule = rule}
+					end
 				end
 			end
 			return criteria
@@ -11544,10 +12360,16 @@ if IS_MINIGAME_PLACE then
 		while screenGui.Parent do
 			task.wait(0.05)
 			local utilityAC = autoServerHopState.Utility
+			refreshAC()
+			local hasNegotiationAC = tryAC(ActiveNegotiationAC, {"guid"}) ~= nil
+			local minigameLifecycleAC = queuedAC()
+				or tryAC(ActiveMinigameAC, {"session", "gameId"}) ~= nil
+				or type(tryAC(ActiveMinigameAC, {"voting"})) == "table"
+			local regularTradeAC = hasNegotiationAC and not minigameLifecycleAC
 			local autoCancelActive =
 				utilityAC.PauseScript ~= true
-				and utilityAC.PauseMinigameFeatures ~= true
 				and utilityAC.AutoCancelMaster == true
+				and (regularTradeAC or utilityAC.PauseMinigameFeatures ~= true)
 			if not autoCancelActive then
 				if autoCancelWasActiveAC then
 					trackedGuidAC = nil
@@ -11574,7 +12396,11 @@ if IS_MINIGAME_PLACE then
 			if currentOpponentAC and isBlacklistedAC(currentOpponentAC) then
 				shouldCancel = true
 			end
-			if not shouldCancel and utilityAC.AutoCancelCheckOpponentsBrainrots == true then
+			if not shouldCancel and (
+				utilityAC.AutoCancelCheckOpponentsBrainrots == true
+				or utilityAC.AutoCancelBasedOnSpecificItems == true
+				or (autoCancelState.Targets and autoCancelState.Targets.Tokens == true)
+			) then
 				local criteria = selectedCriteriaAC()
 				local opponent = currentOpponentAC
 				local ownershipMismatch = false
@@ -11638,7 +12464,7 @@ if IS_MINIGAME_PLACE then
 		end
 	end)
 end
-if IS_MINIGAME_PLACE then
+if MINIGAME_MODE then
 	task.spawn(function()
 		while screenGui.Parent
 			and autoServerHopState.Utility.TempBlacklistPlayersAfterCanceledTrade ~= true
@@ -11780,7 +12606,7 @@ if IS_MINIGAME_PLACE then
 		end
 	end)
 end
-if IS_MINIGAME_PLACE then
+if MINIGAME_MODE then
 	task.spawn(function()
 		local PlayersSP = Players
 		local HttpServiceSP = HttpService
@@ -12381,7 +13207,7 @@ if IS_MINIGAME_PLACE then
 		end
 	end)
 end
-if IS_MINIGAME_PLACE then
+if MINIGAME_MODE then
 	task.spawn(function()
 		if not screenGui.Parent then return end
 		local PlayersCS = Players
@@ -12490,14 +13316,31 @@ if IS_MINIGAME_PLACE then
 					criteria[#criteria + 1] = {Kind = "Rarity", Value = rarity}
 				end
 			end
-			local specifics = type(utility.CheckServerSpecificItems) == "table"
-				and utility.CheckServerSpecificItems or {}
-			for itemName, enabled in pairs(specifics) do
-				if enabled == true and tostring(itemName) ~= "" then
-					criteria[#criteria + 1] = {Kind = "Specific", Value = tostring(itemName)}
+			local specifics = type(utility.CheckServerSpecificItems) == "table" and utility.CheckServerSpecificItems or {}
+			for _, rule in ipairs(specifics) do
+				if type(rule) == "table" and rule.Item ~= nil and tostring(rule.Item) ~= "" then
+					criteria[#criteria + 1] = {Kind = "Specific", Rule = rule}
 				end
 			end
 			return criteria
+		end
+		local function toolMatchesSpecificRuleCS(tool, rule)
+			if not tool or type(rule) ~= "table" or rule.Item == nil then return false end
+			local wanted = tostring(rule.Item)
+			if toolSpecificNameCS(tool) ~= wanted and tostring(tool.Name or "") ~= wanted then return false end
+			local mutations = type(rule.Mutations) == "table" and rule.Mutations or {}
+			if next(mutations) ~= nil then
+				local mutation = toolMutationCS(tool)
+				if not mutation or mutations[mutation] ~= true then return false end
+			end
+			local traits = type(rule.Traits) == "table" and rule.Traits or {}
+			if next(traits) ~= nil then
+				local present = toolTraitsCS(tool)
+				local matched = false
+				for trait in pairs(traits) do if present[tostring(trait)] == true then matched = true break end end
+				if not matched then return false end
+			end
+			return true
 		end
 		local function playerMatchesCheckCriteriaCS(player, criteria)
 			if typeof(player) ~= "Instance"
@@ -12532,16 +13375,9 @@ if IS_MINIGAME_PLACE then
 					end
 				else
 					for _, tool in ipairs(tools) do
-						local wanted = tostring(criterion.Value)
-						local actual = toolSpecificNameCS(tool)
-						if actual == wanted or tostring(tool.Name or "") == wanted then
-							local brainrotName = tool:GetAttribute("BrainrotName")
-							if type(brainrotName) ~= "string" or brainrotName == ""
-								or brainrotPassesGlobalFiltersCS(tool)
-							then
-								criterionMatched = true
-								break
-							end
+						if toolMatchesSpecificRuleCS(tool, criterion.Rule) then
+							criterionMatched = true
+							break
 						end
 					end
 				end
@@ -12723,7 +13559,7 @@ if IS_MINIGAME_PLACE then
 		end
 	end)
 end
-if IS_MINIGAME_PLACE then
+if MINIGAME_MODE then
 	task.spawn(function()
 		if not screenGui.Parent then return end
 		local HttpServiceHP = HttpService
@@ -13383,7 +14219,7 @@ if IS_MINIGAME_PLACE then
 		end
 	end)
 end
-if IS_MINIGAME_PLACE then
+if MINIGAME_MODE then
 	(function()
 		local GuiServiceAR = game:GetService("GuiService")
 		local TeleportServiceAR = TeleportService
@@ -13479,7 +14315,7 @@ if IS_MINIGAME_PLACE then
 		end)
 	end)()
 end
-if IS_MINIGAME_PLACE then
+if MINIGAME_MODE then
 	local autoChatExecutedAtAC = os.clock()
 	task.spawn(function()
 		while screenGui.Parent
@@ -14154,7 +14990,9 @@ if IS_MINIGAME_PLACE then
 			if state.NeverDeleteEnabled == true then
 				local selected = state.NeverDeleteItems
 				local name = neverDeleteNameADI(item)
-				if type(selected) == "table" and name ~= nil and name ~= "" and selected[name] == true then
+				if type(selected) == "table" and name ~= nil and name ~= "" and selected[name] == true
+					and autoServerHopState.ItemMatchesSpecificFilters(item, state.NeverDeleteSpecificMutations, state.NeverDeleteSpecificTraits)
+				then
 					return true
 				end
 			end
@@ -14616,7 +15454,535 @@ if IS_MINIGAME_PLACE then
 		end
 	end)
 end
-if IS_MINIGAME_PLACE then
+-- Normal player-to-player trade automation. This intentionally runs in its own
+-- task/scope so it does not add register pressure to the large top-level chunk.
+if MINIGAME_MODE then
+	task.spawn(function()
+		local RS=ReplicatedStorage
+		local Shared=RS:WaitForChild("Shared")
+		local ClientModules=RS:WaitForChild("Client"):WaitForChild("Modules")
+		local function safeRequire(module) local ok,v=pcall(require,module); return ok and v or nil end
+		local Rep=safeRequire(ClientModules:WaitForChild("ReplicatorClient"))
+		local Remotes=safeRequire(Shared:WaitForChild("Remotes"))
+		local GetItemType=safeRequire(Shared:WaitForChild("utils"):WaitForChild("GetItemType"))
+		local ItemToString=safeRequire(Shared:WaitForChild("utils"):WaitForChild("ItemToString"))
+		local EconomyMath=safeRequire(Shared:WaitForChild("utils"):WaitForChild("EconomyMath"))
+		local ItemIsTradeable=safeRequire(Shared:WaitForChild("utils"):WaitForChild("ItemIsTradeable"))
+		local SortItems=safeRequire(ClientModules:WaitForChild("utils"):WaitForChild("SortItems"))
+		if not (Rep and Remotes and GetItemType and ItemToString and EconomyMath and ItemIsTradeable and SortItems) then return end
+		local TradeRequests=Rep.get("TradeRequests")
+		local Negotiation=Rep.get("ActiveNegotiation")
+		local ActiveMinigame=Rep.get("ActiveMinigame")
+		local PlayerData=Rep.get("PlayerData")
+		local Respond=Remotes.TradeRespondToOffer
+		local SetSlot=Remotes.NegotiationSetSlot
+		local OfferCurrency=Remotes.NegotiationOfferCurrency
+		local Ready=Remotes.NegotiationReady
+		if not (TradeRequests and Negotiation and Respond and SetSlot and OfferCurrency and Ready) then return end
+		local localPlayer=Players.LocalPlayer
+		local handledRequests={}
+		local opponentItemCache={}
+		local lastGuid=nil
+		local openingAppliedGuid=nil
+		local tradeReactionAt=0
+		local autoReadyGuid=nil
+		local function tradeDelay(u,key,default)
+			if u.AutoAcceptTradesCustomDelays~=true then return default or 0 end
+			return math.clamp(tonumber(u[key]) or 0,0,5)
+		end
+		local function try(rep,path) local ok,v=pcall(function() return rep and rep:TryIndex(path) end); return ok and v or nil end
+		local function releaseAutomatedReady()
+			local guid=try(Negotiation,{"guid"})
+			if autoReadyGuid~=nil and guid~=nil and tostring(autoReadyGuid)==tostring(guid)
+				and try(Negotiation,{"player1","ready"})==true
+			then
+				local version=tonumber(try(Negotiation,{"timers","version"})) or 0
+				pcall(Ready.FireServer,Ready,false,version)
+			end
+			autoReadyGuid=nil
+		end
+		local function isNormalTrade()
+			local guid=try(Negotiation,{"guid"})
+			if not guid then return nil end
+			-- ActiveMinigame can retain non-lifecycle data outside a wager. Only the
+			-- fields that actually indicate queue/voting/session activity should block
+			-- regular-trade automation.
+			local queued=try(ActiveMinigame,{"queued"})==true
+			local gameId=try(ActiveMinigame,{"session","gameId"})
+			local voting=try(ActiveMinigame,{"voting"})
+			if queued or gameId~=nil or type(voting)=="table" then return nil end
+			return guid
+		end
+		local function rarity(item)
+			if type(item)~="table" then return nil end
+			local name=item.name or (item.sub and item.sub.name)
+			local explicit=item.rarity or item.Rarity or (item.sub and (item.sub.rarity or item.sub.Rarity))
+			local r=type(explicit)=="string" and explicit or nil
+			if not r and type(name)=="string" then local ok,v=pcall(EconomyMath.GetBrainrotRarity,name); if ok and type(v)=="string" then r=v end end
+			if not r then local ok,v=pcall(GetItemType,item); if not ok or v~="Brainrot" then return nil end end
+			if r=="Infinity" then
+				local meta=item.Meta==true or item.IsMeta==true or (item.sub and (item.sub.Meta==true or item.sub.IsMeta==true)) or (type(name)=="string" and string.find(string.lower(name),"%f[%a]meta%f[%A]")~=nil)
+				if meta then r="Meta" end
+			end
+			return r
+		end
+		local function itemName(item)
+			if type(item)~="table" then return nil end
+			local value
+			pcall(function() value=ItemToString(item,{rich=false,displayLevel=false,displayMutation=false}) end)
+			return tostring(value or item.name or (item.sub and item.sub.name) or item.displayName or item.DisplayName or "")
+		end
+		local function itemMutation(item)
+			if type(item)~="table" then return nil end
+			local v=item.mutation or item.Mutation or (item.sub and (item.sub.mutation or item.sub.Mutation))
+			return type(v)=="string" and v or nil
+		end
+		local function itemTraits(item)
+			local out={}
+			if type(item)~="table" then return out end
+			local v=item.traits or item.Traits or (item.sub and (item.sub.traits or item.sub.Traits))
+			if type(v)=="table" then
+				for k,x in pairs(v) do if x~=nil and x~=false then out[tostring(type(k)=="number" and x or k)]=true end end
+			elseif type(v)=="string" then
+				for t in string.gmatch(v,"[^,|;]+") do t=string.gsub(t,"^%s*(.-)%s*$","%1"); if t~="" then out[t]=true end end
+			end
+			return out
+		end
+		local function selectedFilterMatches(item, mutations, traits)
+			if type(mutations)=="table" and next(mutations)~=nil then local m=itemMutation(item); if not m or mutations[m]~=true then return false end end
+			if type(traits)=="table" and next(traits)~=nil then local present=itemTraits(item); local hit=false; for t in pairs(traits) do if present[tostring(t)] then hit=true break end end; if not hit then return false end end
+			return true
+		end
+		local function specificRuleMatches(item, rule)
+			if type(item)~="table" or type(rule)~="table" or rule.Item==nil then return false end
+			local wanted=string.lower(tostring(rule.Item)); local n=string.lower(itemName(item) or "")
+			local direct=string.lower(tostring(item.name or (item.sub and item.sub.name) or ""))
+			return (n==wanted or direct==wanted) and selectedFilterMatches(item,rule.Mutations,rule.Traits)
+		end
+		local function offeredItems(side)
+			local slots=try(Negotiation,{side,"slots"}); local items={}
+			if type(slots)~="table" then return items end
+			for i=1,6 do
+				local v=slots[tostring(i)]
+				if v==nil then v=slots[i] end
+				local id=type(v)=="table" and v.id or v
+				local it=type(v)=="table" and v.item or nil
+				local cacheKey=tostring(side)..":"..tostring(i)
+				if type(it)=="table" then
+					opponentItemCache[cacheKey]={id=tostring(id or ""),item=it}
+				elseif id~=nil then
+					local cached=opponentItemCache[cacheKey]
+					if cached and cached.id==tostring(id) then it=cached.item end
+				else
+					opponentItemCache[cacheKey]=nil
+				end
+				if type(it)=="table" then items[#items+1]=it end
+			end
+			return items
+		end
+		local function publicRecordMatchesFilters(record, mutations, traits)
+			local tool = type(record) == "table" and record.Tool or nil
+			if typeof(tool) ~= "Instance" or not tool:IsA("Tool") then
+				return (type(mutations) ~= "table" or next(mutations) == nil)
+					and (type(traits) ~= "table" or next(traits) == nil)
+			end
+			if type(mutations) == "table" and next(mutations) ~= nil then
+				local mutation = tool:GetAttribute("Mutation") or tool:GetAttribute("BrainrotMutation")
+				if type(mutation) ~= "string" or mutations[mutation] ~= true then return false end
+			end
+			if type(traits) == "table" and next(traits) ~= nil then
+				local present = {}
+				for _, attributeName in ipairs({"Traits", "BrainrotTraits", "Trait"}) do
+					local value = tool:GetAttribute(attributeName)
+					if type(value) == "string" then
+						for trait in string.gmatch(value, "[^,|;]+") do
+							trait = string.gsub(trait, "^%s*(.-)%s*$", "%1")
+							if trait ~= "" then present[trait] = true end
+						end
+					end
+				end
+				local matched = false
+				for trait in pairs(traits) do if present[tostring(trait)] == true then matched = true break end end
+				if not matched then return false end
+			end
+			return true
+		end
+		local function publicSpecificRuleMatches(record, rule)
+			if type(record)~="table" or type(rule)~="table" or rule.Item==nil then return false end
+			local wanted=string.lower(tostring(rule.Item))
+			local names={tostring(record.Name or "")}
+			local tool=record.Tool
+			if typeof(tool)=="Instance" and tool:IsA("Tool") then
+				names[#names+1]=tostring(tool:GetAttribute("BrainrotName") or "")
+				names[#names+1]=tostring(tool:GetAttribute("ItemName") or "")
+				names[#names+1]=tostring(tool:GetAttribute("DisplayName") or "")
+				names[#names+1]=tostring(tool.Name or "")
+			end
+			local nameMatched=false
+			for _,name in ipairs(names) do
+				if string.lower(name)==wanted then nameMatched=true break end
+			end
+			return nameMatched and publicRecordMatchesFilters(record,rule.Mutations,rule.Traits)
+		end
+		local function tradeRequestRequirements(u, player)
+			local snapshotter=rawget(_G,"__TUFFHUB_PUBLIC_OWNERSHIP_SNAPSHOT")
+			local ownership=type(snapshotter)=="function" and snapshotter(player) or nil
+			local records=type(ownership)=="table" and type(ownership.Records)=="table" and ownership.Records or {}
+			local enabled,matched=0,0
+			for _,r in ipairs(BRAINROT_RARITY_OPTIONS) do
+				local cfg=tradeRequestCriteriaState[r]
+				if cfg and cfg.Enabled==true then
+					enabled+=1
+					local count=0
+					for _,record in ipairs(records) do
+						if record.Rarity==r and publicRecordMatchesFilters(record,u["AutoAcceptTradesRequest"..r.."Mutations"],u["AutoAcceptTradesRequest"..r.."Traits"]) then count+=1 end
+					end
+					if count>=math.clamp(math.floor(tonumber(cfg.Amount) or 1),1,6) then matched+=1 end
+				end
+			end
+			local tokenCfg=tradeRequestCriteriaState.Tokens
+			if tokenCfg and tokenCfg.Enabled==true then
+				enabled+=1
+				if (type(ownership)=="table" and tonumber(ownership.Tokens) or 0)>=math.clamp(math.floor(tonumber(tokenCfg.Amount) or 1),1,1000000) then matched+=1 end
+			end
+			for _,rule in ipairs(type(u.AutoAcceptTradesRequestSpecificItems)=="table" and u.AutoAcceptTradesRequestSpecificItems or {}) do
+				if type(rule)=="table" and rule.Item~=nil and tostring(rule.Item)~="" then
+					enabled+=1
+					local hit=false
+					for _,record in ipairs(records) do if publicSpecificRuleMatches(record,rule) then hit=true break end end
+					if hit then matched+=1 end
+				end
+			end
+			if enabled==0 then return false,false end
+			local ok=(u.AutoAcceptTradesRequestMustHaveAll==true and matched==enabled) or (u.AutoAcceptTradesRequestMustHaveOne==true and matched>0)
+			return ok,true
+		end
+		local function syncOwnOffer(u, desired, tokens)
+			for slot=1,6 do
+				local current=try(Negotiation,{"player1","slots",tostring(slot)}); local currentId=type(current)=="table" and current.id or current
+				local wanted=desired[slot]
+				if tostring(currentId or "")~=tostring(wanted or "") then
+					pcall(SetSlot.InvokeServer,SetSlot,tostring(slot),wanted)
+					task.wait(wanted and tradeDelay(u,"AutoAcceptTradesAddBrainrotDelay",0.03) or tradeDelay(u,"AutoAcceptTradesRemoveBrainrotDelay",0.03))
+				end
+			end
+			local currentTokens=tonumber(try(Negotiation,{"player1","currency"})) or 0
+			if currentTokens~=tokens then
+				pcall(OfferCurrency.InvokeServer,OfferCurrency,tokens)
+				task.wait(tokens>currentTokens and tradeDelay(u,"AutoAcceptTradesAddTokenDelay",0) or tradeDelay(u,"AutoAcceptTradesRemoveTokenDelay",0))
+			end
+		end
+		local function inventoryContext()
+			local root=try(PlayerData,{}) or {}; local inv=root.Inventory or try(PlayerData,{"Inventory"}) or {}
+			if type(inv)~="table" then inv={} end
+			local ok,sorted=pcall(SortItems,inv); if not ok or type(sorted)~="table" then sorted={} end
+			local balance=math.max(0,math.floor(tonumber(root.TradeTokens or try(PlayerData,{"TradeTokens"})) or 0))
+			return inv,sorted,balance
+		end
+		local function validOutgoing(inv,id)
+			id=tostring(id or ""); local it=inv[id] or inv[tonumber(id)]
+			if type(it)~="table" or rarity(it)=="Eternal" then return nil end
+			local ok,v=pcall(ItemIsTradeable,it); return ok and v and it or nil
+		end
+		local function applyOpeningOffer(u)
+			local custom=u.RegularOpeningCustomBrainrots==true; local best=u.RegularOpeningAutoshowBestBrainrots==true
+			local showAll=u.RegularOpeningAutoshowAllTokens==true; local customTokens=u.RegularOpeningCustomTokens==true
+			if not (custom or best or showAll or customTokens) then return false end
+			local inv,sorted,balance=inventoryContext(); local desired,used={},{}
+			local function add(id, mutations, traits)
+				id=tostring(id or ""); if id=="" or used[id] or #desired>=6 then return false end
+				local item=validOutgoing(inv,id)
+				if not item or not selectedFilterMatches(item,mutations,traits) then return false end
+				used[id]=true; desired[#desired+1]=id; return true
+			end
+			if custom then
+				for i=1,6 do add(u["RegularOpeningBrainrot"..tostring(i)],u.RegularOpeningSpecificMutations,u.RegularOpeningSpecificTraits) end
+			elseif best then
+				for _,id in ipairs(sorted) do add(id); if #desired>=6 then break end end
+			end
+			local tokens=showAll and balance or (customTokens and math.min(balance,math.max(0,math.floor(tonumber(u.RegularOpeningTokenAmount) or 0))) or 0)
+			syncOwnOffer(u,desired,tokens); return true
+		end
+		local function normalizeRegularOfferChat(value)
+			value=string.lower(tostring(value or "")); value=string.gsub(value,"[%p%c]+"," "); value=string.gsub(value,"%s+"," ")
+			return string.gsub(string.gsub(value,"^%s+",""),"%s+$","")
+		end
+		local function regularOfferChatDistance(a,b)
+			local al,bl=#a,#b; if al==0 then return bl end; if bl==0 then return al end
+			local previous={}; for j=0,bl do previous[j]=j end
+			for i=1,al do
+				local current={[0]=i}; local ab=string.byte(a,i)
+				for j=1,bl do local cost=ab==string.byte(b,j) and 0 or 1; current[j]=math.min(current[j-1]+1,previous[j]+1,previous[j-1]+cost) end
+				previous=current
+			end
+			return previous[bl]
+		end
+		local function similarRegularOfferChat(message,wanted)
+			local haystack,needle=normalizeRegularOfferChat(message),normalizeRegularOfferChat(wanted)
+			if haystack=="" or needle=="" then return false end
+			if string.find(haystack,needle,1,true) or string.find(needle,haystack,1,true) then return true end
+			local longest=math.max(#haystack,#needle)
+			if longest>3 and 1-(regularOfferChatDistance(haystack,needle)/longest)>=0.78 then return true end
+			local wantedWords,count={},0
+			for word in string.gmatch(needle,"%S+") do if not wantedWords[word] then wantedWords[word]=true; count+=1 end end
+			if count==0 then return false end
+			local matched,seen=0,{}
+			for word in string.gmatch(haystack,"%S+") do if wantedWords[word] and not seen[word] then seen[word]=true; matched+=1 end end
+			return matched/count>=0.75
+		end
+		local function matchingRegularTradeChatOffer(u)
+			if u.RegularAutoOfferBasedOnTradeChat~=true or type(u.RegularAutoOfferTradeChatOffers)~="table" then return nil end
+			local messages=try(Negotiation,{"chatChannel","messages"}); if type(messages)~="table" then return nil end
+			for messageIndex=#messages,1,-1 do
+				local messageData=messages[messageIndex]
+				if type(messageData)=="table" and messageData.from~=localPlayer then
+					local incoming=tostring(messageData.message or "")
+					for ruleIndex,rule in ipairs(u.RegularAutoOfferTradeChatOffers) do
+						if type(rule)=="table" and tostring(rule.LookFor or "")~="" and similarRegularOfferChat(incoming,rule.LookFor) then return rule,ruleIndex end
+					end
+				end
+			end
+			return nil
+		end
+		local function regularReactiveOfferConfigured(u)
+			if u.RegularAutoOfferMaster==true then
+				for _,config in pairs(regularAutoOfferState or {}) do
+					if type(config)=="table" and config.Enabled==true then return true end
+				end
+			end
+			if u.RegularAutoOfferTokensEnabled==true
+				and (u.RegularAutoOfferMatchTokensWithTokens==true or u.RegularAutoOfferMatchTokensWithBrainrots==true)
+			then return true end
+			if u.RegularAutoOfferBasedOnTradeChat==true and type(u.RegularAutoOfferTradeChatOffers)=="table" then
+				for _,rule in ipairs(u.RegularAutoOfferTradeChatOffers) do
+					if type(rule)=="table" and tostring(rule.LookFor or "")~="" then return true end
+				end
+			end
+			return false
+		end
+		local function applyOwnOffer(u)
+			if not regularReactiveOfferConfigured(u) then return false end
+			local inv,sorted,balance=inventoryContext(); local desired,used={},{}; local tokens=0; local forceAllTokens=false
+			local function add(id,mutations,traits)
+				id=tostring(id or ""); if id=="" or used[id] or #desired>=6 then return false end
+				local item=validOutgoing(inv,id); if not item or not selectedFilterMatches(item,mutations,traits) then return false end
+				used[id]=true; desired[#desired+1]=id; return true
+			end
+			local function addSelectedInInventoryOrder(selected,maximum,mutations,traits)
+				if type(selected)~="table" then return 0 end
+				local added,seen=0,{}
+				for _,id in ipairs(sorted) do
+					id=tostring(id)
+					if selected[id]==true then seen[id]=true; if add(id,mutations,traits) then added+=1 end; if (maximum and added>=maximum) or #desired>=6 then return added end end
+				end
+				local remaining={}; for id,on in pairs(selected) do if on==true and not seen[tostring(id)] then remaining[#remaining+1]=tostring(id) end end; table.sort(remaining)
+				for _,id in ipairs(remaining) do if add(id,mutations,traits) then added+=1 end; if (maximum and added>=maximum) or #desired>=6 then break end end
+				return added
+			end
+			local function addRarity(target,amount,useFallbackFilters)
+				local wanted=math.max(0,math.floor(tonumber(amount) or 0)); local added=0
+				for _,id in ipairs(sorted) do
+					if added>=wanted or #desired>=6 then break end; id=tostring(id)
+					if not used[id] then
+						local item=validOutgoing(inv,id)
+						local passes=not useFallbackFilters or selectedFilterMatches(item,u.RegularFallbackAvoidMutationsEnabled==true and u.RegularFallbackAvoidMutations or nil,u.RegularFallbackAvoidTraitsEnabled==true and u.RegularFallbackAvoidTraits or nil)
+						if item and rarity(item)==target and passes and add(id) then added+=1 end
+					end
+				end
+				return added
+			end
+			local function lowerRarity(source)
+				for i,r in ipairs(OUTGOING_BRAINROT_RARITY_OPTIONS) do if r==source then return i>1 and OUTGOING_BRAINROT_RARITY_OPTIONS[i-1] or nil end end
+			end
+			local function applyFallback(sourceRarity,missingTargetRarity)
+				if u.RegularFallbackToSpecificItems==true then
+					local selected=type(u["RegularFallbackSpecific"..sourceRarity.."Items"])=="table" and u["RegularFallbackSpecific"..sourceRarity.."Items"] or {}
+					addSelectedInInventoryOrder(selected,nil,u["RegularFallbackSpecific"..sourceRarity.."Mutations"],u["RegularFallbackSpecific"..sourceRarity.."Traits"])
+				end
+				if u.RegularFallbackOffers==true then
+					local lower=lowerRarity(missingTargetRarity)
+					if lower then addRarity(lower,math.clamp(math.floor(tonumber(u.RegularFallbackNextLowerRarityAmount) or 1),1,6),true) end
+				end
+				if u.RegularFallbackToTokens==true then
+					if u["RegularFallback"..sourceRarity.."OfferAllTokens"]==true then forceAllTokens=true else tokens+=math.max(0,math.floor(tonumber(u["RegularFallbackTokens"..sourceRarity]) or 0)) end
+				end
+			end
+			local reactiveMatched=false
+			local chatRule=matchingRegularTradeChatOffer(u)
+			if chatRule then
+				reactiveMatched=true
+				local targets=type(chatRule.Targets)=="table" and chatRule.Targets or {}; local amounts=type(chatRule.Amounts)=="table" and chatRule.Amounts or {}
+				addSelectedInInventoryOrder(type(chatRule.SpecificItems)=="table" and chatRule.SpecificItems or {},nil,chatRule.SpecificMutations,chatRule.SpecificTraits)
+				for _,target in ipairs(OUTGOING_BRAINROT_RARITY_OPTIONS) do if targets[target]==true and #desired<6 then addRarity(target,math.clamp(math.floor(tonumber(amounts[target]) or 1),1,6),false) end end
+				tokens=math.max(0,math.floor(tonumber(chatRule.TokenAmount) or 0)); forceAllTokens=chatRule.OfferAllTokens==true
+			else
+				local opponent=offeredItems("player2"); local sourceCounts={}
+				for _,item in ipairs(opponent) do local r=rarity(item); if r then sourceCounts[r]=(sourceCounts[r] or 0)+1 end end
+				if u.RegularAutoOfferMaster==true then
+					for _,sourceRarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+						local sourceCount=sourceCounts[sourceRarity] or 0; local config=regularAutoOfferState[sourceRarity]
+						if sourceCount>0 and type(config)=="table" and config.Enabled==true then
+							local sourceConfigured=false
+							if config.OfferModeRarity~=false then
+								local perItemTokens=math.clamp(math.floor(tonumber(config.Tokens) or 0),0,1000000)
+								if perItemTokens>0 or config.OfferAllTokens==true then sourceConfigured=true end
+								for occurrence=1,sourceCount do
+									tokens+=perItemTokens; if config.OfferAllTokens==true then forceAllTokens=true end
+									for _,target in ipairs(OUTGOING_BRAINROT_RARITY_OPTIONS) do
+										if config.Targets and config.Targets[target]==true then
+											sourceConfigured=true; local need=math.clamp(math.floor(tonumber(config.Amounts and config.Amounts[target]) or 1),1,6)
+											local got=addRarity(target,need,false); if got<need then applyFallback(sourceRarity,target) end
+										end
+									end
+								end
+							end
+							if config.OfferModeSpecific==true and type(config.SpecificTargets)=="table" then
+								local added=addSelectedInInventoryOrder(config.SpecificTargets,nil,config.SpecificMutations,config.SpecificTraits); if added>0 then sourceConfigured=true end
+							end
+							if sourceConfigured then reactiveMatched=true end
+						end
+					end
+				end
+				if u.RegularAutoOfferTokensEnabled==true then
+					local opponentTokens=math.max(0,math.floor(tonumber(try(Negotiation,{"player2","currency"})) or 0))
+					if u.RegularAutoOfferMatchTokensWithTokens==true then
+						local minimum=math.clamp(math.floor(tonumber(u.RegularAutoOfferLowestTokensToMatch) or 1),1,1000000)
+						if opponentTokens>=minimum then tokens+=opponentTokens*math.clamp(math.floor(tonumber(u.RegularAutoOfferTokenAddRatio) or 1),1,10); reactiveMatched=true end
+					end
+					local target=u.RegularAutoOfferTokenRarity; local unit=math.clamp(math.floor(tonumber(u.RegularAutoOfferTokenAmount) or 0),0,1000000)
+					if u.RegularAutoOfferMatchTokensWithBrainrots==true and unit>0 and table.find(OUTGOING_BRAINROT_RARITY_OPTIONS,target) then
+						local units=math.floor(opponentTokens/unit); if units>0 then addRarity(target,units,false); reactiveMatched=true end
+					end
+				end
+			end
+			if not reactiveMatched then
+				-- Opening Offer is the only baseline. When a reactive rule stops matching,
+				-- return to that baseline instead of retaining a stale reactive offer.
+				if applyOpeningOffer(u) then return true end
+				syncOwnOffer(u,{},0)
+				return true
+			end
+			tokens=forceAllTokens and balance or math.min(balance,math.max(0,math.floor(tokens)))
+			syncOwnOffer(u,desired,tokens); return true
+		end
+		local function regularOfferAutomationEnabled(u)
+			return u.RegularAutoOfferMaster==true
+				or u.RegularAutoOfferTokensEnabled==true
+				or u.RegularAutoOfferBasedOnTradeChat==true
+				or u.RegularOpeningAutoshowBestBrainrots==true
+				or u.RegularOpeningCustomBrainrots==true
+				or u.RegularOpeningAutoshowAllTokens==true
+				or u.RegularOpeningCustomTokens==true
+		end
+		local function acceptRequirements(u)
+			local items=offeredItems("player2"); local counts={}; local enabled=0; local matched=0
+			for _,it in ipairs(items) do local r=rarity(it); if r and selectedFilterMatches(it,u["AutoAccept"..r.."Mutations"],u["AutoAccept"..r.."Traits"]) then counts[r]=(counts[r] or 0)+1 end end
+			for _,r in ipairs(BRAINROT_RARITY_OPTIONS) do local cfg=autoAcceptState[r]; if cfg and cfg.Enabled==true then enabled+=1; if (counts[r] or 0)>=math.clamp(math.floor(tonumber(cfg.Amount) or 1),1,6) then matched+=1 end end end
+			local tokenCfg=autoAcceptState.Tokens; local offeredTokens=math.max(0,math.floor(tonumber(try(Negotiation,{"player2","currency"})) or 0))
+			if tokenCfg and tokenCfg.Enabled==true then enabled+=1; if offeredTokens>=math.clamp(math.floor(tonumber(tokenCfg.Amount) or 1),1,1000000) then matched+=1 end end
+			for _,rule in ipairs(type(u.AutoAcceptSpecificItems)=="table" and u.AutoAcceptSpecificItems or {}) do if type(rule)=="table" and rule.Item~=nil and tostring(rule.Item)~="" then enabled+=1; local hit=false; for _,it in ipairs(items) do if specificRuleMatches(it,rule) then hit=true break end end; if hit then matched+=1 end end end
+			if enabled==0 then return false,false end
+			local ok=(u.AutoAcceptMustHaveAll==true and matched==enabled) or (u.AutoAcceptMustHaveOne==true and matched>0)
+			return ok,true
+		end
+		while screenGui.Parent do
+			local u=autoServerHopState.Utility
+			if u.PauseScript==true then
+				releaseAutomatedReady()
+				rawset(_G,"__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID",nil)
+				lastGuid=nil; openingAppliedGuid=nil; table.clear(opponentItemCache)
+				task.wait(0.15); continue
+			end
+
+			local requests=try(TradeRequests,{})
+			local liveRequestKeys={}
+			if type(requests)=="table" then
+				for key,req in pairs(requests) do
+					local requestKey=tostring(key)
+					liveRequestKeys[requestKey]=true
+					if u.AutoAcceptTradesAcceptRequests==true
+						and type(req)=="table"
+						and req.targetPlayer==tostring(localPlayer.UserId)
+						and req.gift~=true
+						and not handledRequests[requestKey]
+					then
+						local opponentId=tonumber(key)
+						local opponent=opponentId and Players:GetPlayerByUserId(opponentId) or nil
+						local requestOK,configured=tradeRequestRequirements(u,opponent)
+						if configured and requestOK then
+							handledRequests[requestKey]=true
+							local delay=tradeDelay(u,"AutoAcceptTradesInitialDelay",0)
+							if delay>0 then task.wait(delay) end
+							pcall(Respond.InvokeServer,Respond,key,true)
+							break
+						end
+					end
+				end
+			end
+			for requestKey in pairs(handledRequests) do
+				if liveRequestKeys[requestKey]~=true then handledRequests[requestKey]=nil end
+			end
+
+			local guid=isNormalTrade()
+			if not guid then
+				rawset(_G,"__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID",nil)
+				lastGuid=nil; openingAppliedGuid=nil; autoReadyGuid=nil; table.clear(opponentItemCache)
+				task.wait(0.10); continue
+			end
+			rawset(_G,"__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID",guid)
+			if tostring(guid)~=tostring(lastGuid) then
+				lastGuid=guid
+				openingAppliedGuid=nil
+				autoReadyGuid=nil
+				table.clear(opponentItemCache)
+				tradeReactionAt=os.clock()+tradeDelay(u,"AutoAcceptTradesReactionDelay",0)
+			end
+
+			local offerAutomationEnabled=regularOfferAutomationEnabled(u)
+			local tradeMessageDelaySatisfied=true
+			if tostring(u._LastTradeMessageGuid or "")==tostring(guid) then
+				local sentAt=tonumber(u._LastTradeMessageSentAt) or 0
+				tradeMessageDelaySatisfied=os.clock()-sentAt>=tradeDelay(u,"AutoAcceptTradesDelayAfterTradeMessage",0.75)
+			end
+			if offerAutomationEnabled then
+				if tradeMessageDelaySatisfied and tostring(openingAppliedGuid)~=tostring(guid) then
+					applyOpeningOffer(u)
+					openingAppliedGuid=guid
+				end
+				if tradeMessageDelaySatisfied and os.clock()>=tradeReactionAt then applyOwnOffer(u) end
+			else
+				openingAppliedGuid=nil
+			end
+
+			local ready=try(Negotiation,{"player1","ready"})==true
+			if u.AutoAcceptTradesAcceptOffers==true then
+				local requirementsOK,configured=acceptRequirements(u)
+				if configured and requirementsOK then
+					local due=(tonumber(try(Negotiation,{"timers","lastUpdate"})) or -1)+3+tradeDelay(u,"AutoAcceptTradesAcceptDelay",0)
+					if not ready and workspace:GetServerTimeNow()>=due then
+						local version=tonumber(try(Negotiation,{"timers","version"})) or 0
+						pcall(Ready.FireServer,Ready,true,version)
+						autoReadyGuid=tostring(guid)
+					end
+				elseif autoReadyGuid~=nil and tostring(autoReadyGuid)==tostring(guid) then
+					if ready then
+						local version=tonumber(try(Negotiation,{"timers","version"})) or 0
+						pcall(Ready.FireServer,Ready,false,version)
+					end
+					autoReadyGuid=nil
+				end
+			elseif autoReadyGuid~=nil and tostring(autoReadyGuid)==tostring(guid) then
+				if ready then
+					local version=tonumber(try(Negotiation,{"timers","version"})) or 0
+					pcall(Ready.FireServer,Ready,false,version)
+				end
+				autoReadyGuid=nil
+			end
+			task.wait(0.10)
+		end
+	end)
+end
+if MINIGAME_MODE then
     task.spawn(function()
         while screenGui.Parent do
             local utility = autoServerHopState and autoServerHopState.Utility
@@ -14806,6 +16172,29 @@ if IS_MINIGAME_PLACE then
                 local okTradeable, result = pcall(ItemIsTradeableAO, item); tradeable = okTradeable and result == true
             end
             return tradeable and wantedId or nil
+        end
+        local function selectedSpecificFallbackIdsAO(sourceRarity)
+            local utility = autoServerHopState.Utility
+            local selected = utility["FallbackSpecific" .. tostring(sourceRarity) .. "Items"]
+            local ids = {}
+            local seen = {}
+            local mutations = utility["FallbackSpecific" .. tostring(sourceRarity) .. "Mutations"]
+            local traits = utility["FallbackSpecific" .. tostring(sourceRarity) .. "Traits"]
+            if type(selected) == "table" then
+                for id, enabled in pairs(selected) do
+                    if enabled == true
+                        and autoServerHopState.OwnedTradeableItemMatchesFilters(id, mutations, traits)
+                    then
+                        local valid = validOfferItemIdAO(id)
+                        if valid and not seen[valid] then seen[valid] = true ids[#ids + 1] = valid end
+                    end
+                end
+            end
+            local legacyValue = utility["FallbackSpecific" .. tostring(sourceRarity) .. "Item"]
+            local legacy = autoServerHopState.OwnedTradeableItemMatchesFilters(legacyValue, mutations, traits)
+                and validOfferItemIdAO(legacyValue) or nil
+            if legacy and not seen[legacy] then ids[#ids + 1] = legacy end
+            return ids
         end
         local function normalizeOfferChatAO(value)
             value = string.lower(tostring(value or ""))
@@ -15137,6 +16526,7 @@ if IS_MINIGAME_PLACE then
         end
         while screenGui.Parent do
             local utilityAO = autoServerHopState.Utility
+            if rawget(_G, "__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID") ~= nil then task.wait(0.08) continue end
             if utilityAO.PauseScript == true
                 or utilityAO.PauseMinigameFeatures == true
                 or (
@@ -15182,12 +16572,9 @@ if IS_MINIGAME_PLACE then
             local forceAllTokensAO = false
             local specificPrimaryIdsAO = {}
             local specificPrimarySeenAO = {}
-            local fallbackEnabled = utilityAO.FallbackOffers == true
-                and (
-                    utilityAO.FallbackToTokens == true
-                    or utilityAO.FallbackToNextLowerRarityBrainrot == true
-                    or utilityAO.FallbackToSpecificBrainrotItem == true
-                )
+            local fallbackEnabled = utilityAO.FallbackToTokens == true
+                or utilityAO.FallbackToNextLowerRarityBrainrot == true
+                or utilityAO.FallbackToSpecificBrainrotItem == true
             local availableCounts = availableRarityCountsAO()
             local plannedInventoryUse = {}
             local primaryRequests = {}
@@ -15290,7 +16677,10 @@ if IS_MINIGAME_PLACE then
                     end
                     if config.OfferModeSpecific == true then
                         for id, selected in pairs(config.SpecificTargets) do
-                            if selected == true and addSpecificPrimaryAO(id) then
+                            if selected == true
+                                and autoServerHopState.OwnedTradeableItemMatchesFilters(id, config.SpecificMutations, config.SpecificTraits)
+                                and addSpecificPrimaryAO(id)
+                            then
                                 sourceHasConfiguredResponseAO = true
                             end
                         end
@@ -15368,7 +16758,11 @@ if IS_MINIGAME_PLACE then
                     chatSpecificAO[tradeChatRuleAO.BrainrotId] = true
                 end
                 for id, selected in pairs(chatSpecificAO) do
-                    if selected == true then addSpecificPrimaryAO(id) end
+                    if selected == true
+                        and autoServerHopState.OwnedTradeableItemMatchesFilters(id, tradeChatRuleAO.SpecificMutations, tradeChatRuleAO.SpecificTraits)
+                    then
+                        addSpecificPrimaryAO(id)
+                    end
                 end
                 forceAllTokensAO = tradeChatRuleAO.OfferAllTokens == true
                 aggregateTokens = math.clamp(
@@ -15554,11 +16948,10 @@ if IS_MINIGAME_PLACE then
                                 )
                             end
                         end
-                        if utilityAO.FallbackToSpecificBrainrotItem == true then
-                            local key = "FallbackSpecific" .. tostring(occurrence.SourceRarity) .. "Item"
-                            if utilityAO[key] ~= nil then
-                                specificFallbackSourceRequests[occurrence.SourceRarity] = true
-                            end
+                        if utilityAO.FallbackToSpecificBrainrotItem == true
+                            and #selectedSpecificFallbackIdsAO(occurrence.SourceRarity) > 0
+                        then
+                            specificFallbackSourceRequests[occurrence.SourceRarity] = true
                         end
                         if utilityAO.SimpleAutofarmEnabled ~= true
                             and utilityAO.FallbackToNextLowerRarityBrainrot == true
@@ -15586,9 +16979,7 @@ if IS_MINIGAME_PLACE then
             local plannedSpecificFallbackCountAO = 0
             if fallbackEnabled and utilityAO.FallbackToSpecificBrainrotItem == true then
                 for sourceRarity in pairs(specificFallbackSourceRequests) do
-                    if validOfferItemIdAO(utilityAO["FallbackSpecific" .. tostring(sourceRarity) .. "Item"]) then
-                        plannedSpecificFallbackCountAO += 1
-                    end
+                    plannedSpecificFallbackCountAO += #selectedSpecificFallbackIdsAO(sourceRarity)
                 end
             end
             local fallbackSlotsLeft = math.max(0, 6 - reservedPrimarySlots - #specificPrimaryIdsAO - plannedSpecificFallbackCountAO)
@@ -15652,13 +17043,13 @@ if IS_MINIGAME_PLACE then
             if fallbackEnabled and utilityAO.FallbackToSpecificBrainrotItem == true then
                 for _, sourceRarity in ipairs(BRAINROT_RARITY_OPTIONS) do
                     if specificFallbackSourceRequests[sourceRarity] == true then
-                        local key = "FallbackSpecific" .. sourceRarity .. "Item"
-                        local valid = validOfferItemIdAO(utilityAO[key])
-                        if valid and not specificPrimarySeenAO[valid] and not fallbackSpecificSeenAO[valid] then
-                            fallbackSpecificSeenAO[valid] = true
-                            specificFallbackIdsAO[#specificFallbackIdsAO + 1] = valid
-                            targetSignature[#targetSignature + 1] = "FB-SPEC-" .. sourceRarity .. "=" .. valid
-                            requestedSlots += 1
+                        for _, valid in ipairs(selectedSpecificFallbackIdsAO(sourceRarity)) do
+                            if not specificPrimarySeenAO[valid] and not fallbackSpecificSeenAO[valid] and requestedSlots < 6 then
+                                fallbackSpecificSeenAO[valid] = true
+                                specificFallbackIdsAO[#specificFallbackIdsAO + 1] = valid
+                                targetSignature[#targetSignature + 1] = "FB-SPEC-" .. sourceRarity .. "=" .. valid
+                                requestedSlots += 1
+                            end
                         end
                     end
                 end
@@ -15775,7 +17166,7 @@ if IS_MINIGAME_PLACE then
         end
     end)
 end
-if IS_MINIGAME_PLACE then
+if MINIGAME_MODE then
 	task.spawn(function()
 		while screenGui.Parent do
 			local anyEnabled = false
@@ -16079,6 +17470,7 @@ if IS_MINIGAME_PLACE then
 		end
 		while screenGui.Parent do
 			local utilityAAC = autoServerHopState.Utility
+			if rawget(_G, "__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID") ~= nil then task.wait(0.08) continue end
 			if utilityAAC.PauseScript == true
 			or utilityAAC.PauseMinigameFeatures == true
 				or utilityAAC.AutoAcceptMaster ~= true
@@ -16192,7 +17584,7 @@ if IS_MINIGAME_PLACE then
 		end
 	end)
 end
-if IS_MINIGAME_PLACE then
+if MINIGAME_MODE then
 	task.spawn(function()
 		while screenGui.Parent
 			and not (
@@ -16373,12 +17765,14 @@ if IS_MINIGAME_PLACE then
 					end
 				end
 			end
-			local function validBrainrotIdAE(id)
+			local function validBrainrotIdAE(id, mutations, traits)
 				if id == nil then return nil, nil end
 				local sid = tostring(id)
 				local item = inventory[id] or inventory[sid]
 					or (tonumber(id) and inventory[tonumber(id)] or nil)
-				if type(item) ~= "table" or itemTypeAE(item) ~= "Brainrot" then return nil, nil end
+				if type(item) ~= "table" or itemTypeAE(item) ~= "Brainrot"
+					or not autoServerHopState.ItemMatchesSpecificFilters(item, mutations, traits)
+				then return nil, nil end
 				return sid, item
 			end
 			local function equipIdAE(id)
@@ -16399,7 +17793,7 @@ if IS_MINIGAME_PLACE then
 			local holdId, holdItem
 			if modeHold or modeBoth then
 				if useSpecific then
-					holdId, holdItem = validBrainrotIdAE(state.HoldSpecificBrainrotId)
+					holdId, holdItem = validBrainrotIdAE(state.HoldSpecificBrainrotId, state.HoldSpecificBrainrotMutations, state.HoldSpecificBrainrotTraits)
 					if not holdId then state.HoldSpecificBrainrotId = nil end
 				elseif useBest then
 					holdId, holdItem = validBrainrotIdAE(bestId)
@@ -16408,7 +17802,7 @@ if IS_MINIGAME_PLACE then
 			local mountId, mountItem, mountName
 			if modeMount or modeBoth then
 				if useSpecific then
-					mountId, mountItem = validBrainrotIdAE(state.MountSpecificBrainrotId)
+					mountId, mountItem = validBrainrotIdAE(state.MountSpecificBrainrotId, state.MountSpecificBrainrotMutations, state.MountSpecificBrainrotTraits)
 					if not mountId then state.MountSpecificBrainrotId = nil end
 				elseif useBest then
 					mountId, mountItem = validBrainrotIdAE(bestRideableId)
@@ -16470,6 +17864,7 @@ if IS_MINIGAME_PLACE then
 					state.AutoshowBestBrainrots == true
 					or state.AutoshowAllTokens == true
 					or state.CustomOpeningOffer == true
+					or state.CustomOpeningTokens == true
 				)
 			then
 				break
@@ -16600,7 +17995,7 @@ if IS_MINIGAME_PLACE then
 			pcall(function() tradeable = TradeableAO2(item) == true end)
 			return tradeable
 		end
-		local function topBrainrotsAO2()
+		local function topBrainrotsAO2(mutations, traits)
 			local inventory = tryAO2(PlayerDataAO2, {"Inventory"})
 			if type(inventory) ~= "table" then return {} end
 			local ok, sorted = pcall(SortItemsAO2, inventory)
@@ -16614,7 +18009,9 @@ if IS_MINIGAME_PLACE then
 				local item = inventory[id] or inventory[tostring(id)]
 				if type(item) == "table" and not item.locked then
 					local okType, itemType = pcall(GetItemTypeAO2, item)
-					if okType and itemType == "Brainrot" and displayTradeableAO2(item) then
+					if okType and itemType == "Brainrot" and displayTradeableAO2(item)
+						and autoServerHopState.ItemMatchesSpecificFilters(item, mutations, traits)
+					then
 						result[#result + 1] = tostring(id)
 					end
 				end
@@ -16638,6 +18035,7 @@ if IS_MINIGAME_PLACE then
 					local okType, itemType = pcall(GetItemTypeAO2, item)
 					valid = okType and itemType == "Brainrot"
 						and displayTradeableAO2(item)
+						and autoServerHopState.ItemMatchesSpecificFilters(item, state.OpeningOfferSpecificMutations, state.OpeningOfferSpecificTraits)
 						and used[tostring(selectedId)] ~= true
 				end
 				if valid then
@@ -16651,7 +18049,7 @@ if IS_MINIGAME_PLACE then
 					end
 				end
 			end
-			local best = topBrainrotsAO2()
+			local best = topBrainrotsAO2(state.OpeningOfferSpecificMutations, state.OpeningOfferSpecificTraits)
 			local bestIndex = 1
 			for slotIndex = 1, 6 do
 				if desired[slotIndex] == nil then
@@ -16763,6 +18161,7 @@ if IS_MINIGAME_PLACE then
 		while screenGui.Parent do
 			task.wait(0.05)
 			local state = autoServerHopState.Utility
+			if rawget(_G, "__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID") ~= nil then task.wait(0.05) continue end
 			if state.PauseScript == true or state.PauseMinigameFeatures == true then
 				scheduledSignatureAO2 = nil
 				task.wait(0.05)
@@ -17325,7 +18724,7 @@ if IS_MINIGAME_PLACE then
 		end
 	end)
 end
-if IS_MINIGAME_PLACE then
+if MINIGAME_MODE then
 	task.spawn(function()
 		while screenGui.Parent
 			and not (autoServerHopState.Utility.AutoBooth == true)
@@ -17706,7 +19105,9 @@ if IS_MINIGAME_PLACE then
 			if specificOnly or hasAvoidNames then
 				name = brainrotNameAB(item)
 				if not name then return false end
-				if hasAvoidNames and avoidNames[name] == true then
+				if hasAvoidNames and avoidNames[name] == true
+					and autoServerHopState.ItemMatchesSpecificFilters(item, utility.AutoBoothAvoidSpecificMutations, utility.AutoBoothAvoidSpecificTraits)
+				then
 					return false
 				end
 				if specificOnly then
@@ -17736,7 +19137,19 @@ if IS_MINIGAME_PLACE then
 				return false
 			end
 			if spec.Mode == "Brainrot" then
-				return brainrotNameAB(item) == spec.Brainrot
+				if brainrotNameAB(item) ~= spec.Brainrot then return false end
+				local mutations = type(spec.Mutations) == "table" and spec.Mutations or {}
+				if next(mutations) ~= nil then
+					local mutation = brainrotMutationAB(item)
+					if not mutation or mutations[mutation] ~= true then return false end
+				end
+				local traits = type(spec.Traits) == "table" and spec.Traits or {}
+				if next(traits) ~= nil then
+					local matched = false
+					for _, trait in ipairs(brainrotTraitsAB(item)) do if traits[tostring(trait)] == true then matched = true break end end
+					if not matched then return false end
+				end
+				return true
 			end
 			return spec.Mode == "Rarity"
 				and rarityAB(item) == spec.Rarity
@@ -17767,6 +19180,22 @@ if IS_MINIGAME_PLACE then
 				addItem(id or offerId, item)
 			end
 			return nameCounts, rarityCounts
+		end
+		local function ownedSpecCountAB(state, spec)
+			local seen, count = {}, 0
+			local function addItem(id, item)
+				if type(item) ~= "table" then return end
+				local key = tostring(id)
+				if seen[key] then return end
+				seen[key] = true
+				if itemMatchesListingSpecAB(item, spec) then count += 1 end
+			end
+			for id, item in pairs(inventoryAB() or {}) do addItem(id, item) end
+			for offerId, item in pairs(state and state.items or {}) do
+				local id = type(item) == "table" and (item.guid or item.id) or offerId
+				addItem(id or offerId, item)
+			end
+			return count
 		end
 		local function desiredSpecsAB(state, inventoryCount)
 			local utility = autoServerHopState.Utility
@@ -17838,6 +19267,8 @@ if IS_MINIGAME_PLACE then
 						Index = index,
 						Mode = "Brainrot",
 						Brainrot = brainrot,
+						Mutations = type(utility[prefix .. "BrainrotMutations"]) == "table" and utility[prefix .. "BrainrotMutations"] or {},
+						Traits = type(utility[prefix .. "BrainrotTraits"]) == "table" and utility[prefix .. "BrainrotTraits"] or {},
 					}
 				elseif listByRarity and type(rarity) == "string" and rarity ~= "" then
 					spec = {
@@ -17849,7 +19280,7 @@ if IS_MINIGAME_PLACE then
 				local ownedCount = spec
 					and (
 						spec.Mode == "Brainrot"
-							and (nameCounts[spec.Brainrot] or 0)
+							and ownedSpecCountAB(state, spec)
 							or (rarityCounts[spec.Rarity] or 0)
 					)
 					or 0
@@ -18122,7 +19553,7 @@ if IS_MINIGAME_PLACE then
 		end
 	end)
 end
-if IS_MINIGAME_PLACE then
+if MINIGAME_MODE then
 task.spawn(function()
 while screenGui.Parent do
     local flags = rawget(_G, "__TUFFHUB_MINIGAME_AUTOPLAY")
@@ -28801,5 +30232,5 @@ function controller:Destroy()
     if rawget(_G, GLOBAL_KEY) == self then
         rawset(_G, GLOBAL_KEY, nil)
     end
-end 
+end
 end)
