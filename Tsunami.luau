@@ -5826,7 +5826,7 @@ local unsupportedPanelGroups = {
 }
 local allUnsupportedPanels = {
 }
-local CHEVRON_TWEEN=TI(0.12,Enum.EasingStyle.Quart,Enum.EasingDirection.Out)
+autoServerHopState.RuntimeChevronTweenInfo=TI(0.12,Enum.EasingStyle.Quart,Enum.EasingDirection.Out)
 local function tweenChevronColor(
 	chevron,
 	color
@@ -5834,7 +5834,7 @@ local function tweenChevronColor(
 	if chevron:IsA("ImageLabel") then
 		TweenService:Create(
 			chevron,
-			CHEVRON_TWEEN,
+			autoServerHopState.RuntimeChevronTweenInfo,
 			{
 				ImageColor3 = color
 			}
@@ -5842,14 +5842,14 @@ local function tweenChevronColor(
 	else
 		TweenService:Create(
 			chevron,
-			CHEVRON_TWEEN,
+			autoServerHopState.RuntimeChevronTweenInfo,
 			{
 				TextColor3 = color
 			}
 		):Play()
 	end
 end
-local panelChevronAsset=getEmbeddedIconAsset("Chevron")
+autoServerHopState.RuntimePanelChevronAsset=getEmbeddedIconAsset("Chevron")
 local activePanelDropdown
 local dropdownWindowBaseHeight
 local function restoreDropdownWindowHeight()
@@ -5885,7 +5885,7 @@ local function closeActivePanelDropdown()
 		if type(onClose) == "function" then task.defer(onClose) end
 	end
 end
-local function createEmptyCollapsiblePanel(
+autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 	tabItem,
 	panelIndex,
 	column,
@@ -5974,7 +5974,7 @@ local function createEmptyCollapsiblePanel(
 	-- down into the body as the panel grew, and could hide it during collapse.
 	headerTitle.Parent = header
 	local chevron
-	if panelChevronAsset then
+	if autoServerHopState.RuntimePanelChevronAsset then
 		chevron = New("ImageLabel")
 		chevron.Name = "Chevron"
 		chevron.AnchorPoint = V2(
@@ -5993,7 +5993,7 @@ local function createEmptyCollapsiblePanel(
 			)
 		chevron.BackgroundTransparency = 1
 		chevron.BorderSizePixel = 0
-		chevron.Image = panelChevronAsset
+		chevron.Image = autoServerHopState.RuntimePanelChevronAsset
 		chevron.ImageColor3 = PANEL_CHEVRON_COLOR
 		chevron.ImageTransparency = 0
 		chevron.ScaleType = Enum.ScaleType.Fit
@@ -10548,9 +10548,9 @@ end
 		title.Parent = header
 
 		local chevron
-		if panelChevronAsset then
+		if autoServerHopState.RuntimePanelChevronAsset then
 			chevron = New("ImageLabel")
-			chevron.Image = panelChevronAsset
+			chevron.Image = autoServerHopState.RuntimePanelChevronAsset
 			chevron.ImageColor3 = PANEL_CHEVRON_COLOR
 			chevron.ScaleType = Enum.ScaleType.Fit
 		else
@@ -11322,7 +11322,7 @@ end)()
 -- pressure from accumulating in the top-level chunk.
 ;(function()
 
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.Autofarm,
 		23,
 		1,
@@ -11334,7 +11334,7 @@ end)()
 			{Label = "Reset Autofarm Settings To Default", ActionButton = true, Action = "ResetSimpleAutofarm", VisibilityUtilityParentKey = "SimpleAutofarmEnabled"},
 		}
 	)
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.Games,
 		1,
 		1,
@@ -11367,8 +11367,8 @@ end)()
 				VisibilityUtilityParentKey = "AutoOfferMaster",
 			}
 		end
-		createEmptyCollapsiblePanel(tabs.Offers, 2, 1, 1, "BRAINROT/ITEM OFFERS", rarityOfferFeatures)
-		createEmptyCollapsiblePanel(tabs.Offers, 24, 2, 1, "Token Matching", {
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Offers, 2, 1, 1, "BRAINROT/ITEM OFFERS", rarityOfferFeatures)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Offers, 24, 2, 1, "Token Matching", {
 			{Label = "Token Matching", UtilityToggleKey = "AutoOfferTokensEnabled"},
 			{Label = "Match Tokens With Tokens", UtilityToggleKey = "AutoOfferMatchTokensWithTokens", UtilityParentKey = "AutoOfferTokensEnabled", SeparatorGroup = "AutoOfferMatchTokensWithTokensGroup"},
 			{Label = "Token Add Ratio", UtilitySliderKey = "AutoOfferTokenAddRatio", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithTokens"}, SeparatorGroup = "AutoOfferMatchTokensWithTokensGroup", MinValue = 1, MaxValue = 10, UnitLabel = "Multiplier"},
@@ -11377,7 +11377,7 @@ end)()
 			{Label = "Token Amount", UtilitySliderKey = "AutoOfferTokenAmount", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithBrainrots"}, SeparatorGroup = "AutoOfferMatchTokensWithBrainrotsGroup", MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"},
 			{Label = "Offer", UtilityDropdownKey = "AutoOfferTokenRarity", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithBrainrots"}, SeparatorGroup = "AutoOfferMatchTokensWithBrainrotsGroup", Placeholder = "Select", Options = OUTGOING_BRAINROT_RARITY_OPTIONS},
 		})
-		createEmptyCollapsiblePanel(tabs.Offers, 25, 1, 2, "Trade Chat Offers", {
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Offers, 25, 1, 2, "Trade Chat Offers", {
 			{Label = "Trade Chat Offers", UtilityToggleKey = "AutoOfferBasedOnTradeChat", TradeChatOfferManager = true},
 		})
 	end
@@ -11397,7 +11397,7 @@ end)()
 		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "AutoSitSpecificItems", VisibilitySitKey = "OneOfTwo", SeparatorGroup = "AutoSitOneOfTwoGroup"}
 		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Opponent Must Own All Selected Brainrots", UtilityToggleKey = "AutoSitMustOwnAllSelected", VisibilitySitKey = "OneOfTwo", SeparatorGroup = "AutoSitOneOfTwoGroup"}
 		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Opponent Must Own One Of Selected Brainrots", UtilityToggleKey = "AutoSitMustOwnOneSelected", VisibilitySitKey = "OneOfTwo", SeparatorGroup = "AutoSitOneOfTwoGroup"}
-		createEmptyCollapsiblePanel(tabs.Matchmaking, 3, 1, 1, "Auto Sit", autoSitFeatures)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Matchmaking, 3, 1, 1, "Auto Sit", autoSitFeatures)
 	end
 	local function appendAcceptCriteria(features, parentKey, acceptStateProvider, mutationPrefix, specificStateKey, allKey, oneKey)
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
@@ -11422,16 +11422,16 @@ end)()
 	do
 		local features = {{Label = "Accept Offers", UtilityToggleKey = "AutoAcceptMaster"}}
 		appendAcceptCriteria(features, "AutoAcceptMaster", sharedAcceptStateProvider, "AutoAccept", "AutoAcceptSpecificItems", "AutoAcceptMustHaveAll", "AutoAcceptMustHaveOne")
-		createEmptyCollapsiblePanel(tabs.Offers, 4, 2, 2, "Accept Criteria", features)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Offers, 4, 2, 2, "Accept Criteria", features)
 	end
 	do
 		local acceptOfferFeatures = {{Label = "Accept Offers", UtilityToggleKey = "AutoAcceptTradesAcceptOffers"}}
 		appendAcceptCriteria(acceptOfferFeatures, "AutoAcceptTradesAcceptOffers", sharedAcceptStateProvider, "AutoAccept", "AutoAcceptSpecificItems", "AutoAcceptMustHaveAll", "AutoAcceptMustHaveOne")
-		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 32, 1, 1, "Accept Criteria", acceptOfferFeatures)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 32, 1, 1, "Accept Criteria", acceptOfferFeatures)
 
 		local requestFeatures = {{Label = "Accept Trade Request", UtilityToggleKey = "AutoAcceptTradesAcceptRequests"}}
 		appendAcceptCriteria(requestFeatures, "AutoAcceptTradesAcceptRequests", tradeRequestStateProvider, "AutoAcceptTradesRequest", "AutoAcceptTradesRequestSpecificItems", "AutoAcceptTradesRequestMustHaveAll", "AutoAcceptTradesRequestMustHaveOne")
-		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 33, 2, 1, "Trade Request Criteria", requestFeatures)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 33, 2, 1, "Trade Request Criteria", requestFeatures)
 
 		-- Regular Trade Offer mirrors the reactive Minigame Offers tools, but uses
 		-- an independent offer namespace so configuring one trade type never changes the other.
@@ -11447,8 +11447,8 @@ end)()
 				VisibilityUtilityParentKey = "RegularAutoOfferMaster",
 			}
 		end
-		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 37, 1, 2, "BRAINROT/ITEM OFFERS", regularRarityOfferFeatures)
-		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 38, 2, 2, "Token Matching", {
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 37, 1, 2, "BRAINROT/ITEM OFFERS", regularRarityOfferFeatures)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 38, 2, 2, "Token Matching", {
 			{Label = "Token Matching", UtilityToggleKey = "RegularAutoOfferTokensEnabled"},
 			{Label = "Match Tokens With Tokens", UtilityToggleKey = "RegularAutoOfferMatchTokensWithTokens", UtilityParentKey = "RegularAutoOfferTokensEnabled", SeparatorGroup = "RegularAutoOfferMatchTokensWithTokensGroup"},
 			{Label = "Token Add Ratio", UtilitySliderKey = "RegularAutoOfferTokenAddRatio", UtilityParentKeys = {"RegularAutoOfferTokensEnabled", "RegularAutoOfferMatchTokensWithTokens"}, SeparatorGroup = "RegularAutoOfferMatchTokensWithTokensGroup", MinValue = 1, MaxValue = 10, UnitLabel = "Multiplier"},
@@ -11457,7 +11457,7 @@ end)()
 			{Label = "Token Amount", UtilitySliderKey = "RegularAutoOfferTokenAmount", UtilityParentKeys = {"RegularAutoOfferTokensEnabled", "RegularAutoOfferMatchTokensWithBrainrots"}, SeparatorGroup = "RegularAutoOfferMatchTokensWithBrainrotsGroup", MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"},
 			{Label = "Offer", UtilityDropdownKey = "RegularAutoOfferTokenRarity", UtilityParentKeys = {"RegularAutoOfferTokensEnabled", "RegularAutoOfferMatchTokensWithBrainrots"}, SeparatorGroup = "RegularAutoOfferMatchTokensWithBrainrotsGroup", Placeholder = "Select", Options = OUTGOING_BRAINROT_RARITY_OPTIONS},
 		})
-		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 39, 1, 3, "Trade Chat Offers", {
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 39, 1, 3, "Trade Chat Offers", {
 			{Label = "Trade Chat Offers", UtilityToggleKey = "RegularAutoOfferBasedOnTradeChat", TradeChatOfferManager = true, TradeChatOffersKey = "RegularAutoOfferTradeChatOffers"},
 		})
 
@@ -11480,8 +11480,8 @@ end)()
 		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Autoshow All Tokens", UtilityToggleKey = "RegularOpeningAutoshowAllTokens", UtilityExclusiveGroup = "RegularOpeningTokenMode"}
 		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Custom Opening Tokens", UtilityToggleKey = "RegularOpeningCustomTokens", UtilityExclusiveGroup = "RegularOpeningTokenMode", SeparatorGroup = "RegularOpeningTokensGroup"}
 		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Custom Token Amount", UtilitySliderKey = "RegularOpeningTokenAmount", UtilityParentKey = "RegularOpeningCustomTokens", SeparatorGroup = "RegularOpeningTokensGroup", MinValue = 0, MaxValue = 1000000, MaxValueProvider = function() return autoServerHopState.CurrentTradeTokenBalance() end, UnitLabel = "Tokens"}
-		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 34, 2, 3, "Opening Offer", regularOpeningFeatures)
-		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 35, 1, 4, "Trade Delays", {
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 34, 2, 3, "Opening Offer", regularOpeningFeatures)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 35, 1, 4, "Trade Delays", {
 			{Label="Custom Delays", UtilityToggleKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup"},
 			{Label="Accept Trade Request Delay", UtilitySliderKey="AutoAcceptTradesInitialDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
 			{Label="Delay After Trade Message", UtilitySliderKey="AutoAcceptTradesDelayAfterTradeMessage", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
@@ -11494,7 +11494,7 @@ end)()
 		})
 	end
 	do
-		createEmptyCollapsiblePanel(tabs.Cancel, 5, 1, 1, "Cancel After Time", {
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Cancel, 5, 1, 1, "Cancel After Time", {
 			{Label = "Cancel Trade After", UtilityToggleKey = "AutoCancelTradeTimeoutEnabled", SeparatorGroup = "AutoCancelTradeTimeoutGroup"},
 			{Label = "Trade Time Limit", UtilitySliderKey = "AutoCancelTradeTimeout", UtilityParentKey = "AutoCancelTradeTimeoutEnabled", SeparatorGroup = "AutoCancelTradeTimeoutGroup", MinValue = 1, MaxValue = 60, UnitLabel = "Seconds"},
 			{Label = "Cancel If No Value Is Offered After", UtilityToggleKey = "AutoCancelNoValueTimeoutEnabled", SeparatorGroup = "AutoCancelNoValueTimeoutGroup"},
@@ -11510,12 +11510,12 @@ end)()
 		inventory[#inventory + 1] = {Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "AutoCancelSpecificItems", UtilityParentKey = "AutoCancelBasedOnSpecificItems", SeparatorGroup = "AutoCancelSpecificItemsGroup"}
 		inventory[#inventory + 1] = {Label = "Cancel If Player Does Not Own All Selected", UtilityToggleKey = "AutoCancelPlayerMustOwnAllSelected", VisibilityAutoCancelInventoryCriteria = true, UtilityExclusiveGroup = "AutoCancelOwnershipMode", UtilityExclusiveRequired = true}
 		inventory[#inventory + 1] = {Label = "Cancel If Player Does Not Own At Least One Selected", UtilityToggleKey = "AutoCancelPlayerMustOwnAtLeastOneSelected", VisibilityAutoCancelInventoryCriteria = true, UtilityExclusiveGroup = "AutoCancelOwnershipMode", UtilityExclusiveRequired = true}
-		createEmptyCollapsiblePanel(tabs.Cancel, 28, 2, 1, "Cancel Based On Inventory", inventory)
-		createEmptyCollapsiblePanel(tabs.Cancel, 29, 1, 2, "Cancel Based On Tokens", {
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Cancel, 28, 2, 1, "Cancel Based On Inventory", inventory)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Cancel, 29, 1, 2, "Cancel Based On Tokens", {
 			{Label = "Player Must Own This Many Tokens", AutoCancelRarityKey = "Tokens"},
 		})
 	end
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.Matchmaking,
 		6,
 		2,
@@ -11541,7 +11541,7 @@ end)()
 			{Label = "Time Added After Booth Purchase", ServerHopSliderKey = "BoothPurchaseTimeAdded", MinValue = 1, MaxValue = 60, UnitLabel = "Minutes"},
 		}
 	)
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.Matchmaking,
 		22,
 		2,
@@ -11551,7 +11551,7 @@ end)()
 			{Label = "How Long To Blacklist Joined Servers", ServerHopSliderKey = "ServerBlacklistMinutes", ServerHopSliderAlwaysVisible = true, MinValue = 1, MaxValue = 60, UnitLabel = "Minutes"},
 		}
 	)
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.Matchmaking,
 		20,
 		1,
@@ -11573,7 +11573,7 @@ end)()
 			{Label = "Player Must Own At Least One Selected Criterion", UtilityToggleKey = "CheckServerMustOwnOne", UtilityExclusiveGroup = "CheckServerOwnershipMode", SeparatorGroup = "CheckServerCriteriaGroup"},
 		}
 	)
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.Messages,
 		7,
 		1,
@@ -11617,7 +11617,7 @@ end)()
 			},
 		}
 	)
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.Messages,
 		8,
 		2,
@@ -11694,7 +11694,7 @@ end)()
 			},
 		}
 	)
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.Inventory,
 		9,
 		1,
@@ -11756,7 +11756,7 @@ end)()
 			},
 		}
 	)
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.Inventory, 10, 2, 1, "Auto Equip",
 		{
 			{Label = "Auto Equip (Hold)", UtilityToggleKey = "AutoEquipModeHold", UtilityExclusiveGroup = "AutoEquipMode", SeparatorGroup = "AutoEquipHoldGroup"},
@@ -11774,7 +11774,7 @@ end)()
 			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipHoldMountGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedMountableBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
 		}
 	)
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.Offers,
 		11,
 		1,
@@ -11848,7 +11848,7 @@ end)()
 			{Label = "Custom Token Amount", UtilitySliderKey = "OpeningOfferTokenAmount", UtilityParentKey = "CustomOpeningTokens", SeparatorGroup = "OpeningOfferTokensGroup", MinValue = 0, MaxValue = 1000000, MaxValueProvider = function() return autoServerHopState.CurrentTradeTokenBalance() end, UnitLabel = "Tokens"},
 		}
 	)
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.Offers,
 		12,
 		2,
@@ -11866,7 +11866,7 @@ end)()
 			{Label = "Accept Delay", UtilitySliderKey = "AcceptOfferDelay", UtilityParentKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
 		}
 	)
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.Games,
 		13,
 		2,
@@ -11945,7 +11945,7 @@ end)()
 			},
 		}
 	)
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.Games,
 		14,
 		1,
@@ -11955,7 +11955,7 @@ end)()
 			{Label = "Leave When About To Lose", UtilityToggleKey = "LeaveWhenAboutToLose"},
 		}
 	)
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.System,
 		3,
 		1,
@@ -12019,9 +12019,9 @@ end)()
 			add({Label = "Message", UtilityTextKey = prefix .. "ListedMessage", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "MessageWhenListed"}, SeparatorGroup = prefix .. "MessageWhenListedGroup", Placeholder = "Message to send when listed"})
 			add({Label = "Delay Before Sending Message", UtilitySliderKey = prefix .. "MessageDelay", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "MessageWhenListed"}, SeparatorGroup = prefix .. "MessageWhenListedGroup", MinValue = 0, MaxValue = 30, Step = 0.25, Decimals = 2, UnitLabel = "Seconds"})
 		end
-		createEmptyCollapsiblePanel(tabs.Booth, 16, 1, 1, "Booth Settings", boothSettings)
-		createEmptyCollapsiblePanel(tabs.Booth, 30, 2, 1, "Booth Messages", boothMessages)
-		createEmptyCollapsiblePanel(tabs.Booth, 31, 1, 2, "Listings", listings)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Booth, 16, 1, 1, "Booth Settings", boothSettings)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Booth, 30, 2, 1, "Booth Messages", boothMessages)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Booth, 31, 1, 2, "Listings", listings)
 	end
 	do
 		-- All three fallback types stay visible and independent. Each enabled type
@@ -12052,7 +12052,7 @@ end)()
 			features[#features + 1] = {Label = rarity .. " Tokens", UtilitySliderKey = "FallbackTokens" .. rarity, UtilityParentKey = "FallbackToTokens", SeparatorGroup = "FallbackTokens" .. rarity .. "Group", MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"}
 			features[#features + 1] = {Label = rarity .. " Offer All Tokens", UtilityToggleKey = "Fallback" .. rarity .. "OfferAllTokens", UtilityParentKey = "FallbackToTokens", SeparatorGroup = "FallbackTokens" .. rarity .. "Group"}
 		end
-		createEmptyCollapsiblePanel(tabs.Fallbacks, 17, 1, 1, "Minigame Trade Fallbacks", features)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Fallbacks, 17, 1, 1, "Minigame Trade Fallbacks", features)
 
 		local regularFeatures = {
 			{Label = "Next Lower Rarity Fallback Offers", UtilityToggleKey = "RegularFallbackOffers", SeparatorGroup = "RegularFallbackLowerGroup"},
@@ -12080,9 +12080,9 @@ end)()
 			regularFeatures[#regularFeatures + 1] = {Label = rarity .. " Tokens", UtilitySliderKey = "RegularFallbackTokens" .. rarity, UtilityParentKey = "RegularFallbackToTokens", SeparatorGroup = "RegularFallbackTokens" .. rarity .. "Group", MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"}
 			regularFeatures[#regularFeatures + 1] = {Label = rarity .. " Offer All Tokens", UtilityToggleKey = "RegularFallback" .. rarity .. "OfferAllTokens", UtilityParentKey = "RegularFallbackToTokens", SeparatorGroup = "RegularFallbackTokens" .. rarity .. "Group"}
 		end
-		createEmptyCollapsiblePanel(tabs.Fallbacks, 36, 2, 1, "Regular Trade Fallbacks", regularFeatures)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Fallbacks, 36, 2, 1, "Regular Trade Fallbacks", regularFeatures)
 	end
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.Matchmaking,
 		19,
 		1,
@@ -12095,7 +12095,7 @@ end)()
 			{Label = "After This Many Canceled Trades In A Row", UtilitySliderKey = "PermanentBlacklistAfterCanceledTrades", UtilityParentKey = "PermanentBlacklistPlayersAfterCanceledTrade", MinValue = 1, MaxValue = 10, UnitLabel = "Trades"},
 		}
 	)
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.System,
 		4,
 		2,
@@ -12106,7 +12106,7 @@ end)()
 			{Label = "Manual Kick During Minigame", ActionButton = true, Action = "ManualKickMinigame"},
 		}
 	)
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.System,
 		1,
 		1,
@@ -12116,7 +12116,7 @@ end)()
 			{Label = "Pause Script", UtilityToggleKey = "PauseScript"},
 		}
 	)
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.System,
 		2,
 		2,
@@ -12126,7 +12126,7 @@ end)()
 			{Label = "Undo All Settings", ActionButton = true, Action = "UndoAllSettings"},
 		}
 	)
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.System,
 		7,
 		1,
@@ -12137,7 +12137,7 @@ end)()
 			{Label = "Join Player", ActionButton = true, Action = "JoinPlayer", SeparatorGroup = "JoinPlayerGroup"},
 		}
 	)
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.System,
 		6,
 		1,
@@ -12147,7 +12147,7 @@ end)()
 			{Label = "Auto Reconnect", UtilityToggleKey = "AutoReconnect"},
 		}
 	)
-	createEmptyCollapsiblePanel(
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.System,
 		5,
 		2,
