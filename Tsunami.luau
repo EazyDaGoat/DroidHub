@@ -78,7 +78,7 @@ end
 if viewportSize.X < 320 or viewportSize.Y < 240 then
 	viewportSize = V2(1920, 1080)
 end
-local DEFAULT_WIDTH_SCALE = 0.60
+local DEFAULT_WIDTH_SCALE = 0.50
 local DEFAULT_HEIGHT_SCALE = 0.60
 local FONT_SIZE_SCALE = 1.17188
 local function isPhonePanelLayout()
@@ -7294,7 +7294,7 @@ local function createEmptyCollapsiblePanel(
 							local signatureButton = makeButton("Signature: " .. tostring(entry.Signature or "Any"), y)
 							signatureButton.MouseButton1Click:Connect(function()
 								openCriteriaDropdown(signatureButton, {"Any", "Signed", "Unsigned"}, nil, function(option)
-									entry.Signature = option == "Any" and nil or option
+									entry.Signature = if option == "Any" then nil else option
 								end)
 							end)
 							y += px(31)
@@ -10579,7 +10579,7 @@ if MINIGAME_MODE then
 					end
 				end
 			end
-			task.wait(0.75)
+			task.wait(1.50)
 		end
 	end)
 end
@@ -10606,7 +10606,7 @@ if MINIGAME_MODE then
 				local refresh = rawget(_G, "__TUFFHUB_REFRESH_ALL_SETTINGS_UI")
 				if type(refresh) == "function" then pcall(refresh) end
 			end
-			task.wait(5)
+			task.wait(15)
 		end
 	end)
 end
@@ -12803,7 +12803,7 @@ if MINIGAME_MODE then
 				and utility.PauseMinigameFeatures ~= true
 				and autoServerHopState.RuntimeServerHopPending ~= true
 				and (emptyEnabled or partnerEnabled)
-			task.wait(active and 0.05 or 0.25)
+			task.wait(active and 0.20 or 0.90)
 			if not active then continue end
 			local okStep = pcall(schedulerStepAS)
 			if not okStep then task.wait(0.05) end
@@ -13141,7 +13141,7 @@ if MINIGAME_MODE then
 				or utilityAC.AutoCancelCheckOpponentsBrainrots == true
 				or utilityAC.AutoCancelBasedOnSpecificItems == true
 			local cancelAwakeAC = cancelConfiguredAC and utilityAC.PauseScript ~= true
-			task.wait(cancelAwakeAC and 0.05 or 0.30)
+			task.wait(cancelAwakeAC and 0.10 or 0.75)
 			if not cancelConfiguredAC then
 				if autoCancelWasActiveAC then
 					trackedGuidAC = nil
@@ -13158,6 +13158,18 @@ if MINIGAME_MODE then
 			local minigameLifecycleAC = queuedAC()
 				or tryAC(ActiveMinigameAC, {"session", "gameId"}) ~= nil
 				or type(tryAC(ActiveMinigameAC, {"voting"})) == "table"
+			if not hasNegotiationAC and not minigameLifecycleAC then
+				if autoCancelWasActiveAC then
+					trackedGuidAC = nil
+					tradeStartedAtAC = 0
+					noValueSinceAC = nil
+					brainrotMismatchSinceAC = nil
+					lastDeclineGuidAC = nil
+					autoCancelWasActiveAC = false
+				end
+				task.wait(0.40)
+				continue
+			end
 			local regularTradeAC = hasNegotiationAC and not minigameLifecycleAC
 			local autoCancelActive =
 				utilityAC.PauseScript ~= true
@@ -13323,7 +13335,7 @@ if MINIGAME_MODE then
 				and utilityBL.PauseMinigameFeatures ~= true
 				and (utilityBL.TempBlacklistPlayersAfterCanceledTrade == true
 					or utilityBL.PermanentBlacklistPlayersAfterCanceledTrade == true)
-			task.wait(trackingEnabledBL and 0.05 or 0.30)
+			task.wait(trackingEnabledBL and 0.15 or 0.75)
 			if not trackingEnabledBL then
 				if blacklistTrackingActiveBL then
 					trackedGuidBL = nil
@@ -13986,7 +13998,7 @@ if MINIGAME_MODE then
 				end
 			end
 			wasEnabledSP = enabled
-			task.wait(0.12)
+			task.wait(0.75)
 		end
 		disconnectSignalSP(playerAddedConnectionSP)
 		disconnectSignalSP(playerRemovingConnectionSP)
@@ -14262,7 +14274,7 @@ if MINIGAME_MODE then
 			return true
 		end
 		while screenGui.Parent do
-			task.wait(0.35)
+			task.wait(1.00)
 			local utility = autoServerHopState.Utility
 			if utility.PauseScript == true
 				or utility.PauseMinigameFeatures == true
@@ -14869,7 +14881,7 @@ if MINIGAME_MODE then
 		end
 		autoServerHopState.RuntimePresenceHopWake = wakePresenceHopHP
 		while screenGui.Parent do
-			task.wait(0.10)
+			task.wait(0.35)
 			if autoServerHopState.Utility.PauseScript == true then
 				autoServerHopState.RuntimeServerHopPending = false
 				autoServerHopState.RuntimeScriptUserHopRequested = false
@@ -14890,7 +14902,7 @@ if MINIGAME_MODE then
 				and autoServerHopState.Enabled == true
 				and nowHP >= nextBoothScanAtHP
 			then
-				nextBoothScanAtHP = nowHP + 0.50
+				nextBoothScanAtHP = nowHP + 1.00
 				scanBoothPurchasesHP()
 			end
 			local resetEpochHP = tonumber(autoServerHopState.RuntimeSettingsResetEpoch) or 0
@@ -14948,17 +14960,15 @@ if MINIGAME_MODE then
 				or hoppingHP
 			if not cacheRefreshingHP then
 				local shouldRefreshHP = false
-				local maxCacheAgeHP = 10
-				if autoServerHopState.Utility.PauseScript ~= true then
-					shouldRefreshHP = serverCacheAtHP == 0
-						or nowHP - serverCacheAtHP >= 1.25
-					maxCacheAgeHP = 1.25
-				elseif autoServerHopState.RuntimeCheckServerHopRequested == true
+				local requestedNowHP = presenceNowHP
+					or autoServerHopState.RuntimeCheckServerHopRequested == true
 					or autoServerHopState.RuntimeManualServerHopRequested == true
-				then
+				if requestedNowHP then
+					-- Only keep a hot server cache when an actual hop request is pending.
+					-- The previous code refreshed up to five HTTP pages every 1.25s any
+					-- time the script was unpaused, which was a major mobile CPU/network cost.
 					shouldRefreshHP = serverCacheAtHP == 0
-						or nowHP - serverCacheAtHP >= 1.25
-					maxCacheAgeHP = 1.25
+						or nowHP - serverCacheAtHP >= 2.0
 				elseif masterEnabledHP then
 					local nearestRemainingHP = math.huge
 					if serverTimerEnabledHP then
@@ -14968,14 +14978,11 @@ if MINIGAME_MODE then
 						nearestRemainingHP = math.min(nearestRemainingHP, noGameDurationHP() - noGameElapsedHP)
 					end
 					if nearestRemainingHP <= 5 then
-						maxCacheAgeHP = 1
-						shouldRefreshHP = serverCacheAtHP == 0 or nowHP - serverCacheAtHP >= maxCacheAgeHP
+						shouldRefreshHP = serverCacheAtHP == 0 or nowHP - serverCacheAtHP >= 2.0
 					elseif nearestRemainingHP <= 15 then
-						maxCacheAgeHP = 2.5
-						shouldRefreshHP = serverCacheAtHP == 0 or nowHP - serverCacheAtHP >= maxCacheAgeHP
+						shouldRefreshHP = serverCacheAtHP == 0 or nowHP - serverCacheAtHP >= 5.0
 					elseif nearestRemainingHP <= 30 then
-						maxCacheAgeHP = 10
-						shouldRefreshHP = serverCacheAtHP == 0 or nowHP - serverCacheAtHP >= maxCacheAgeHP
+						shouldRefreshHP = serverCacheAtHP == 0 or nowHP - serverCacheAtHP >= 12.0
 					end
 				end
 				if shouldRefreshHP then
@@ -15156,7 +15163,7 @@ if MINIGAME_MODE then
 			return ok and guid ~= nil
 		end
 		while screenGui.Parent do
-			task.wait(0.10)
+			task.wait(0.50)
 			local state = autoServerHopState and autoServerHopState.Utility
 			local enabled = state
 				and state.PauseScript ~= true
@@ -15445,7 +15452,7 @@ if MINIGAME_MODE then
 				and state.PauseScript ~= true
 				and state.PauseMinigameFeatures ~= true
 				and state.AutoTradeChat == true
-			task.wait(enabled and 0.08 or 0.30)
+			task.wait(enabled and 0.15 or 0.75)
 			if not enabled then
 				wasTradeChatEnabledATM = false
 				continue
@@ -16188,7 +16195,7 @@ if MINIGAME_MODE then
 			return false
 		end
 		while screenGui.Parent do
-			task.wait(0.25)
+			task.wait(1.00)
 			local state = autoServerHopState and autoServerHopState.Utility
 			if state and state.PauseScript == true then
 				task.wait(0.50)
@@ -16706,7 +16713,7 @@ if MINIGAME_MODE then
 				releaseAutomatedReady()
 				rawset(_G,"__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID",nil)
 				lastGuid=nil; openingAppliedGuid=nil; table.clear(opponentItemCache)
-				task.wait(0.15); continue
+				task.wait(0.30); continue
 			end
 			local regularAutomationActive = u.AutoAcceptTradesAcceptRequests==true
 				or u.AutoAcceptTradesAcceptOffers==true
@@ -16716,7 +16723,7 @@ if MINIGAME_MODE then
 				rawset(_G,"__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID",nil)
 				lastGuid=nil; openingAppliedGuid=nil; autoReadyGuid=nil
 				table.clear(opponentItemCache)
-				task.wait(0.35)
+				task.wait(0.75)
 				continue
 			end
 
@@ -16754,7 +16761,7 @@ if MINIGAME_MODE then
 			if not guid then
 				rawset(_G,"__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID",nil)
 				lastGuid=nil; openingAppliedGuid=nil; autoReadyGuid=nil; table.clear(opponentItemCache)
-				task.wait(0.10); continue
+				task.wait(0.30); continue
 			end
 			rawset(_G,"__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID",guid)
 			if tostring(guid)~=tostring(lastGuid) then
@@ -16806,7 +16813,7 @@ if MINIGAME_MODE then
 				end
 				autoReadyGuid=nil
 			end
-			task.wait(0.10)
+			task.wait(0.15)
 		end
 	end)
 end
@@ -17356,7 +17363,7 @@ if MINIGAME_MODE then
         end
         while screenGui.Parent do
             local utilityAO = autoServerHopState.Utility
-            if rawget(_G, "__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID") ~= nil then task.wait(0.08) continue end
+            if rawget(_G, "__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID") ~= nil then task.wait(0.15) continue end
             if utilityAO.PauseScript == true
                 or utilityAO.PauseMinigameFeatures == true
                 or (
@@ -17369,7 +17376,7 @@ if MINIGAME_MODE then
                 pendingSignature = nil
                 pendingContext = nil
                 reactionDueAt = 0
-                task.wait(0.30)
+                task.wait(0.75)
                 continue
             end
             refreshAO()
@@ -17383,7 +17390,7 @@ if MINIGAME_MODE then
                 if autoServerHopState and autoServerHopState.Utility then
                     autoServerHopState.Utility._AutoOfferReactiveGuid = nil
                 end
-                task.wait(0.10)
+                task.wait(0.30)
                 continue
             end
             local autoOfferAlreadyOwnsAO =
@@ -17990,7 +17997,7 @@ if MINIGAME_MODE then
             else
                 reactionDueAt = os.clock() + 0.10
             end
-            task.wait(0.05)
+            task.wait(0.10)
         end
     end)
 end
@@ -18280,7 +18287,7 @@ if MINIGAME_MODE then
 		end
 		while screenGui.Parent do
 			local utilityAAC = autoServerHopState.Utility
-			if rawget(_G, "__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID") ~= nil then task.wait(0.08) continue end
+			if rawget(_G, "__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID") ~= nil then task.wait(0.15) continue end
 			if utilityAAC.PauseScript == true
 			or utilityAAC.PauseMinigameFeatures == true
 				or utilityAAC.AutoAcceptMaster ~= true
@@ -18297,7 +18304,7 @@ if MINIGAME_MODE then
 				pendingReadySignatureAAC = nil
 				readyDueAtAAC = 0
 				table.clear(opponentItemCacheAAC)
-				task.wait(0.25)
+				task.wait(0.60)
 				continue
 			end
 			refreshAAC()
@@ -18307,7 +18314,7 @@ if MINIGAME_MODE then
 				pendingReadySignatureAAC = nil
 				readyDueAtAAC = 0
 				table.clear(opponentItemCacheAAC)
-				task.wait(0.10)
+				task.wait(0.30)
 				continue
 			end
 			local counts, tokens, offerSignature, offeredItems = opponentOfferAAC()
@@ -18393,7 +18400,7 @@ if MINIGAME_MODE then
 				pendingReadySignatureAAC = nil
 				readyDueAtAAC = 0
 			end
-			task.wait(0.08)
+			task.wait(0.12)
 		end
 	end)
 end
@@ -18525,7 +18532,7 @@ if MINIGAME_MODE then
 			return ok and result ~= false
 		end
 		while screenGui.Parent do
-			task.wait(0.35)
+			task.wait(1.50)
 			local state = autoServerHopState.Utility
 			if state.PauseScript == true
 			or state.PauseMinigameFeatures == true
@@ -18988,7 +18995,7 @@ if MINIGAME_MODE then
 			local openingEnabled = state.PauseScript ~= true
 				and state.PauseMinigameFeatures ~= true
 				and (showItems or showTokens)
-			task.wait(openingEnabled and 0.05 or 0.30)
+			task.wait(openingEnabled and 0.10 or 0.75)
 			if rawget(_G, "__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID") ~= nil then continue end
 			if not openingEnabled then
 				appliedSignatureAO2 = nil
@@ -18999,6 +19006,7 @@ if MINIGAME_MODE then
 			if not guid then
 				appliedSignatureAO2 = nil
 				scheduledSignatureAO2 = nil
+				task.wait(0.30)
 				continue
 			end
 			if autoOfferOwnsWagerAO2(guid) then
@@ -19314,7 +19322,7 @@ if MINIGAME_MODE then
 			local votingEnabled = state.PauseScript ~= true
 				and state.PauseMinigameFeatures ~= true
 				and (state.AutoChooseGame == true or state.AutoChooseRounds == true)
-			task.wait(votingEnabled and 0.05 or 0.25)
+			task.wait(votingEnabled and 0.18 or 0.75)
 			if not votingEnabled then
 				if not voteSuspendedVC then
 					votePhaseSeenVC = nil
@@ -19519,9 +19527,9 @@ if MINIGAME_MODE then
 			if ok then observedActiveLG = object end
 		end
 		while screenGui.Parent do
-			task.wait(0.10)
+			task.wait(0.25)
 			if autoServerHopState.Utility.PauseScript == true then
-				task.wait(0.40)
+				task.wait(0.75)
 				continue
 			end
 			refreshLG()
@@ -20383,7 +20391,7 @@ if MINIGAME_MODE then
 				configuredCompleteMessagedAB = false
 				possibleCompleteMessagedAB = false
 			end
-			task.wait(0.25)
+			task.wait(1.00)
 		end
 	end)
 end
@@ -21613,25 +21621,26 @@ end))
 addDisconnector(ActiveMinigame:Listen({ "session", "public", "phase" }, function()
     update()
 end))
-controller.connections[#controller.connections + 1] =
-    RunService.RenderStepped:Connect(function()
+-- Replicator listeners above are the primary trigger. A small adaptive fallback
+-- loop replaces permanent RenderStepped/Heartbeat work so mobile clients do not
+-- pay a per-frame cost while Popcorn is inactive.
+task.spawn(function()
+    local nextPingAt = 0
+    while not controller.destroyed do
         if popcornActive() then
             update()
+            local now = os.clock()
+            if now >= nextPingAt then
+                nextPingAt = now + 0.10
+                updatePingSamples()
+            end
+            task.wait(0.05)
+        else
+            nextPingAt = 0
+            task.wait(0.75)
         end
-    end)
-local pingAccumulator = 0
-controller.connections[#controller.connections + 1] =
-    RunService.Heartbeat:Connect(function(dt)
-        if not popcornActive() then
-            pingAccumulator = 0
-            return
-        end
-        pingAccumulator += dt
-        if pingAccumulator >= 0.05 then
-            pingAccumulator = 0
-            updatePingSamples()
-        end
-    end)
+    end
+end)
 function controller:Destroy()
     if self.destroyed then
         return
@@ -22524,7 +22533,7 @@ local function confirmedDrop(expectedSignature, expectedSeat, move)
     return false
 end
 while not controller.destroyed do
-    task.wait(gameId() == "ConnectFour" and 0.05 or 0.15)
+    task.wait(gameId() == "ConnectFour" and minigameAutoplayEnabled("ConnectFour") and 0.05 or 0.75)
     if gameId() ~= "ConnectFour" then
         if chooseCFMove ~= nil then releaseCFSolver() end
         lastCFGame = nil
@@ -22684,7 +22693,7 @@ task.spawn(function()
     local function saveCandyLearning(force)
         if not candyDirty then return end
         local now = os.clock()
-        if not force and now - lastCandySave < 2.00 then return end
+        if not force and now - lastCandySave < 10.00 then return end
         local writefileFn = envFunction("writefile")
         if not writefileFn then return end
         local okEncode, body = pcall(HttpService.JSONEncode, HttpService, model)
@@ -23178,7 +23187,7 @@ task.spawn(function()
         end
     end)
     while not controller.destroyed do
-        task.wait(gameId() == "CandyBomb" and 0.032 or 0.15)
+        task.wait(gameId() == "CandyBomb" and minigameAutoplayEnabled("CandyBomb") and 0.06 or 0.75)
         if gameId() ~= "CandyBomb" then
             saveCandyLearning(true)
             roundKey = nil
@@ -23384,7 +23393,7 @@ task.spawn(function()
     local function saveNumberLearning(force)
         if not numberDirty then return end
         local now = os.clock()
-        if not force and now - lastNumberSave < 2.00 then return end
+        if not force and now - lastNumberSave < 10.00 then return end
         local writefileFn = envFunction("writefile")
         if not writefileFn then return end
         pruneNumberProfiles()
@@ -23908,7 +23917,7 @@ task.spawn(function()
         lastMyBoundsHigh = 100
     end
     while not controller.destroyed do
-        task.wait(gameId() == "NumberGuess" and 0.025 or 0.15)
+        task.wait(gameId() == "NumberGuess" and minigameAutoplayEnabled("NumberGuess") and 0.05 or 0.75)
         saveNumberLearning(false)
         if gameId() ~= "NumberGuess" then
             saveNumberLearning(true)
@@ -24439,7 +24448,7 @@ task.spawn(function()
         end
     end)
     while not controller.destroyed do
-        task.wait(0.07)
+        task.wait(gameId() == "FootballDraft" and minigameAutoplayEnabled("FootballDraft") and 0.08 or 0.75)
         if gameId() ~= "FootballDraft" or publicPhase() ~= "Drafting" then
             seenCandidates = nil
             candidatesSeenAt = 0
@@ -24587,7 +24596,7 @@ task.spawn(function()
     local function saveKnockoutLearning(force)
         if not knockoutDirty then return end
         local now = os.clock()
-        if not force and now - lastKnockoutSave < 2.00 then return end
+        if not force and now - lastKnockoutSave < 10.00 then return end
         local writefileFn = envFunction("writefile")
         if not writefileFn then return end
         local okEncode, body = pcall(HttpService.JSONEncode, HttpService, opponentModel)
@@ -25452,7 +25461,7 @@ task.spawn(function()
         if clearSnapshot ~= false then launchSnapshot = nil end
     end
     while not controller.destroyed do
-        task.wait(gameId() == "Knockout" and 0.028 or 0.15)
+        task.wait(gameId() == "Knockout" and minigameAutoplayEnabled("Knockout") and 0.05 or 0.75)
         if gameId() ~= "Knockout" then
             saveKnockoutLearning(true)
             previousPhase = nil
@@ -25844,7 +25853,7 @@ task.spawn(function()
     local function saveBattleLearning(force)
         if not battleDirty then return end
         local now = os.clock()
-        if not force and now - lastBattleSave < 2.00 then return end
+        if not force and now - lastBattleSave < 10.00 then return end
         local writefileFn = envFunction("writefile")
         if not writefileFn then return end
         pruneBattleProfiles()
@@ -27385,7 +27394,7 @@ task.spawn(function()
             end)
     end)
     while not controller.destroyed do
-        task.wait(gameId() == "Battleship" and 0.012 or 0.15)
+        task.wait(gameId() == "Battleship" and minigameAutoplayEnabled("Battleship") and 0.05 or 0.75)
         saveBattleLearning(false)
         if gameId() ~= "Battleship" then
             saveBattleLearning(true)
@@ -27818,7 +27827,7 @@ local controller = {
 rawset(_G, GLOBAL_KEY, controller)
 local SERVER_PAGE_LIMIT = 100
 local SERVER_MAX_PAGES = 5
-local DESTINATION_REFRESH_INTERVAL = 2
+local DESTINATION_REFRESH_INTERVAL = 15
 local Randomizer = Random.new()
 local NORMALIZED_SCORE_GAMES = {
     CandyBomb = true,
@@ -28836,18 +28845,29 @@ local function parsePointNumber(text)
     end
     return best
 end
+controller.popcornGuiTextCache = setmetatable({}, {__mode = "k"})
 local function readPointsFromGuiObject(root)
     if not root then
         return nil
     end
+    local now = os.clock()
+    local cached = controller.popcornGuiTextCache[root]
+    if not cached or now >= (cached.expiresAt or 0) then
+        local objects = {}
+        for _, descendant in ipairs(root:GetDescendants()) do
+            if descendant:IsA("TextLabel") or descendant:IsA("TextButton") then
+                objects[#objects + 1] = descendant
+            end
+        end
+        cached = {objects = objects, expiresAt = now + 2.0}
+        controller.popcornGuiTextCache[root] = cached
+    end
     local best = nil
-    for _, descendant in ipairs(root:GetDescendants()) do
-        if descendant:IsA("TextLabel") or descendant:IsA("TextButton") then
+    for _, descendant in ipairs(cached.objects) do
+        if descendant.Parent then
             local value = parsePointNumber(descendant.Text)
-            if value ~= nil then
-                if best == nil or value > best then
-                    best = value
-                end
+            if value ~= nil and (best == nil or value > best) then
+                best = value
             end
         end
     end
@@ -30997,45 +31017,41 @@ addConnection(TeleportService.TeleportInitFailed:Connect(function(player)
         controller.lastDepartureAttemptAt = 0
     end
 end))
-local function urgentDeparturePump()
-    if controller.pendingLossReason ~= nil then
-        executePendingLossIfReady()
-    end
-end
-pcall(function()
-    addConnection(RunService.PreSimulation:Connect(urgentDeparturePump))
-end)
-addConnection(RunService.Stepped:Connect(urgentDeparturePump))
-pcall(function()
-    addConnection(RunService.RenderStepped:Connect(urgentDeparturePump))
-end)
+-- One gated Heartbeat is enough for urgent departure and fallback evaluation.
+-- Direct replicator listeners still latch terminal states immediately; this
+-- avoids four separate per-frame callbacks and full-state reevaluation every frame.
 do
     local nextFallbackEvaluationAt = 0
     addConnection(RunService.Heartbeat:Connect(function()
-        consumeQueuedReplicatorSignals()
+        if controller.destroyed then return end
+        local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+        local enabled = type(utility) == "table"
+            and utility.LeaveWhenAboutToLose == true
+            and utility.PauseScript ~= true
+            and utility.PauseMinigameFeatures ~= true
+        if not enabled then
+            controller.evaluationRequested = false
+            nextFallbackEvaluationAt = 0
+            return
+        end
+        if controller.pendingLossReason ~= nil then
+            executePendingLossIfReady()
+        end
         local now = os.clock()
+        local shouldEvaluate = controller.evaluationRequested == true
+            or now >= nextFallbackEvaluationAt
+        if not shouldEvaluate then return end
+        controller.evaluationRequested = false
+        consumeQueuedReplicatorSignals()
         local gameId = currentGameId()
         local activeSupportedGame = gameId and SUPPORTED_GAMES[gameId] == true
-        local shouldEvaluate = controller.evaluationRequested == true
-        if activeSupportedGame then
-            -- A single 50ms polling gap is enough to miss the small window
-            -- between a deterministic terminal state and the server's final
-            -- match resolution. Evaluate every heartbeat while a supported
-            -- minigame is live; event listeners still provide the fastest
-            -- direct path for known terminal signals.
-            shouldEvaluate = true
-        elseif not shouldEvaluate and now >= nextFallbackEvaluationAt then
-            shouldEvaluate = true
-            nextFallbackEvaluationAt = now + 0.25
+        -- Event listeners request an immediate evaluation. The fallback poll is
+        -- 30 Hz during an active supported game and 4 Hz otherwise.
+        nextFallbackEvaluationAt = now + (activeSupportedGame and 0.05 or 0.25)
+        evaluateState()
+        if controller.pendingLossReason ~= nil then
+            executePendingLossIfReady()
         end
-        if shouldEvaluate then
-            controller.evaluationRequested = false
-            evaluateState()
-            if not activeSupportedGame then
-                nextFallbackEvaluationAt = math.max(nextFallbackEvaluationAt, now + 0.25)
-            end
-        end
-        executePendingLossIfReady()
     end))
 end
 task.spawn(function()
