@@ -4824,20 +4824,32 @@ local TRACKED_TAB_NAME={
 	Settings="SETTINGS",
 }
 local TRACKED_FEATURE="FEATURE"
--- Keep navigation and panel headings readable and consistent. Use normal
--- title casing rather than artificial letter spacing or all-caps tracking.
+-- Sidebar labels stay compact and fully uppercase. Panel headings and the
+-- selected-tab heading use tracked uppercase lettering with two full spaces
+-- between words, matching the original TuffHub visual language without
+-- introducing break points inside a word.
 local function formatPanelTitle(title, mode)
 	title = tostring(title or "")
 	if title == "" then title = TRACKED_FEATURE end
-	title = string.gsub(title, "_", " ")
-	local lower = string.lower(title)
-	return (string.gsub(lower, "%a+", function(word)
-		local upper = string.upper(word)
-		if upper == "ESP" or upper == "UI" or upper == "ID" or upper == "URL" or upper == "AFK" then
-			return upper
+	title = string.upper(string.gsub(title, "_", " "))
+	title = string.gsub(title, "%s+", " ")
+	if mode == "sidebar" then
+		return title
+	end
+	local letterGap = utf8.char(0x00A0)
+	local wordGap = utf8.char(0x00A0) .. " "
+	local words = {}
+	for word in string.gmatch(title, "%S+") do
+		local letters = table.create(#word)
+		for index = 1, #word do
+			if index > 1 then
+				letters[#letters + 1] = letterGap
+			end
+			letters[#letters + 1] = string.sub(word, index, index)
 		end
-		return string.upper(string.sub(word, 1, 1)) .. string.sub(word, 2)
-	end))
+		words[#words + 1] = table.concat(letters)
+	end
+	return table.concat(words, wordGap)
 end
 local selectedTabTitle = New("TextLabel")
 selectedTabTitle.Name = "SelectedTabTitle"
@@ -4983,7 +4995,8 @@ local function syncPixelSnappedGeometry()
 		syncSearchPlaceholder()
 	end
 	-- Keep the main tab scroller between the header divider and the fixed
-	-- utility area. Home scrolls with the normal tabs; Settings stays fixed.
+	-- profile/settings footer. The footer uses the local Roblox headshot and
+	-- username so the sidebar reads like a finished account-aware application.
 	local quick = autoServerHopState.RuntimeSidebarQuickButtons
 	if not quick then
 		quick = {}
@@ -5072,26 +5085,135 @@ local function syncPixelSnappedGeometry()
 			end)
 		end
 		makeQuickButton("Settings", "Settings", "⚙", MENU_ICON_SIZE)
+
+		local profile = New("Frame")
+		profile.Name = "SidebarProfile"
+		profile.AnchorPoint = V2(0.5, 0.5)
+		profile.BackgroundTransparency = 1
+		profile.BorderSizePixel = 0
+		profile.ZIndex = 45003
+		profile.Parent = window
+		quick.Profile = profile
+
+		local avatar = New("ImageLabel")
+		avatar.Name = "RobloxHeadshot"
+		avatar.AnchorPoint = V2(0, 0.5)
+		avatar.BackgroundColor3 = SEARCH_BACKGROUND
+		avatar.BackgroundTransparency = 0
+		avatar.BorderSizePixel = 0
+		avatar.Image = ""
+		avatar.ScaleType = Enum.ScaleType.Crop
+		avatar.ZIndex = 45004
+		avatar.Parent = profile
+		ensureCorner(avatar, px(999))
+		local avatarStroke = New("UIStroke")
+		avatarStroke.Color = LINE_COLOR
+		avatarStroke.Thickness = math.max(LINE_THICKNESS, logicalPixelsForRenderedMinimum(1))
+		avatarStroke.Transparency = 0.12
+		avatarStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		avatarStroke.Parent = avatar
+		quick.Avatar = avatar
+
+		local welcome = New("TextLabel")
+		welcome.Name = "WelcomeLabel"
+		welcome.BackgroundTransparency = 1
+		welcome.BorderSizePixel = 0
+		welcome.Text = "WELCOME,"
+		welcome.TextColor3 = MUTED_TEXT_COLOR
+		welcome.FontFace = MENU_FONT_REGULAR_FACE
+		setResponsiveTextSize(welcome, 9)
+		welcome.TextScaled = false
+		welcome.TextWrapped = false
+		welcome.TextTruncate = Enum.TextTruncate.None
+		welcome.TextXAlignment = Enum.TextXAlignment.Left
+		welcome.TextYAlignment = Enum.TextYAlignment.Bottom
+		welcome.ZIndex = 45004
+		welcome.Parent = profile
+		quick.Welcome = welcome
+
+		local playerName = New("TextLabel")
+		playerName.Name = "PlayerName"
+		playerName.BackgroundTransparency = 1
+		playerName.BorderSizePixel = 0
+		playerName.Text = string.upper(tostring(startupPlayer.Name or "PLAYER"))
+		playerName.TextColor3 = MENU_TEXT_SELECTED
+		playerName.FontFace = MENU_FONT_SEMIBOLD_FACE
+		setResponsiveTextSize(playerName, 11)
+		playerName.TextScaled = false
+		playerName.TextWrapped = false
+		playerName.TextTruncate = Enum.TextTruncate.None
+		playerName.TextXAlignment = Enum.TextXAlignment.Left
+		playerName.TextYAlignment = Enum.TextYAlignment.Top
+		playerName.ZIndex = 45004
+		playerName.Parent = profile
+		quick.PlayerName = playerName
+
+		task.spawn(function()
+			local ok, image = pcall(function()
+				return Players:GetUserThumbnailAsync(
+					startupPlayer.UserId,
+					Enum.ThumbnailType.HeadShot,
+					Enum.ThumbnailSize.Size150x150
+				)
+			end)
+			if ok and type(image) == "string" and avatar.Parent then
+				avatar.Image = image
+			end
+		end)
 		autoServerHopState.RuntimeSidebarQuickButtons = quick
 	end
 	local footerDividerY
 	if quick then
 		if sidebarCollapsed then
 			local collapsedWidth = roundPixel(dividerX * 0.70)
+			local avatarSize = math.max(px(24), math.min(px(30), roundPixel(MENU_ITEM_HEIGHT * 0.72)))
+			quick.Profile.Position = U2O(
+				sidebarVisualCenterX,
+				panelHeight - SIDEBAR_PADDING - MENU_ITEM_HEIGHT - MENU_ITEM_GAP - (MENU_ITEM_HEIGHT * 0.5)
+			)
+			quick.Profile.Size = U2O(collapsedWidth, MENU_ITEM_HEIGHT)
+			quick.Avatar.AnchorPoint = V2(0.5, 0.5)
+			quick.Avatar.Position = U2S(0.5, 0.5)
+			quick.Avatar.Size = U2O(avatarSize, avatarSize)
+			quick.Welcome.Visible = false
+			quick.PlayerName.Visible = false
 			quick.Settings.Position = U2O(
 				sidebarVisualCenterX,
 				panelHeight - SIDEBAR_PADDING - (MENU_ITEM_HEIGHT * 0.5)
 			)
 			quick.Settings.Size = U2O(collapsedWidth, MENU_ITEM_HEIGHT)
 			footerDividerY = roundPixel(
-				panelHeight - SIDEBAR_PADDING - MENU_ITEM_HEIGHT - MENU_TOP_GAP
+				panelHeight - SIDEBAR_PADDING - (MENU_ITEM_HEIGHT * 2) - MENU_ITEM_GAP - MENU_TOP_GAP
 			)
 		else
+			local footerHeight = math.max(px(38), MENU_ITEM_HEIGHT)
 			local quickSize = math.max(px(28), math.min(px(34), roundPixel(dividerX * 0.16)))
-			local quickY = panelHeight - SIDEBAR_PADDING - (quickSize * 0.5)
-			quick.Settings.Position = U2O(sidebarVisualCenterX, quickY)
+			local footerY = panelHeight - SIDEBAR_PADDING - (footerHeight * 0.5)
+			local sideInset = math.max(px(10), roundPixel(dividerX * 0.05))
+			local settingsX = dividerX - sideInset - (quickSize * 0.5)
+			quick.Settings.Position = U2O(settingsX, footerY)
 			quick.Settings.Size = U2O(quickSize, quickSize)
-			footerDividerY = roundPixel(panelHeight - SIDEBAR_PADDING - quickSize - MENU_TOP_GAP)
+
+			local profileLeft = sideInset
+			local profileRight = settingsX - (quickSize * 0.5) - px(8)
+			local profileWidth = math.max(px(44), profileRight - profileLeft)
+			local profileCenterX = profileLeft + (profileWidth * 0.5)
+			quick.Profile.Position = U2O(profileCenterX, footerY)
+			quick.Profile.Size = U2O(profileWidth, footerHeight)
+
+			local avatarSize = math.max(px(26), math.min(px(32), footerHeight - px(6)))
+			quick.Avatar.AnchorPoint = V2(0, 0.5)
+			quick.Avatar.Position = U2O(0, roundPixel(footerHeight * 0.5))
+			quick.Avatar.Size = U2O(avatarSize, avatarSize)
+			quick.Welcome.Visible = true
+			quick.PlayerName.Visible = true
+			local textLeft = avatarSize + px(8)
+			local textWidth = math.max(1, profileWidth - textLeft)
+			quick.Welcome.Position = U2O(textLeft, px(2))
+			quick.Welcome.Size = U2O(textWidth, roundPixel(footerHeight * 0.46))
+			quick.PlayerName.Position = U2O(textLeft, roundPixel(footerHeight * 0.46))
+			quick.PlayerName.Size = U2O(textWidth, roundPixel(footerHeight * 0.50))
+			footerDividerY = roundPixel(panelHeight - SIDEBAR_PADDING - footerHeight - MENU_TOP_GAP)
 		end
 		quick.Divider.Position = U2O(sidebarVisualCenterX, footerDividerY)
 		quick.Divider.Size = U2O(roundPixel(dividerX * 0.85), visibleDividerThickness)
