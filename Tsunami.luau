@@ -2570,8 +2570,15 @@ if MINIGAME_MODE then
 			utility.AutoEquipUseSpecificBrainrot = false
 			utility.AutoChooseGame = true
 			utility.GameToChoose = "Popcorn Burst"
-			utility.MatchOpponentGame = false
-			utility.FallbackGameChoices = {}
+			utility.MatchOpponentGame = true
+			utility.FallbackGameChoices = {
+				["Candy Bomb"] = true,
+				["Higher Or Lower"] = true,
+				["Connect 4"] = true,
+				["Battle Ship"] = true,
+				["Knockout"] = true,
+				["Football Draft"] = true,
+			}
 			utility.AutoChooseRound1Delay = 1
 			utility.AutoChooseRound2Delay = 2.5
 			utility.AutoChooseRound3Delay = 5
@@ -3332,7 +3339,7 @@ if MINIGAME_MODE then
 			end
 			return ok
 		end
-		local SIMPLE_AUTOFARM_PROFILE_VERSION = 6
+		local SIMPLE_AUTOFARM_PROFILE_VERSION = 7
 		local function migrateSimpleAutofarmProfile(simple)
 			if type(simple) ~= "table" or type(simple.Profile) ~= "table" then return end
 			local version = math.floor(tonumber(simple.Version) or 1)
@@ -3360,7 +3367,8 @@ if MINIGAME_MODE then
 			utility.AutoDeleteWorstInventory=true; utility.DeleteNonBrainrotsFirst=true; utility.DeleteWorstBrainrotsFirst=false
 			utility.DeleteInventoryThreshold=95; utility.AvoidDeletingSignedBrainrots=true
 			utility.AutoshowBestBrainrots=true; utility.CustomOpeningOffer=false; utility.AutoshowAllTokens=true; utility.CustomOpeningTokens=false
-			utility.AutoChooseGame=true; utility.GameToChoose="Popcorn Burst"; utility.MatchOpponentGame=false; utility.FallbackGameChoices={}
+			utility.AutoChooseGame=true; utility.GameToChoose="Popcorn Burst"; utility.MatchOpponentGame=true
+			utility.FallbackGameChoices={["Candy Bomb"]=true,["Higher Or Lower"]=true,["Connect 4"]=true,["Battle Ship"]=true,["Knockout"]=true,["Football Draft"]=true}
 			utility.AutoChooseRound1Delay=1; utility.AutoChooseRound2Delay=2.5; utility.AutoChooseRound3Delay=5
 			utility.AutoChooseRounds=true; utility.RoundsToChoose="1"; utility.MatchOpponentRounds=false; utility.FallbackRoundChoices={}
 			utility.AutoChooseRoundsRound1Delay=1; utility.AutoChooseRoundsRound2Delay=2.5; utility.AutoChooseRoundsRound3Delay=5
@@ -18609,26 +18617,66 @@ if MINIGAME_MODE then
                                 0,
                                 simpleFallbackSlotBudgetAO - simpleFallbackSlotsPlannedAO
                             )
-                            local wantedThisOccurrence = math.min(lowerAmount, remainingSlotBudget)
                             local plannedThisOccurrence = 0
                             for missingRarity in pairs(occurrence.MissingTargets or {}) do
-                                if plannedThisOccurrence >= wantedThisOccurrence then break end
+                                if plannedThisOccurrence >= remainingSlotBudget then break end
                                 local missingIndex = table.find(OUTGOING_BRAINROT_RARITY_OPTIONS, missingRarity)
                                     or table.find(BRAINROT_RARITY_OPTIONS, missingRarity)
                                 if missingIndex then
-                                    local topLowerIndex = math.min(missingIndex - 1, #OUTGOING_BRAINROT_RARITY_OPTIONS)
-                                    for lowerIndex = topLowerIndex, 1, -1 do
-                                        local lowerRarity = OUTGOING_BRAINROT_RARITY_OPTIONS[lowerIndex]
-                                        local alreadyPlanned = simpleFallbackPlannedAO[lowerRarity] or 0
-                                        local available = math.max(0, availableForRarityAO(lowerRarity) - alreadyPlanned)
-                                        local take = math.min(wantedThisOccurrence - plannedThisOccurrence, available)
-                                        if take > 0 then
-                                            simpleFallbackPlannedAO[lowerRarity] = alreadyPlanned + take
-                                            aggregateFallbackRequests[lowerRarity] =
-                                                (aggregateFallbackRequests[lowerRarity] or 0) + take
-                                            plannedThisOccurrence += take
+                                    -- Simple Autofarm prefers one closest available HIGHER
+                                    -- rarity when the exact accepted rarity cannot be matched.
+                                    -- Eternal is receive-only, so it is never considered here.
+                                    local usedHigher = false
+                                    local firstHigherIndex = math.min(
+                                        missingIndex + 1,
+                                        #OUTGOING_BRAINROT_RARITY_OPTIONS + 1
+                                    )
+                                    for higherIndex = firstHigherIndex, #OUTGOING_BRAINROT_RARITY_OPTIONS do
+                                        local higherRarity = OUTGOING_BRAINROT_RARITY_OPTIONS[higherIndex]
+                                        local alreadyPlanned = simpleFallbackPlannedAO[higherRarity] or 0
+                                        local available = math.max(
+                                            0,
+                                            availableForRarityAO(higherRarity) - alreadyPlanned
+                                        )
+                                        if available > 0 then
+                                            simpleFallbackPlannedAO[higherRarity] = alreadyPlanned + 1
+                                            aggregateFallbackRequests[higherRarity] =
+                                                (aggregateFallbackRequests[higherRarity] or 0) + 1
+                                            plannedThisOccurrence += 1
+                                            usedHigher = true
+                                            break
                                         end
-                                        if plannedThisOccurrence >= wantedThisOccurrence then break end
+                                    end
+                                    -- If no higher outgoing rarity is owned, retain the
+                                    -- established six-best-lower fallback so an otherwise
+                                    -- valid accepted offer can still be answered.
+                                    if not usedHigher and plannedThisOccurrence < remainingSlotBudget then
+                                        local wantedLower = math.min(
+                                            lowerAmount,
+                                            remainingSlotBudget - plannedThisOccurrence
+                                        )
+                                        local topLowerIndex = math.min(
+                                            missingIndex - 1,
+                                            #OUTGOING_BRAINROT_RARITY_OPTIONS
+                                        )
+                                        local lowerPlanned = 0
+                                        for lowerIndex = topLowerIndex, 1, -1 do
+                                            local lowerRarity = OUTGOING_BRAINROT_RARITY_OPTIONS[lowerIndex]
+                                            local alreadyPlanned = simpleFallbackPlannedAO[lowerRarity] or 0
+                                            local available = math.max(
+                                                0,
+                                                availableForRarityAO(lowerRarity) - alreadyPlanned
+                                            )
+                                            local take = math.min(wantedLower - lowerPlanned, available)
+                                            if take > 0 then
+                                                simpleFallbackPlannedAO[lowerRarity] = alreadyPlanned + take
+                                                aggregateFallbackRequests[lowerRarity] =
+                                                    (aggregateFallbackRequests[lowerRarity] or 0) + take
+                                                lowerPlanned += take
+                                                plannedThisOccurrence += take
+                                            end
+                                            if lowerPlanned >= wantedLower then break end
+                                        end
                                     end
                                 end
                             end
