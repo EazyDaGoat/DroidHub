@@ -4783,11 +4783,12 @@ menuHolder.ScrollBarThickness = 0
 menuHolder.ScrollBarImageTransparency = 0.22
 menuHolder.ScrollBarImageColor3 = MUTED_TEXT_COLOR
 menuHolder.VerticalScrollBarInset = Enum.ScrollBarInset.None
-menuHolder.AutomaticCanvasSize = Enum.AutomaticSize.Y
+menuHolder.AutomaticCanvasSize = Enum.AutomaticSize.None
 menuHolder.CanvasSize = U2O(
 		0,
 		0
 	)
+menuHolder.ScrollingEnabled = true
 menuHolder.ElasticBehavior = Enum.ElasticBehavior.WhenScrollable
 menuHolder.ZIndex = 45000
 menuHolder.Parent = window
@@ -4807,6 +4808,18 @@ menuLayout.Padding = UDim.new(
 	)
 menuLayout.SortOrder = Enum.SortOrder.LayoutOrder
 menuLayout.Parent = menuHolder
+local function syncSidebarMenuCanvas()
+	local contentHeight = menuLayout.AbsoluteContentSize.Y
+		+ MENU_TOP_GAP
+		+ SIDEBAR_PADDING
+	menuHolder.CanvasSize = U2O(0, math.max(0, roundPixel(contentHeight)))
+	local maxY = math.max(0, menuHolder.AbsoluteCanvasSize.Y - menuHolder.AbsoluteWindowSize.Y)
+	if menuHolder.CanvasPosition.Y > maxY then
+		menuHolder.CanvasPosition = V2(0, maxY)
+	end
+end
+menuLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(syncSidebarMenuCanvas)
+syncSidebarMenuCanvas()
 local menuItems = {}
 local TRACKED_TAB_NAME={
 	Home="HOME",
@@ -5121,7 +5134,7 @@ local function syncPixelSnappedGeometry()
 		welcome.Text = "WELCOME,"
 		welcome.TextColor3 = MUTED_TEXT_COLOR
 		welcome.FontFace = MENU_FONT_REGULAR_FACE
-		setResponsiveTextSize(welcome, 9)
+		setResponsiveTextSize(welcome, 11)
 		welcome.TextScaled = false
 		welcome.TextWrapped = false
 		welcome.TextTruncate = Enum.TextTruncate.None
@@ -5138,7 +5151,7 @@ local function syncPixelSnappedGeometry()
 		playerName.Text = string.upper(tostring(startupPlayer.Name or "PLAYER"))
 		playerName.TextColor3 = MENU_TEXT_SELECTED
 		playerName.FontFace = MENU_FONT_SEMIBOLD_FACE
-		setResponsiveTextSize(playerName, 11)
+		setResponsiveTextSize(playerName, 14)
 		playerName.TextScaled = false
 		playerName.TextWrapped = false
 		playerName.TextTruncate = Enum.TextTruncate.None
@@ -5186,7 +5199,7 @@ local function syncPixelSnappedGeometry()
 				panelHeight - SIDEBAR_PADDING - (MENU_ITEM_HEIGHT * 2) - MENU_ITEM_GAP - MENU_TOP_GAP
 			)
 		else
-			local footerHeight = math.max(px(38), MENU_ITEM_HEIGHT)
+			local footerHeight = math.max(px(44), MENU_ITEM_HEIGHT)
 			local quickSize = math.max(px(28), math.min(px(34), roundPixel(dividerX * 0.16)))
 			local footerY = panelHeight - SIDEBAR_PADDING - (footerHeight * 0.5)
 			local sideInset = math.max(px(10), roundPixel(dividerX * 0.05))
@@ -5201,7 +5214,7 @@ local function syncPixelSnappedGeometry()
 			quick.Profile.Position = U2O(profileCenterX, footerY)
 			quick.Profile.Size = U2O(profileWidth, footerHeight)
 
-			local avatarSize = math.max(px(26), math.min(px(32), footerHeight - px(6)))
+			local avatarSize = math.max(px(30), math.min(px(36), footerHeight - px(6)))
 			quick.Avatar.AnchorPoint = V2(0, 0.5)
 			quick.Avatar.Position = U2O(0, roundPixel(footerHeight * 0.5))
 			quick.Avatar.Size = U2O(avatarSize, avatarSize)
@@ -5237,6 +5250,7 @@ local function syncPixelSnappedGeometry()
 		dividerX,
 		menuAvailableHeight
 	)
+	syncSidebarMenuCanvas()
 	local tabHighlightWidth = roundPixel(
 		dividerX
 			* (
@@ -5760,6 +5774,8 @@ rightContent.CanvasSize = U2O(
 		0,
 		0
 	)
+rightContent.ScrollingEnabled = true
+rightContent.VerticalScrollBarInset = Enum.ScrollBarInset.None
 rightContent.ElasticBehavior = Enum.ElasticBehavior.WhenScrollable
 rightContent.ZIndex = 45000
 rightContent.Parent = window
@@ -11443,11 +11459,13 @@ for _, data in ipairs(
 	data.Header.InputEnded:Connect(function(input)
 		if input ~= data.HeaderPressInput then return end
 		local startPosition = data.HeaderPressPosition
+		local wasTouch = input.UserInputType == Enum.UserInputType.Touch
 		data.HeaderPressInput = nil
 		data.HeaderPressPosition = nil
 		if not startPosition then return end
 		local delta = input.Position - startPosition
-		if math.abs(delta.X) < 3 and math.abs(delta.Y) < 3 then
+		local tapThreshold = wasTouch and px(8) or 3
+		if math.abs(delta.X) < tapThreshold and math.abs(delta.Y) < tapThreshold then
 			setPanelExpanded(data, not data.Expanded)
 		end
 	end)
@@ -12170,12 +12188,7 @@ UserInputService.InputBegan:Connect(
 		if inputType == Enum.UserInputType.Touch
 			and pointInsideGui(rightContent, point)
 		then
-			local canvasY = point.Y
-				- rightContent.AbsolutePosition.Y
-				+ rightContent.CanvasPosition.Y
-			if canvasY >= CONTENT_TOP_PADDING then
-				return true
-			end
+			return true
 		end
 		return false
 	end
