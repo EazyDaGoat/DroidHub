@@ -2584,8 +2584,8 @@ if MINIGAME_MODE then
 			utility.AutoChooseRound3Delay = 5
 			utility.AutoChooseRounds = true
 			utility.RoundsToChoose = "1"
-			utility.MatchOpponentRounds = false
-			utility.FallbackRoundChoices = {}
+			utility.MatchOpponentRounds = true
+			utility.FallbackRoundChoices = {["3"] = true, ["5"] = true}
 			utility.AutoChooseRoundsRound1Delay = 1
 			utility.AutoChooseRoundsRound2Delay = 2.5
 			utility.AutoChooseRoundsRound3Delay = 5
@@ -2600,8 +2600,8 @@ if MINIGAME_MODE then
 			end
 			utility.AutoBooth = true
 			utility.AutoBoothName = "hurry up n buy"
-			utility.AutoBoothListBestFirst = true
-			utility.AutoBoothListWorstFirst = false
+			utility.AutoBoothListBestFirst = false
+			utility.AutoBoothListWorstFirst = true
 			utility.AutoBoothAvoidSignedBrainrots = true
 			for index = 1, 14 do
 				local prefix = "AutoBoothListing" .. tostring(index)
@@ -3339,7 +3339,7 @@ if MINIGAME_MODE then
 			end
 			return ok
 		end
-		local SIMPLE_AUTOFARM_PROFILE_VERSION = 7
+		local SIMPLE_AUTOFARM_PROFILE_VERSION = 9
 		local function migrateSimpleAutofarmProfile(simple)
 			if type(simple) ~= "table" or type(simple.Profile) ~= "table" then return end
 			local version = math.floor(tonumber(simple.Version) or 1)
@@ -3370,11 +3370,11 @@ if MINIGAME_MODE then
 			utility.AutoChooseGame=true; utility.GameToChoose="Popcorn Burst"; utility.MatchOpponentGame=true
 			utility.FallbackGameChoices={["Candy Bomb"]=true,["Higher Or Lower"]=true,["Connect 4"]=true,["Battle Ship"]=true,["Knockout"]=true,["Football Draft"]=true}
 			utility.AutoChooseRound1Delay=1; utility.AutoChooseRound2Delay=2.5; utility.AutoChooseRound3Delay=5
-			utility.AutoChooseRounds=true; utility.RoundsToChoose="1"; utility.MatchOpponentRounds=false; utility.FallbackRoundChoices={}
+			utility.AutoChooseRounds=true; utility.RoundsToChoose="1"; utility.MatchOpponentRounds=true; utility.FallbackRoundChoices={["3"]=true,["5"]=true}
 			utility.AutoChooseRoundsRound1Delay=1; utility.AutoChooseRoundsRound2Delay=2.5; utility.AutoChooseRoundsRound3Delay=5
 			utility.FallbackOffers=true; utility.FallbackToTokens=true; utility.FallbackToNextLowerRarityBrainrot=true; utility.FallbackToSpecificBrainrotItem=false; utility.FallbackNextLowerRarityAmount=6
 			for rarity,amount in pairs(responseTokens) do utility["FallbackTokens"..rarity]=amount; utility["Fallback"..rarity.."OfferAllTokens"]=false end
-			utility.AutoBooth=true; utility.AutoBoothName="hurry up n buy"; utility.AutoBoothListBestFirst=true; utility.AutoBoothListWorstFirst=false; utility.AutoBoothAvoidSignedBrainrots=true
+			utility.AutoBooth=true; utility.AutoBoothName="hurry up n buy"; utility.AutoBoothListBestFirst=false; utility.AutoBoothListWorstFirst=true; utility.AutoBoothAvoidSignedBrainrots=true
 			for index=1,14 do
 				local prefix="AutoBoothListing"..tostring(index)
 				if utility[prefix.."InventoryThreshold"] == nil then
@@ -3753,6 +3753,84 @@ screenGui.ResetOnSpawn = false
 screenGui.DisplayOrder = 1000000
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = guiParent
+-- Standard action-button feedback only. Tabs, toggles, dropdowns, search,
+-- window controls, and other navigation keep their existing visuals. Buttons
+-- such as Reset, Join, Clear, Add, and Remove use a conventional neutral-grey
+-- hover/pressed state so they feel clickable without introducing accent colors.
+do
+	local BUTTON_FEEDBACK_TWEEN = TI(0.075, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+	local function bindClickableFeedback(button)
+		if not (button:IsA("TextButton") or button:IsA("ImageButton"))
+			or button:GetAttribute("TuffHubStandardButtonFeedback") ~= true
+			or button:GetAttribute("TuffHubClickableFeedback") == true
+		then
+			return
+		end
+		button:SetAttribute("TuffHubClickableFeedback", true)
+		local normalColor = button.BackgroundColor3
+		local normalTransparency = button.BackgroundTransparency
+		-- Keep action feedback restrained and neutral. Hover is only a slight lift
+		-- from the existing grey; press is a small darkening, like a conventional
+		-- desktop button rather than a highlight/accent flash.
+		local hoverColor = normalColor:Lerp(RGB(255, 255, 255), 0.035)
+		local pressedColor = normalColor:Lerp(RGB(0, 0, 0), 0.10)
+		local hovered, pressed = false, false
+		local activeTween
+		local function animate(color)
+			if activeTween then activeTween:Cancel() end
+			activeTween = TweenService:Create(button, BUTTON_FEEDBACK_TWEEN, {
+				BackgroundColor3 = color,
+				BackgroundTransparency = normalTransparency,
+			})
+			activeTween:Play()
+		end
+		local function refresh()
+			if not button.Active or not button.Visible then
+				animate(normalColor)
+			elseif pressed then
+				animate(pressedColor)
+			elseif hovered then
+				animate(hoverColor)
+			else
+				animate(normalColor)
+			end
+		end
+		button.MouseEnter:Connect(function()
+			hovered = true
+			refresh()
+		end)
+		button.MouseLeave:Connect(function()
+			hovered = false
+			pressed = false
+			refresh()
+		end)
+		button.MouseButton1Down:Connect(function()
+			pressed = true
+			refresh()
+		end)
+		button.MouseButton1Up:Connect(function()
+			pressed = false
+			refresh()
+		end)
+		button.SelectionGained:Connect(function()
+			hovered = true
+			refresh()
+		end)
+		button.SelectionLost:Connect(function()
+			hovered = false
+			pressed = false
+			refresh()
+		end)
+	end
+	for _, descendant in ipairs(screenGui:GetDescendants()) do
+		bindClickableFeedback(descendant)
+	end
+	screenGui.DescendantAdded:Connect(function(descendant)
+		if descendant:IsA("TextButton") or descendant:IsA("ImageButton") then
+			task.defer(bindClickableFeedback, descendant)
+		end
+	end)
+end
 -- Settings are deduplicated by the periodic safety flush and explicit commit actions;
 -- avoid serializing/writing the full profile on every mouse or touch release.
 if MINIGAME_MODE then
@@ -5923,7 +6001,9 @@ local function createEmptyCollapsiblePanel(
 		for _, name in ipairs(normalized) do
 			local candidate = currentLine == "" and name or (currentLine .. ", " .. name)
 			if currentLine ~= "" and textWidth(candidate) > availableWidth then
-				lines[#lines + 1] = currentLine
+				-- A trailing comma makes it clear that additional selected values
+				-- continue on the next wrapped line (for example, "Candy Bomb,").
+				lines[#lines + 1] = currentLine .. ","
 				currentLine = name
 			else
 				currentLine = candidate
@@ -6032,9 +6112,22 @@ local function createEmptyCollapsiblePanel(
 		-- adjacent rows are genuinely one feature: an explicit separator group,
 		-- an exclusive choice set, or a choice with its dependent attributes.
 		-- Sharing a master/visibility parent alone no longer hides separators.
+		local function rowDependsOnUtility(rowData, utilityKey)
+			if not rowData or utilityKey == nil then return false end
+			if rowData.UtilityParentKey == utilityKey then return true end
+			for _, parentKey in ipairs(rowData.UtilityParentKeys or {}) do
+				if parentKey == utilityKey then return true end
+			end
+			return false
+		end
 		local function rowsAreGrouped(a, b)
 			if not a or not b then return false end
 			if a.SeparatorGroup ~= nil and a.SeparatorGroup == b.SeparatorGroup then return true end
+			-- A controlling toggle and the controls it directly reveals are one
+			-- feature. Keep those rows visually connected even when no panel-specific
+			-- SeparatorGroup was necessary.
+			if a.UtilityToggleKey ~= nil and rowDependsOnUtility(b, a.UtilityToggleKey) then return true end
+			if b.UtilityToggleKey ~= nil and rowDependsOnUtility(a, b.UtilityToggleKey) then return true end
 			if a.UtilityExclusiveGroup ~= nil and a.UtilityExclusiveGroup == b.UtilityExclusiveGroup then return true end
 			if a.AcceptKey ~= nil and b.VisibilityAcceptKey == a.AcceptKey then return true end
 			if b.AcceptKey ~= nil and a.VisibilityAcceptKey == b.AcceptKey then return true end
@@ -6053,7 +6146,18 @@ local function createEmptyCollapsiblePanel(
 		for index, rowData in ipairs(visibleRows) do
 			local nextRow = visibleRows[index + 1]
 			if rowData.Divider then
-				rowData.Divider.Visible = nextRow ~= nil and not rowsAreGrouped(rowData, nextRow)
+				local showDivider = nextRow ~= nil and not rowsAreGrouped(rowData, nextRow)
+				rowData.Divider.Visible = showDivider
+				if showDivider then
+					-- Derive the separator from the two laid-out feature bounds rather than
+					-- assuming a fixed gap. This keeps every feature divider mathematically
+					-- centered even when either row uses dynamic/wrapped content.
+					local currentTop = rowData.Row.Position.Y.Offset
+					local currentBottom = currentTop + rowData.Row.Size.Y.Offset
+					local nextTop = nextRow.Row.Position.Y.Offset
+					local dividerCenter = ((currentBottom + nextTop) * 0.5) - currentTop
+					rowData.Divider.Position = U2(0, 0, 0, dividerCenter)
+				end
 			end
 		end
 
@@ -6382,8 +6486,10 @@ local function createEmptyCollapsiblePanel(
 		featureRow.Parent = body
 		local featureDivider = New("Frame")
 		featureDivider.Name = "FeatureDivider"
-		featureDivider.AnchorPoint = V2(0, 1)
-		featureDivider.Position = U2(0, 0, 1, 0)
+		featureDivider.AnchorPoint = V2(0, 0.5)
+		-- relayoutRows() positions this from the actual bounds of both neighboring
+		-- features, so dynamic heights and wrapped labels cannot offset the divider.
+		featureDivider.Position = U2(0, 0, 1, featureRowGap * 0.5)
 		featureDivider.Size = U2(1, 0, 0, LINE_THICKNESS)
 		-- Feature separators are intentionally subtler than structural borders.
 		-- They should read as spacing guidance, not as another panel outline.
@@ -6606,6 +6712,7 @@ local function createEmptyCollapsiblePanel(
 			featureLabel.Visible = false
 			actionButton = New("TextButton")
 			actionButton.Name = "ActionButton"
+			actionButton:SetAttribute("TuffHubStandardButtonFeedback", true)
 			actionButton.AnchorPoint = V2(0.5, 0.5)
 			actionButton.Position = U2S(0.5, 0.5)
 			actionButton.Size = U2(1, 0, 0, px(26))
@@ -7063,6 +7170,7 @@ local function createEmptyCollapsiblePanel(
 					y += px(31)
 					local clearButton = New("TextButton")
 					clearButton.Name = "ClearCustomMessage"
+					clearButton:SetAttribute("TuffHubStandardButtonFeedback", true)
 					clearButton.Position = U2O(0, y)
 					clearButton.Size = U2(1, 0, 0, px(24))
 					clearButton.BackgroundColor3 = FEATURE_OFF_COLOR
@@ -7086,6 +7194,7 @@ local function createEmptyCollapsiblePanel(
 					if entryIndex > 1 then
 						local removeButton = New("TextButton")
 						removeButton.Name = "RemoveCustomMessage"
+						removeButton:SetAttribute("TuffHubStandardButtonFeedback", true)
 						removeButton.Position = U2O(0, y)
 						removeButton.Size = U2(1, 0, 0, px(24))
 						removeButton.BackgroundColor3 = FEATURE_OFF_COLOR
@@ -7121,6 +7230,7 @@ local function createEmptyCollapsiblePanel(
 				addRow.ZIndex = 45013
 				addRow.Parent = secondaryContainer
 				local addButton = New("TextButton")
+				addButton:SetAttribute("TuffHubStandardButtonFeedback", true)
 				customAddLabel = addButton
 				addButton.AnchorPoint = V2(0, 0.5)
 				addButton.Position = U2(0, 0, 0.5, 0)
@@ -7525,7 +7635,7 @@ local function createEmptyCollapsiblePanel(
 				if type(entries) ~= "table" or #entries == 0 then entries={blankTradeChatOffer()} stateEntry[entriesKey]=entries end
 				local y = px(5)
 				local function buttonBase(text, yPos)
-					local b=New("TextButton") b.Position=U2O(0,yPos) b.Size=U2(1,0,0,px(25)) b.BackgroundColor3=FEATURE_OFF_COLOR b.BorderSizePixel=0 b.AutoButtonColor=false b.Text=capitalizeUiWords(text) b.TextColor3=MENU_TEXT_SELECTED b.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(b,13) b.TextTruncate=Enum.TextTruncate.None b.ClipsDescendants=true b.ZIndex=45015 b.Parent=secondaryContainer ensureCorner(b,px(5)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(b) return b
+					local b=New("TextButton") b:SetAttribute("TuffHubStandardButtonFeedback", true) b.Position=U2O(0,yPos) b.Size=U2(1,0,0,px(25)) b.BackgroundColor3=FEATURE_OFF_COLOR b.BorderSizePixel=0 b.AutoButtonColor=false b.Text=capitalizeUiWords(text) b.TextColor3=MENU_TEXT_SELECTED b.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(b,13) b.TextTruncate=Enum.TextTruncate.None b.ClipsDescendants=true b.ZIndex=45015 b.Parent=secondaryContainer ensureCorner(b,px(5)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(b) return b
 				end
 				local function textBoxBase(text, placeholder, yPos)
 					local box=New("TextBox") box.Position=U2O(0,yPos) box.Size=U2(1,0,0,px(26)) box.BackgroundColor3=FEATURE_OFF_COLOR box.BorderSizePixel=0 box.ClearTextOnFocus=false box.Text=tostring(text or "") box.PlaceholderText=capitalizeUiWords(placeholder or "") box.PlaceholderColor3=MUTED_TEXT_COLOR box.TextColor3=MENU_TEXT_SELECTED box.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(box,13) box.TextXAlignment=Enum.TextXAlignment.Left box.TextTruncate=Enum.TextTruncate.None box.ClipsDescendants=true box.ZIndex=45015 box.Parent=secondaryContainer ensureCorner(box,px(5)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(box)
@@ -7794,6 +7904,7 @@ local function createEmptyCollapsiblePanel(
 				end
 				local function makeButton(text, yPos)
 					local b = New("TextButton")
+					b:SetAttribute("TuffHubStandardButtonFeedback", true)
 					b.Position = U2O(0, yPos)
 					b.Size = U2(1, 0, 0, px(25))
 					b.BackgroundColor3 = FEATURE_OFF_COLOR
@@ -10157,11 +10268,12 @@ end
 				Options = RARITY_OPTIONS,
 				Placeholder = "Any",
 				DropdownLabel = "Brainrots To Check For",
+				SeparatorGroup = "AutoSitOneOfTwoGroup",
 			},
 		}
-		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "AutoSitSpecificItems", VisibilitySitKey = "OneOfTwo"}
-		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Opponent Must Own All Selected Brainrots", UtilityToggleKey = "AutoSitMustOwnAllSelected", VisibilitySitKey = "OneOfTwo"}
-		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Opponent Must Own One Of Selected Brainrots", UtilityToggleKey = "AutoSitMustOwnOneSelected", VisibilitySitKey = "OneOfTwo"}
+		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "AutoSitSpecificItems", VisibilitySitKey = "OneOfTwo", SeparatorGroup = "AutoSitOneOfTwoGroup"}
+		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Opponent Must Own All Selected Brainrots", UtilityToggleKey = "AutoSitMustOwnAllSelected", VisibilitySitKey = "OneOfTwo", SeparatorGroup = "AutoSitOneOfTwoGroup"}
+		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Opponent Must Own One Of Selected Brainrots", UtilityToggleKey = "AutoSitMustOwnOneSelected", VisibilitySitKey = "OneOfTwo", SeparatorGroup = "AutoSitOneOfTwoGroup"}
 		createEmptyCollapsiblePanel(tabs.Matchmaking, 3, 1, 1, "Auto Sit", autoSitFeatures)
 	end
 	local function appendAcceptCriteria(features, parentKey, acceptStateProvider, mutationPrefix, specificStateKey, allKey, oneKey)
@@ -10228,13 +10340,14 @@ end
 
 		local regularOpeningFeatures = {
 			{Label = "Autoshow Best Brainrots", UtilityToggleKey = "RegularOpeningAutoshowBestBrainrots", UtilityExclusiveGroup = "RegularOpeningBrainrotMode"},
-			{Label = "Custom Opening Brainrots", UtilityToggleKey = "RegularOpeningCustomBrainrots", UtilityExclusiveGroup = "RegularOpeningBrainrotMode"},
+			{Label = "Custom Opening Brainrots", UtilityToggleKey = "RegularOpeningCustomBrainrots", UtilityExclusiveGroup = "RegularOpeningBrainrotMode", SeparatorGroup = "RegularOpeningBrainrotsGroup"},
 		}
 		for slotIndex = 1, 6 do
 			regularOpeningFeatures[#regularOpeningFeatures + 1] = {
 				Label = "Brainrot " .. tostring(slotIndex),
 				UtilityDropdownKey = "RegularOpeningBrainrot" .. tostring(slotIndex),
 				UtilityParentKey = "RegularOpeningCustomBrainrots",
+				SeparatorGroup = "RegularOpeningBrainrotsGroup",
 				Placeholder = "None",
 				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
@@ -10242,19 +10355,19 @@ end
 			}
 		end
 		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Autoshow All Tokens", UtilityToggleKey = "RegularOpeningAutoshowAllTokens", UtilityExclusiveGroup = "RegularOpeningTokenMode"}
-		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Custom Opening Tokens", UtilityToggleKey = "RegularOpeningCustomTokens", UtilityExclusiveGroup = "RegularOpeningTokenMode"}
-		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Custom Token Amount", UtilitySliderKey = "RegularOpeningTokenAmount", UtilityParentKey = "RegularOpeningCustomTokens", MinValue = 0, MaxValue = 1000000, MaxValueProvider = function() return autoServerHopState.CurrentTradeTokenBalance() end, UnitLabel = "Tokens"}
+		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Custom Opening Tokens", UtilityToggleKey = "RegularOpeningCustomTokens", UtilityExclusiveGroup = "RegularOpeningTokenMode", SeparatorGroup = "RegularOpeningTokensGroup"}
+		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Custom Token Amount", UtilitySliderKey = "RegularOpeningTokenAmount", UtilityParentKey = "RegularOpeningCustomTokens", SeparatorGroup = "RegularOpeningTokensGroup", MinValue = 0, MaxValue = 1000000, MaxValueProvider = function() return autoServerHopState.CurrentTradeTokenBalance() end, UnitLabel = "Tokens"}
 		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 34, 2, 3, "Opening Offer", regularOpeningFeatures)
 		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 35, 1, 4, "Trade Delays", {
-			{Label="Custom Delays", UtilityToggleKey="AutoAcceptTradesCustomDelays"},
-			{Label="Accept Trade Request Delay", UtilitySliderKey="AutoAcceptTradesInitialDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
-			{Label="Delay After Trade Message", UtilitySliderKey="AutoAcceptTradesDelayAfterTradeMessage", UtilityParentKey="AutoAcceptTradesCustomDelays", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
-			{Label="Reaction Delay", UtilitySliderKey="AutoAcceptTradesReactionDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
-			{Label="Add Brainrot Delay", UtilitySliderKey="AutoAcceptTradesAddBrainrotDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
-			{Label="Remove Brainrot Delay", UtilitySliderKey="AutoAcceptTradesRemoveBrainrotDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
-			{Label="Add Token Delay", UtilitySliderKey="AutoAcceptTradesAddTokenDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
-			{Label="Remove Token Delay", UtilitySliderKey="AutoAcceptTradesRemoveTokenDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
-			{Label="Accept Offer Delay", UtilitySliderKey="AutoAcceptTradesAcceptDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Custom Delays", UtilityToggleKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup"},
+			{Label="Accept Trade Request Delay", UtilitySliderKey="AutoAcceptTradesInitialDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Delay After Trade Message", UtilitySliderKey="AutoAcceptTradesDelayAfterTradeMessage", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Reaction Delay", UtilitySliderKey="AutoAcceptTradesReactionDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Add Brainrot Delay", UtilitySliderKey="AutoAcceptTradesAddBrainrotDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Remove Brainrot Delay", UtilitySliderKey="AutoAcceptTradesRemoveBrainrotDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Add Token Delay", UtilitySliderKey="AutoAcceptTradesAddTokenDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Remove Token Delay", UtilitySliderKey="AutoAcceptTradesRemoveTokenDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Accept Offer Delay", UtilitySliderKey="AutoAcceptTradesAcceptDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
 		})
 	end
 	do
@@ -10326,15 +10439,15 @@ end
 			{Label = "Server Hop After Playing Every Player In Server With Criteria", UtilityToggleKey = "CheckServerHopPlayedEveryoneServer"},
 			{Label = "Server Hop If No Player With Criteria Is In Minigame Area", UtilityToggleKey = "CheckServerHopNobodyMinigamesArea"},
 			{Label = "Server Hop After Playing Every Player With Criteria In Minigame Area", UtilityToggleKey = "CheckServerHopPlayedEveryoneMinigamesArea"},
-			{Label = "Rarities To Check For", UtilityMultiDropdownKey = "CheckServerBrainrotRarities", Placeholder = "None", Options = BRAINROT_RARITY_OPTIONS},
-			{Label = "Required Mutations", UtilityMultiDropdownKey = "CheckServerMutations", Placeholder = "None", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Required Traits", UtilityMultiDropdownKey = "CheckServerTraits", Placeholder = "None", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Required Signature", UtilityMultiDropdownKey = "CheckServerSignatures", Placeholder = "Any", Options = {"Signed", "Unsigned"}},
-			{Label = "Required Size", UtilityMultiDropdownKey = "CheckServerSizes", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
-			{Label = "Required Level", UtilityMultiDropdownKey = "CheckServerLevels", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
-			{Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "CheckServerSpecificItems"},
-			{Label = "Player Must Own All Selected Criteria", UtilityToggleKey = "CheckServerMustOwnAll", UtilityExclusiveGroup = "CheckServerOwnershipMode"},
-			{Label = "Player Must Own At Least One Selected Criterion", UtilityToggleKey = "CheckServerMustOwnOne", UtilityExclusiveGroup = "CheckServerOwnershipMode"},
+			{Label = "Rarities To Check For", UtilityMultiDropdownKey = "CheckServerBrainrotRarities", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "None", Options = BRAINROT_RARITY_OPTIONS},
+			{Label = "Required Mutations", UtilityMultiDropdownKey = "CheckServerMutations", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Required Traits", UtilityMultiDropdownKey = "CheckServerTraits", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Required Signature", UtilityMultiDropdownKey = "CheckServerSignatures", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "Any", Options = {"Signed", "Unsigned"}},
+			{Label = "Required Size", UtilityMultiDropdownKey = "CheckServerSizes", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+			{Label = "Required Level", UtilityMultiDropdownKey = "CheckServerLevels", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
+			{Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "CheckServerSpecificItems", SeparatorGroup = "CheckServerCriteriaGroup"},
+			{Label = "Player Must Own All Selected Criteria", UtilityToggleKey = "CheckServerMustOwnAll", UtilityExclusiveGroup = "CheckServerOwnershipMode", SeparatorGroup = "CheckServerCriteriaGroup"},
+			{Label = "Player Must Own At Least One Selected Criterion", UtilityToggleKey = "CheckServerMustOwnOne", UtilityExclusiveGroup = "CheckServerOwnershipMode", SeparatorGroup = "CheckServerCriteriaGroup"},
 		}
 	)
 	createEmptyCollapsiblePanel(
@@ -10344,16 +10457,18 @@ end
 		1,
 		"Auto Chat",
 		{
-			{Label = "Auto Chat", UtilityToggleKey = "AutoChat"},
+			{Label = "Auto Chat", UtilityToggleKey = "AutoChat", SeparatorGroup = "AutoChatGroup"},
 			{
 				Label = "Message",
 				UtilityTextKey = "AutoChatMessage",
+				SeparatorGroup = "AutoChatGroup",
 				UtilityParentKey = "AutoChat",
 				Placeholder = "Type your chat message",
 			},
 			{
 				Label = "Chat Interval",
 				UtilitySliderKey = "ChatIntervalMinutes",
+				SeparatorGroup = "AutoChatGroup",
 				UtilityParentKey = "AutoChat",
 				MinValue = 1,
 				MaxValue = 5,
@@ -10363,11 +10478,13 @@ end
 			{
 				Label = "Do Not Send During Active Trade Feature",
 				UtilityToggleKey = "AutoChatDoNotSendDuringActiveTrade",
+				SeparatorGroup = "AutoChatGroup",
 				UtilityParentKey = "AutoChat",
 			},
 			{
 				Label = "Wait This Long After Execution",
 				UtilitySliderKey = "AutoChatExecutionDelay",
+				SeparatorGroup = "AutoChatGroup",
 				UtilityParentKey = "AutoChat",
 				MinValue = 0,
 				MaxValue = 60,
@@ -10384,16 +10501,18 @@ end
 		1,
 		"Auto Trade Message",
 		{
-			{Label = "Auto Trade Chat", UtilityToggleKey = "AutoTradeChat"},
+			{Label = "Auto Trade Chat", UtilityToggleKey = "AutoTradeChat", SeparatorGroup = "AutoTradeBaseGroup"},
 			{
 				Label = "Message",
 				UtilityTextKey = "AutoTradeMessage",
+				SeparatorGroup = "AutoTradeBaseGroup",
 				UtilityParentKey = "AutoTradeChat",
 				Placeholder = "Type your trade message",
 			},
 			{
 				Label = "Send This Long After Trade Starts",
 				UtilitySliderKey = "AutoTradeMessageStartDelay",
+				SeparatorGroup = "AutoTradeBaseGroup",
 				UtilityParentKey = "AutoTradeChat",
 				MinValue = 0,
 				MaxValue = 10,
@@ -10404,11 +10523,13 @@ end
 			{
 				Label = "Send Message Every Fixed Amount Of Time",
 				UtilityToggleKey = "AutoTradeRepeatMessage",
+				SeparatorGroup = "AutoTradeRepeatGroup",
 				UtilityParentKey = "AutoTradeChat",
 			},
 			{
 				Label = "Send Every",
 				UtilitySliderKey = "AutoTradeRepeatInterval",
+				SeparatorGroup = "AutoTradeRepeatGroup",
 				UtilityParentKeys = {"AutoTradeChat", "AutoTradeRepeatMessage"},
 				MinValue = 1,
 				MaxValue = 60,
@@ -10418,11 +10539,13 @@ end
 			{
 				Label = "Send Separate Message If Value Not Offered",
 				UtilityToggleKey = "AutoTradeSendIfValueNotOffered",
+				SeparatorGroup = "AutoTradeNoValueGroup",
 				UtilityParentKey = "AutoTradeChat",
 			},
 			{
 				Label = "Message To Send",
 				UtilityTextKey = "AutoTradeNoValueMessage",
+				SeparatorGroup = "AutoTradeNoValueGroup",
 				UtilityParentKeys = {"AutoTradeChat", "AutoTradeSendIfValueNotOffered"},
 				Placeholder = "Message to send if value is not offered",
 				EditingKey = "AutoTradeNoValueMessageEditing",
@@ -10431,6 +10554,7 @@ end
 			{
 				Label = "Time Before Send",
 				UtilitySliderKey = "AutoTradeNoValueDelay",
+				SeparatorGroup = "AutoTradeNoValueGroup",
 				UtilityParentKeys = {"AutoTradeChat", "AutoTradeSendIfValueNotOffered"},
 				MinValue = 0,
 				MaxValue = 60,
@@ -10457,33 +10581,43 @@ end
 			{
 				Label = "Auto Delete Worst Inventory",
 				UtilityToggleKey = "AutoDeleteWorstInventory",
+				SeparatorGroup = "AutoDeleteCoreGroup",
 			},
 			{
 				Label = "Delete Non Brainrots First",
 				UtilityToggleKey = "DeleteNonBrainrotsFirst",
+				SeparatorGroup = "AutoDeleteCoreGroup",
 				UtilityParentKey = "AutoDeleteWorstInventory",
 				UtilityExclusiveGroup = "DeletePriority",
 			},
 			{
 				Label = "Delete Worst Brainrots First",
 				UtilityToggleKey = "DeleteWorstBrainrotsFirst",
+				SeparatorGroup = "AutoDeleteCoreGroup",
 				UtilityParentKey = "AutoDeleteWorstInventory",
 				UtilityExclusiveGroup = "DeletePriority",
 			},
 			{
 				Label = "At This Inventory Or Higher",
 				UtilitySliderKey = "DeleteInventoryThreshold",
+				SeparatorGroup = "AutoDeleteCoreGroup",
 				UtilityParentKey = "AutoDeleteWorstInventory",
 				MinValue = 1,
 				MaxValue = 100,
 				UnitLabel = "Inventory",
 			},
-			{Label = "Avoid Deleting These Traits", UtilityMultiDropdownKey = "AvoidDeletingTraits", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Avoid Deleting These Mutations", UtilityMultiDropdownKey = "AvoidDeletingMutations", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Avoid Deleting Signed Brainrots", UtilityToggleKey = "AvoidDeletingSignedBrainrots", UtilityParentKey = "AutoDeleteWorstInventory"},
-			{Label = "Avoid Deleting Locked Items", UtilityToggleKey = "AvoidDeletingLockedItems", UtilityParentKey = "AutoDeleteWorstInventory"},
-			{Label = "Avoid Deleting These Sizes", UtilityMultiDropdownKey = "AvoidDeletingSizes", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
-			{Label = "Avoid Deleting These Levels", UtilityMultiDropdownKey = "AvoidDeletingLevels", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
+			{Label = "Avoid Deleting These Traits", UtilityMultiDropdownKey = "AvoidDeletingTraits",
+				SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Avoid Deleting These Mutations", UtilityMultiDropdownKey = "AvoidDeletingMutations",
+				SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Avoid Deleting Signed Brainrots", UtilityToggleKey = "AvoidDeletingSignedBrainrots",
+				SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory"},
+			{Label = "Avoid Deleting Locked Items", UtilityToggleKey = "AvoidDeletingLockedItems",
+				SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory"},
+			{Label = "Avoid Deleting These Sizes", UtilityMultiDropdownKey = "AvoidDeletingSizes",
+				SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+			{Label = "Avoid Deleting These Levels", UtilityMultiDropdownKey = "AvoidDeletingLevels",
+				SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
 			{
 				Label = "Never Delete",
 				UtilityToggleKey = "NeverDeleteEnabled",
@@ -10502,19 +10636,19 @@ end
 	createEmptyCollapsiblePanel(
 		tabs.Inventory, 10, 2, 1, "Auto Equip",
 		{
-			{Label = "Auto Equip (Hold)", UtilityToggleKey = "AutoEquipModeHold", UtilityExclusiveGroup = "AutoEquipMode"},
-			{Label = "Equip Best Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
-			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
-			{Label = "Brainrot To Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
-			{Label = "Auto Equip (Mount)", UtilityToggleKey = "AutoEquipModeMount", UtilityExclusiveGroup = "AutoEquipMode"},
-			{Label = "Equip Best Mountable Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
-			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
-			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedMountableBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
-			{Label = "Auto Equip (Hold + Mount)", UtilityToggleKey = "AutoEquipModeHoldMount", UtilityExclusiveGroup = "AutoEquipMode"},
-			{Label = "Equip Best Brainrot + Mountable Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
-			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
-			{Label = "Brainrot To Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
-			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedMountableBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Auto Equip (Hold)", UtilityToggleKey = "AutoEquipModeHold", UtilityExclusiveGroup = "AutoEquipMode", SeparatorGroup = "AutoEquipHoldGroup"},
+			{Label = "Equip Best Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipHoldGroup"},
+			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipHoldGroup"},
+			{Label = "Brainrot To Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipHoldGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Auto Equip (Mount)", UtilityToggleKey = "AutoEquipModeMount", UtilityExclusiveGroup = "AutoEquipMode", SeparatorGroup = "AutoEquipMountGroup"},
+			{Label = "Equip Best Mountable Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipMountGroup"},
+			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipMountGroup"},
+			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipMountGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedMountableBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Auto Equip (Hold + Mount)", UtilityToggleKey = "AutoEquipModeHoldMount", UtilityExclusiveGroup = "AutoEquipMode", SeparatorGroup = "AutoEquipHoldMountGroup"},
+			{Label = "Equip Best Brainrot + Mountable Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipHoldMountGroup"},
+			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipHoldMountGroup"},
+			{Label = "Brainrot To Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipHoldMountGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipHoldMountGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedMountableBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
 		}
 	)
 	createEmptyCollapsiblePanel(
@@ -10525,11 +10659,12 @@ end
 		"Opening Offer",
 		{
 			{Label = "Autoshow Best Brainrots", UtilityToggleKey = "AutoshowBestBrainrots", UtilityExclusiveGroup = "OpeningOfferBrainrotMode"},
-			{Label = "Custom Opening Brainrots", UtilityToggleKey = "CustomOpeningOffer", UtilityExclusiveGroup = "OpeningOfferBrainrotMode"},
+			{Label = "Custom Opening Brainrots", UtilityToggleKey = "CustomOpeningOffer", UtilityExclusiveGroup = "OpeningOfferBrainrotMode", SeparatorGroup = "OpeningOfferBrainrotsGroup"},
 			{
 				Label = "Brainrot 1",
 				UtilityDropdownKey = "OpeningOfferBrainrot1",
 				UtilityParentKey = "CustomOpeningOffer",
+				SeparatorGroup = "OpeningOfferBrainrotsGroup",
 				Placeholder = "None",
 				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
@@ -10539,6 +10674,7 @@ end
 				Label = "Brainrot 2",
 				UtilityDropdownKey = "OpeningOfferBrainrot2",
 				UtilityParentKey = "CustomOpeningOffer",
+				SeparatorGroup = "OpeningOfferBrainrotsGroup",
 				Placeholder = "None",
 				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
@@ -10548,6 +10684,7 @@ end
 				Label = "Brainrot 3",
 				UtilityDropdownKey = "OpeningOfferBrainrot3",
 				UtilityParentKey = "CustomOpeningOffer",
+				SeparatorGroup = "OpeningOfferBrainrotsGroup",
 				Placeholder = "None",
 				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
@@ -10557,6 +10694,7 @@ end
 				Label = "Brainrot 4",
 				UtilityDropdownKey = "OpeningOfferBrainrot4",
 				UtilityParentKey = "CustomOpeningOffer",
+				SeparatorGroup = "OpeningOfferBrainrotsGroup",
 				Placeholder = "None",
 				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
@@ -10566,6 +10704,7 @@ end
 				Label = "Brainrot 5",
 				UtilityDropdownKey = "OpeningOfferBrainrot5",
 				UtilityParentKey = "CustomOpeningOffer",
+				SeparatorGroup = "OpeningOfferBrainrotsGroup",
 				Placeholder = "None",
 				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
@@ -10575,14 +10714,15 @@ end
 				Label = "Brainrot 6",
 				UtilityDropdownKey = "OpeningOfferBrainrot6",
 				UtilityParentKey = "CustomOpeningOffer",
+				SeparatorGroup = "OpeningOfferBrainrotsGroup",
 				Placeholder = "None",
 				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			},
 			{Label = "Autoshow All Tokens", UtilityToggleKey = "AutoshowAllTokens", UtilityExclusiveGroup = "OpeningOfferTokenMode"},
-			{Label = "Custom Opening Tokens", UtilityToggleKey = "CustomOpeningTokens", UtilityExclusiveGroup = "OpeningOfferTokenMode"},
-			{Label = "Custom Token Amount", UtilitySliderKey = "OpeningOfferTokenAmount", UtilityParentKey = "CustomOpeningTokens", MinValue = 0, MaxValue = 1000000, MaxValueProvider = function() return autoServerHopState.CurrentTradeTokenBalance() end, UnitLabel = "Tokens"},
+			{Label = "Custom Opening Tokens", UtilityToggleKey = "CustomOpeningTokens", UtilityExclusiveGroup = "OpeningOfferTokenMode", SeparatorGroup = "OpeningOfferTokensGroup"},
+			{Label = "Custom Token Amount", UtilitySliderKey = "OpeningOfferTokenAmount", UtilityParentKey = "CustomOpeningTokens", SeparatorGroup = "OpeningOfferTokensGroup", MinValue = 0, MaxValue = 1000000, MaxValueProvider = function() return autoServerHopState.CurrentTradeTokenBalance() end, UnitLabel = "Tokens"},
 		}
 	)
 	createEmptyCollapsiblePanel(
@@ -10592,15 +10732,15 @@ end
 		3,
 		"Trade Delays",
 		{
-			{Label = "Custom Delays", UtilityToggleKey = "CustomDelays"},
-			{Label = "Initial Delay", UtilitySliderKey = "InitialJoinDelay", UtilityParentKey = "CustomDelays", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
-			{Label = "Delay After Trade Message", UtilitySliderKey = "DelayAfterTradeMessage", UtilityParentKey = "CustomDelays", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
-			{Label = "Reaction Delay", UtilitySliderKey = "ReactionDelay", UtilityParentKey = "CustomDelays", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
-			{Label = "Add Brainrot Delay", UtilitySliderKey = "AddBrainrotDelay", UtilityParentKey = "CustomDelays", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
-			{Label = "Remove Brainrot Delay", UtilitySliderKey = "RemoveBrainrotDelay", UtilityParentKey = "CustomDelays", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
-			{Label = "Add Token Delay", UtilitySliderKey = "AddTokenDelay", UtilityParentKey = "CustomDelays", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
-			{Label = "Remove Token Delay", UtilitySliderKey = "RemoveTokenDelay", UtilityParentKey = "CustomDelays", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
-			{Label = "Accept Delay", UtilitySliderKey = "AcceptOfferDelay", UtilityParentKey = "CustomDelays", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
+			{Label = "Custom Delays", UtilityToggleKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup"},
+			{Label = "Initial Delay", UtilitySliderKey = "InitialJoinDelay", UtilityParentKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
+			{Label = "Delay After Trade Message", UtilitySliderKey = "DelayAfterTradeMessage", UtilityParentKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
+			{Label = "Reaction Delay", UtilitySliderKey = "ReactionDelay", UtilityParentKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
+			{Label = "Add Brainrot Delay", UtilitySliderKey = "AddBrainrotDelay", UtilityParentKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
+			{Label = "Remove Brainrot Delay", UtilitySliderKey = "RemoveBrainrotDelay", UtilityParentKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
+			{Label = "Add Token Delay", UtilitySliderKey = "AddTokenDelay", UtilityParentKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
+			{Label = "Remove Token Delay", UtilitySliderKey = "RemoveTokenDelay", UtilityParentKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
+			{Label = "Accept Delay", UtilitySliderKey = "AcceptOfferDelay", UtilityParentKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
 		}
 	)
 	createEmptyCollapsiblePanel(
@@ -10610,10 +10750,11 @@ end
 		1,
 		"Auto Choose",
 		{
-			{Label = "Auto Choose Game", UtilityToggleKey = "AutoChooseGame"},
+			{Label = "Auto Choose Game", UtilityToggleKey = "AutoChooseGame", SeparatorGroup = "AutoChooseGameGroup"},
 			{
 				Label = "Game To Choose",
 				UtilityDropdownKey = "GameToChoose",
+				SeparatorGroup = "AutoChooseGameGroup",
 				UtilityParentKey = "AutoChooseGame",
 				ClearsUtilityMultiDropdownKey = "FallbackGameChoices",
 				Options = {"Candy Bomb", "Popcorn Burst", "Higher Or Lower", "Connect 4", "Battle Ship", "Knockout", "Football Draft"},
@@ -10621,52 +10762,60 @@ end
 			{
 				Label = "Round 1 Time Before Choice",
 				UtilitySliderKey = "AutoChooseRound1Delay",
+				SeparatorGroup = "AutoChooseGameGroup",
 				UtilityParentKey = "AutoChooseGame",
 				MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds",
 			},
 			{
 				Label = "Round 2 Time Before Choice",
 				UtilitySliderKey = "AutoChooseRound2Delay",
+				SeparatorGroup = "AutoChooseGameGroup",
 				UtilityParentKey = "AutoChooseGame",
 				MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds",
 			},
 			{
 				Label = "Round 3 Time Before Choice",
 				UtilitySliderKey = "AutoChooseRound3Delay",
+				SeparatorGroup = "AutoChooseGameGroup",
 				UtilityParentKey = "AutoChooseGame",
 				MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds",
 			},
 			{
 				Label = "Match Opponent Before Time",
 				UtilityToggleKey = "MatchOpponentGame",
+				SeparatorGroup = "AutoChooseGameGroup",
 				UtilityParentKey = "AutoChooseGame",
 			},
 			{
 				Label = "Choices To Match",
 				UtilityMultiDropdownKey = "FallbackGameChoices",
+				SeparatorGroup = "AutoChooseGameGroup",
 				UtilityParentKeys = {"AutoChooseGame", "MatchOpponentGame"},
 				ExcludeUtilityDropdownKey = "GameToChoose",
 				Options = {"Candy Bomb", "Popcorn Burst", "Higher Or Lower", "Connect 4", "Battle Ship", "Knockout", "Football Draft"},
 			},
-			{Label = "Auto Choose Rounds", UtilityToggleKey = "AutoChooseRounds"},
+			{Label = "Auto Choose Rounds", UtilityToggleKey = "AutoChooseRounds", SeparatorGroup = "AutoChooseRoundsGroup"},
 			{
 				Label = "Rounds To Choose",
 				UtilityDropdownKey = "RoundsToChoose",
+				SeparatorGroup = "AutoChooseRoundsGroup",
 				UtilityParentKey = "AutoChooseRounds",
 				ClearsUtilityMultiDropdownKey = "FallbackRoundChoices",
 				Options = {"1", "3", "5"},
 			},
-			{Label = "Round 1 Time Before Choice", UtilitySliderKey = "AutoChooseRoundsRound1Delay", UtilityParentKey = "AutoChooseRounds", MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds"},
-			{Label = "Round 2 Time Before Choice", UtilitySliderKey = "AutoChooseRoundsRound2Delay", UtilityParentKey = "AutoChooseRounds", MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds"},
-			{Label = "Round 3 Time Before Choice", UtilitySliderKey = "AutoChooseRoundsRound3Delay", UtilityParentKey = "AutoChooseRounds", MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds"},
+			{Label = "Round 1 Time Before Choice", UtilitySliderKey = "AutoChooseRoundsRound1Delay", UtilityParentKey = "AutoChooseRounds", SeparatorGroup = "AutoChooseRoundsGroup", MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds"},
+			{Label = "Round 2 Time Before Choice", UtilitySliderKey = "AutoChooseRoundsRound2Delay", UtilityParentKey = "AutoChooseRounds", SeparatorGroup = "AutoChooseRoundsGroup", MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds"},
+			{Label = "Round 3 Time Before Choice", UtilitySliderKey = "AutoChooseRoundsRound3Delay", UtilityParentKey = "AutoChooseRounds", SeparatorGroup = "AutoChooseRoundsGroup", MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds"},
 			{
 				Label = "Match Opponent Before Time",
 				UtilityToggleKey = "MatchOpponentRounds",
+				SeparatorGroup = "AutoChooseRoundsGroup",
 				UtilityParentKey = "AutoChooseRounds",
 			},
 			{
 				Label = "Choices To Match",
 				UtilityMultiDropdownKey = "FallbackRoundChoices",
+				SeparatorGroup = "AutoChooseRoundsGroup",
 				UtilityParentKeys = {"AutoChooseRounds", "MatchOpponentRounds"},
 				ExcludeUtilityDropdownKey = "RoundsToChoose",
 				Options = {"1", "3", "5"},
@@ -10696,16 +10845,16 @@ end
 	)
 	do
 		local boothSettings = {
-			{Label = "Auto Booth", UtilityToggleKey = "AutoBooth"},
-			{Label = "Booth Name", UtilityTextKey = "AutoBoothName", UtilityParentKey = "AutoBooth", Placeholder = "Booth Name"},
+			{Label = "Auto Booth", UtilityToggleKey = "AutoBooth", SeparatorGroup = "AutoBoothIdentityGroup"},
+			{Label = "Booth Name", UtilityTextKey = "AutoBoothName", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothIdentityGroup", Placeholder = "Booth Name"},
 			{Label = "List Best Brainrot First", UtilityToggleKey = "AutoBoothListBestFirst", UtilityParentKey = "AutoBooth", UtilityExclusiveGroup = "AutoBoothSortOrder"},
 			{Label = "List Worst Brainrot First", UtilityToggleKey = "AutoBoothListWorstFirst", UtilityParentKey = "AutoBooth", UtilityExclusiveGroup = "AutoBoothSortOrder"},
-			{Label = "Avoid Listing Brainrots With These Traits", UtilityMultiDropdownKey = "AutoBoothAvoidTraits", UtilityParentKey = "AutoBooth", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Avoid Listing Brainrots With These Mutations", UtilityMultiDropdownKey = "AutoBoothAvoidMutations", UtilityParentKey = "AutoBooth", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Avoid Listing Signed Brainrots", UtilityToggleKey = "AutoBoothAvoidSignedBrainrots", UtilityParentKey = "AutoBooth"},
-			{Label = "Avoid Listing Brainrots With These Sizes", UtilityMultiDropdownKey = "AutoBoothAvoidSizes", UtilityParentKey = "AutoBooth", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
-			{Label = "Avoid Listing Brainrots At These Levels", UtilityMultiDropdownKey = "AutoBoothAvoidLevels", UtilityParentKey = "AutoBooth", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
-			{Label = "Avoid Listing These Specific Brainrots", UtilityMultiDropdownKey = "AutoBoothAvoidBrainrots", UtilityParentKey = "AutoBooth", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothBrainrotOptions() end},
+			{Label = "Avoid Listing Brainrots With These Traits", UtilityMultiDropdownKey = "AutoBoothAvoidTraits", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAvoidGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Avoid Listing Brainrots With These Mutations", UtilityMultiDropdownKey = "AutoBoothAvoidMutations", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAvoidGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Avoid Listing Signed Brainrots", UtilityToggleKey = "AutoBoothAvoidSignedBrainrots", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAvoidGroup"},
+			{Label = "Avoid Listing Brainrots With These Sizes", UtilityMultiDropdownKey = "AutoBoothAvoidSizes", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAvoidGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+			{Label = "Avoid Listing Brainrots At These Levels", UtilityMultiDropdownKey = "AutoBoothAvoidLevels", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAvoidGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
+			{Label = "Avoid Listing These Specific Brainrots", UtilityMultiDropdownKey = "AutoBoothAvoidBrainrots", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAvoidGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothBrainrotOptions() end},
 		}
 		local boothMessages = {
 			{Label = "Send Message When All Listings Are Listed", UtilityToggleKey = "AutoBoothMessageAllListingsCompleted", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAllListingsMessageGroup"},
@@ -10739,8 +10888,8 @@ end
 			add({Label = "List When You Have At Least", UtilitySliderKey = prefix .. "MinimumCopies", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", MinValue = 1, MaxValue = 100, UnitLabel = "Owned"})
 			add({Label = "List Specific Brainrot", UtilityToggleKey = prefix .. "ListSpecificBrainrot", UtilityParentKeys = parents, UtilityExclusiveGroup = prefix .. "SelectionMode", UtilityExclusiveRequired = true, SeparatorGroup = prefix .. "ListSpecificBrainrotGroup"})
 			add({Label = "Owned Brainrot", UtilityDropdownKey = prefix .. "SpecificBrainrotId", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListSpecificBrainrot"}, SeparatorGroup = prefix .. "ListSpecificBrainrotGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true})
-			add({Label = "List Above This Inventory Or Higher", UtilitySliderKey = prefix .. "InventoryThreshold", UtilityParentKeys = parents, MinValue = 1, MaxValue = 100, UnitLabel = "Inventory"})
-			add({Label = "Listing " .. tostring(index) .. " Tokens", UtilitySliderKey = prefix .. "Tokens", UtilityParentKeys = parents, MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"})
+			add({Label = "List Above This Inventory Or Higher", UtilitySliderKey = prefix .. "InventoryThreshold", UtilityParentKeys = parents, SeparatorGroup = prefix .. "ListingConditionsGroup", MinValue = 1, MaxValue = 100, UnitLabel = "Inventory"})
+			add({Label = "Listing " .. tostring(index) .. " Tokens", UtilitySliderKey = prefix .. "Tokens", UtilityParentKeys = parents, SeparatorGroup = prefix .. "ListingConditionsGroup", MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"})
 			add({Label = "Message When Listed", UtilityToggleKey = prefix .. "MessageWhenListed", UtilityParentKeys = parents, SeparatorGroup = prefix .. "MessageWhenListedGroup"})
 			add({Label = "Message", UtilityTextKey = prefix .. "ListedMessage", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "MessageWhenListed"}, SeparatorGroup = prefix .. "MessageWhenListedGroup", Placeholder = "Message to send when listed"})
 			add({Label = "Delay Before Sending Message", UtilitySliderKey = prefix .. "MessageDelay", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "MessageWhenListed"}, SeparatorGroup = prefix .. "MessageWhenListedGroup", MinValue = 0, MaxValue = 30, Step = 0.25, Decimals = 2, UnitLabel = "Seconds"})
@@ -10753,13 +10902,13 @@ end
 		-- All three fallback types stay visible and independent. Each enabled type
 		-- reveals only its own controls immediately beneath it.
 		local features = {
-			{Label = "Next Lower Rarity Fallback Offers", UtilityToggleKey = "FallbackToNextLowerRarityBrainrot"},
-			{Label = "Amount Of Brainrots To Offer", UtilitySliderKey = "FallbackNextLowerRarityAmount", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
-			{Label = "Avoid Offering Brainrots With These Mutations", UtilityMultiDropdownKey = "FallbackAvoidMutations", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Avoid Offering Brainrots With These Traits", UtilityMultiDropdownKey = "FallbackAvoidTraits", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Avoid Offering Signed Brainrots", UtilityToggleKey = "FallbackAvoidSignedBrainrots", UtilityParentKey = "FallbackToNextLowerRarityBrainrot"},
-			{Label = "Avoid Offering Brainrots With These Sizes", UtilityMultiDropdownKey = "FallbackAvoidSizes", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
-			{Label = "Avoid Offering Brainrots At These Levels", UtilityMultiDropdownKey = "FallbackAvoidLevels", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
+			{Label = "Next Lower Rarity Fallback Offers", UtilityToggleKey = "FallbackToNextLowerRarityBrainrot", SeparatorGroup = "MinigameFallbackLowerGroup"},
+			{Label = "Amount Of Brainrots To Offer", UtilitySliderKey = "FallbackNextLowerRarityAmount", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
+			{Label = "Avoid Offering Brainrots With These Mutations", UtilityMultiDropdownKey = "FallbackAvoidMutations", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Avoid Offering Brainrots With These Traits", UtilityMultiDropdownKey = "FallbackAvoidTraits", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Avoid Offering Signed Brainrots", UtilityToggleKey = "FallbackAvoidSignedBrainrots", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot"},
+			{Label = "Avoid Offering Brainrots With These Sizes", UtilityMultiDropdownKey = "FallbackAvoidSizes", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+			{Label = "Avoid Offering Brainrots At These Levels", UtilityMultiDropdownKey = "FallbackAvoidLevels", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
 			{Label = "Specific Brainrots / Items Fallback", UtilityToggleKey = "FallbackToSpecificBrainrotItem"},
 		}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
@@ -10775,19 +10924,19 @@ end
 		end
 		features[#features + 1] = {Label = "Token Fallback Offers", UtilityToggleKey = "FallbackToTokens"}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
-			features[#features + 1] = {Label = rarity .. " Tokens", UtilitySliderKey = "FallbackTokens" .. rarity, UtilityParentKey = "FallbackToTokens", MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"}
-			features[#features + 1] = {Label = rarity .. " Offer All Tokens", UtilityToggleKey = "Fallback" .. rarity .. "OfferAllTokens", UtilityParentKey = "FallbackToTokens"}
+			features[#features + 1] = {Label = rarity .. " Tokens", UtilitySliderKey = "FallbackTokens" .. rarity, UtilityParentKey = "FallbackToTokens", SeparatorGroup = "FallbackTokens" .. rarity .. "Group", MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"}
+			features[#features + 1] = {Label = rarity .. " Offer All Tokens", UtilityToggleKey = "Fallback" .. rarity .. "OfferAllTokens", UtilityParentKey = "FallbackToTokens", SeparatorGroup = "FallbackTokens" .. rarity .. "Group"}
 		end
 		createEmptyCollapsiblePanel(tabs.Fallbacks, 17, 1, 1, "Minigame Trade Fallbacks", features)
 
 		local regularFeatures = {
-			{Label = "Next Lower Rarity Fallback Offers", UtilityToggleKey = "RegularFallbackOffers"},
-			{Label = "Amount Of Brainrots To Offer", UtilitySliderKey = "RegularFallbackNextLowerRarityAmount", UtilityParentKey = "RegularFallbackOffers", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
-			{Label = "Avoid Offering Brainrots With These Mutations", UtilityMultiDropdownKey = "RegularFallbackAvoidMutations", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Avoid Offering Brainrots With These Traits", UtilityMultiDropdownKey = "RegularFallbackAvoidTraits", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Avoid Offering Signed Brainrots", UtilityToggleKey = "RegularFallbackAvoidSignedBrainrots", UtilityParentKey = "RegularFallbackOffers"},
-			{Label = "Avoid Offering Brainrots With These Sizes", UtilityMultiDropdownKey = "RegularFallbackAvoidSizes", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
-			{Label = "Avoid Offering Brainrots At These Levels", UtilityMultiDropdownKey = "RegularFallbackAvoidLevels", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
+			{Label = "Next Lower Rarity Fallback Offers", UtilityToggleKey = "RegularFallbackOffers", SeparatorGroup = "RegularFallbackLowerGroup"},
+			{Label = "Amount Of Brainrots To Offer", UtilitySliderKey = "RegularFallbackNextLowerRarityAmount", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
+			{Label = "Avoid Offering Brainrots With These Mutations", UtilityMultiDropdownKey = "RegularFallbackAvoidMutations", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Avoid Offering Brainrots With These Traits", UtilityMultiDropdownKey = "RegularFallbackAvoidTraits", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Avoid Offering Signed Brainrots", UtilityToggleKey = "RegularFallbackAvoidSignedBrainrots", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers"},
+			{Label = "Avoid Offering Brainrots With These Sizes", UtilityMultiDropdownKey = "RegularFallbackAvoidSizes", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+			{Label = "Avoid Offering Brainrots At These Levels", UtilityMultiDropdownKey = "RegularFallbackAvoidLevels", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
 			{Label = "Specific Brainrots / Items Fallback", UtilityToggleKey = "RegularFallbackToSpecificItems"},
 		}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
@@ -10803,8 +10952,8 @@ end
 		end
 		regularFeatures[#regularFeatures + 1] = {Label = "Token Fallback Offers", UtilityToggleKey = "RegularFallbackToTokens"}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
-			regularFeatures[#regularFeatures + 1] = {Label = rarity .. " Tokens", UtilitySliderKey = "RegularFallbackTokens" .. rarity, UtilityParentKey = "RegularFallbackToTokens", MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"}
-			regularFeatures[#regularFeatures + 1] = {Label = rarity .. " Offer All Tokens", UtilityToggleKey = "RegularFallback" .. rarity .. "OfferAllTokens", UtilityParentKey = "RegularFallbackToTokens"}
+			regularFeatures[#regularFeatures + 1] = {Label = rarity .. " Tokens", UtilitySliderKey = "RegularFallbackTokens" .. rarity, UtilityParentKey = "RegularFallbackToTokens", SeparatorGroup = "RegularFallbackTokens" .. rarity .. "Group", MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"}
+			regularFeatures[#regularFeatures + 1] = {Label = rarity .. " Offer All Tokens", UtilityToggleKey = "RegularFallback" .. rarity .. "OfferAllTokens", UtilityParentKey = "RegularFallbackToTokens", SeparatorGroup = "RegularFallbackTokens" .. rarity .. "Group"}
 		end
 		createEmptyCollapsiblePanel(tabs.Fallbacks, 36, 2, 1, "Regular Trade Fallbacks", regularFeatures)
 	end
@@ -10859,8 +11008,8 @@ end
 		4,
 		"Join Player",
 		{
-			{Label = "", HideLabel = true, UtilityTextKey = "JoinPlayerName", Placeholder = "Player Name", EditingKey = "JoinPlayerEditing", RevisionKey = "JoinPlayerRevision"},
-			{Label = "Join Player", ActionButton = true, Action = "JoinPlayer"},
+			{Label = "", HideLabel = true, UtilityTextKey = "JoinPlayerName", Placeholder = "Player Name", EditingKey = "JoinPlayerEditing", RevisionKey = "JoinPlayerRevision", SeparatorGroup = "JoinPlayerGroup"},
+			{Label = "Join Player", ActionButton = true, Action = "JoinPlayer", SeparatorGroup = "JoinPlayerGroup"},
 		}
 	)
 	createEmptyCollapsiblePanel(
