@@ -80,7 +80,7 @@ if viewportSize.X < 320 or viewportSize.Y < 240 then
 end
 local DEFAULT_WIDTH_SCALE = 0.60
 local DEFAULT_HEIGHT_SCALE = 0.70
-local FONT_SIZE_SCALE = 1.17188
+local FONT_SIZE_SCALE = 0.90
 local function isPhonePanelLayout()
 	local currentCamera = workspace.CurrentCamera or camera
 	local currentViewport = currentCamera and currentCamera.ViewportSize or viewportSize
@@ -115,17 +115,15 @@ end)()
 local function setResponsiveTextSize(object, baseSize)
 	object.TextSize = responsiveTextSize(baseSize)
 end
-local BLACK = RGB(7, 7, 8)
+local BLACK = RGB(9, 10, 12)
 local PINK = RGB(255, 0, 98)
 local LOGO_FONT = Enum.Font.GothamBlack
-local MENU_FONT = Enum.Font.Nunito
-local MENU_FONT_REGULAR_FACE = Font.new("rbxasset://fonts/families/Nunito.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
--- Keep every non-logo UI label at regular weight. The TuffHub logo uses its own
--- LOGO_FONT_FACE below and is intentionally untouched.
+local MENU_FONT = Enum.Font.BuilderSans
+local MENU_FONT_REGULAR_FACE = Font.new("rbxasset://fonts/families/BuilderSans.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
 local MENU_FONT_FACE = MENU_FONT_REGULAR_FACE
-local MENU_FONT_SEMIBOLD_FACE = MENU_FONT_REGULAR_FACE
-local MENU_FONT_BOLD_FACE = MENU_FONT_REGULAR_FACE
-local PANEL_FONT_FACE = MENU_FONT_REGULAR_FACE
+local MENU_FONT_SEMIBOLD_FACE = Font.new("rbxasset://fonts/families/BuilderSans.json", Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+local MENU_FONT_BOLD_FACE = Font.new("rbxasset://fonts/families/BuilderSans.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+local PANEL_FONT_FACE = MENU_FONT_SEMIBOLD_FACE
 local function capitalizeUiWords(value)
 	value = tostring(value or "")
 	return (string.gsub(value, "%S+", function(word)
@@ -176,69 +174,69 @@ local LOGO_FONT_FACE = (function()
 	end
 	return face
 end)()
-local CORNER_RADIUS = px(12)
+local CORNER_RADIUS = px(10)
 local LINE_THICKNESS = px(1)
-local LINE_TRANSPARENCY = 0.28
-local LINE_COLOR = RGB(44, 46, 51)
+local LINE_TRANSPARENCY = 0.12
+local LINE_COLOR = RGB(48, 50, 57)
 local TOGGLE_KEY = Enum.KeyCode.LeftControl
 local SIDEBAR_PADDING = px(10)
-local SIDEBAR_WIDTH_SCALE = 0.25
-local COLLAPSED_SIDEBAR_WIDTH = px(64)
+local SIDEBAR_WIDTH_SCALE = 0.205
+local COLLAPSED_SIDEBAR_WIDTH = px(58)
 local LOGO_WIDTH = px(110)
 local LOGO_HEIGHT = px(36)
 local LOGO_TEXT_SIZE = 33.8
-local LOGO_SEARCH_GAP = px(12)
+local LOGO_SEARCH_GAP = px(10)
 local SEARCH_TOP_GAP = LOGO_SEARCH_GAP
-local SEARCH_HEIGHT = px(36 * 0.85)
+local SEARCH_HEIGHT = px(34)
 local SEARCH_CORNER_RADIUS = px(7)
 local SEARCH_BACKGROUND = RGB(
-		30,
-		30,
-		35
+		18,
+		19,
+		23
 	)
-local SEARCH_BACKGROUND_TRANSPARENCY = 0.34
-local SEARCH_FOCUSED_TRANSPARENCY = 0.22
-local SEARCH_TEXT_SIZE = 15
+local SEARCH_BACKGROUND_TRANSPARENCY = 0
+local SEARCH_FOCUSED_TRANSPARENCY = 0
+local SEARCH_TEXT_SIZE = 14
 local MUTED_TEXT_COLOR = RGB(
-		66,
-		69,
-		75
+		126,
+		130,
+		139
 	)
-local SEARCH_TEXT_COLOR = MUTED_TEXT_COLOR
-local SEARCH_PLACEHOLDER_COLOR = MUTED_TEXT_COLOR
+local SEARCH_TEXT_COLOR = RGB(226, 229, 235)
+local SEARCH_PLACEHOLDER_COLOR = RGB(119, 123, 132)
 local SEARCH_ICON_SIZE = px(15)
-local MENU_TOP_GAP = px(12)
+local MENU_TOP_GAP = px(10)
 local MENU_ITEM_HEIGHT = px(36)
-local MENU_ITEM_GAP = px(8)
+local MENU_ITEM_GAP = px(5)
 local MENU_TEXT_SIZE = 14
 local MENU_CORNER_RADIUS = px(7)
 local MENU_NORMAL_TRANSPARENCY = 1
-local MENU_HOVER_TRANSPARENCY = 0.72
-local MENU_SELECTED_TRANSPARENCY = SEARCH_BACKGROUND_TRANSPARENCY
-local MENU_TEXT_IDLE = MUTED_TEXT_COLOR
-local MENU_TEXT_SELECTED = RGB(228, 231, 236)
-local MENU_TEXT_HOVER = RGB(172, 176, 184)
-local MENU_ACTIVE_LINE_WIDTH = px(4)
-local MENU_ACTIVE_LINE_HEIGHT = px(20)
-local MENU_ICON_SIZE = px(21)
-local MENU_ICON_X = px(9)
-local MENU_TEXT_X = px(40)
-local CONTENT_SIDE_PADDING = px(12)
-local CONTENT_TOP_PADDING = px(56)
+local MENU_HOVER_TRANSPARENCY = 0.36
+local MENU_SELECTED_TRANSPARENCY = 0
+local MENU_TEXT_IDLE = RGB(133, 137, 146)
+local MENU_TEXT_SELECTED = RGB(234, 236, 241)
+local MENU_TEXT_HOVER = RGB(205, 208, 215)
+local MENU_ACTIVE_LINE_WIDTH = px(3)
+local MENU_ACTIVE_LINE_HEIGHT = px(22)
+local MENU_ICON_SIZE = px(20)
+local MENU_ICON_X = px(10)
+local MENU_TEXT_X = px(39)
+local CONTENT_SIDE_PADDING = px(10)
+local CONTENT_TOP_PADDING = px(52)
 local CONTENT_COLUMN_GAP = px(10)
-local CONTENT_ROW_GAP = px(10)
+local CONTENT_ROW_GAP = px(8)
 local PANEL_SCROLL_EDGE_INSET = px(2)
-local PANEL_HEADER_HEIGHT = px(40)
+local PANEL_HEADER_HEIGHT = px(38)
 local PANEL_EXPANDED_HEIGHT = px(128)
 local PANEL_COLLAPSED_HEIGHT = PANEL_HEADER_HEIGHT
-local PANEL_CORNER_RADIUS = px(10)
+local PANEL_CORNER_RADIUS = px(8)
 local PANEL_BACKGROUND = RGB(
-		15,
-		15,
-		18
+		13,
+		14,
+		17
 	)
-local PANEL_CHEVRON_COLOR = MUTED_TEXT_COLOR
-local FEATURE_OFF_COLOR=RGB(24,25,29)
+local PANEL_CHEVRON_COLOR = RGB(145, 149, 158)
+local FEATURE_OFF_COLOR=RGB(19,20,24)
 -- Standalone minigames build: always initialize, regardless of PlaceId/GameId.
 local MINIGAME_MODE = true
 local MINIGAME_AUTOPLAY_KEY = "__TUFFHUB_MINIGAME_AUTOPLAY"
@@ -3780,30 +3778,30 @@ local PANEL_TWEEN_INFO = TI(
 		Enum.EasingStyle.Quart,
 		Enum.EasingDirection.Out
 	)
-local CONTROL_BUTTON_SIZE = px(34)
+local CONTROL_BUTTON_SIZE = px(30)
 local CONTROL_BUTTON_GAP = px(6)
 local CONTROL_TOP_MARGIN = px(10)
 local CONTROL_RIGHT_MARGIN = CONTENT_SIDE_PADDING + PANEL_SCROLL_EDGE_INSET
-local CONTROL_CORNER_RADIUS = px(8)
+local CONTROL_CORNER_RADIUS = px(7)
 local CONTROL_BACKGROUND = RGB(
+		17,
 		18,
-		19,
-		23
+		22
 	)
 local CONTROL_HOVER_BACKGROUND = RGB(
-		24,
-		25,
-		30
+		27,
+		28,
+		33
 	)
 local CONTROL_ICON_COLOR = RGB(
-		92,
-		96,
-		105
+		130,
+		134,
+		143
 	)
 local CONTROL_ICON_HOVER_COLOR = RGB(
-		140,
-		144,
-		152
+		221,
+		224,
+		230
 	)
 local oldGui = guiParent:FindFirstChild(
 		"TuffHubGUI"
@@ -4118,9 +4116,9 @@ rawset(_G, "__TUFFHUB_ENSURE_INPUT_BORDER", function(object)
 		stroke.Name = "InputBorder"
 		stroke.Parent = object
 	end
-	stroke.Color = RGB(58, 60, 66)
+	stroke.Color = RGB(58, 61, 69)
 	stroke.Thickness = px(1)
-	stroke.Transparency = 0.22
+	stroke.Transparency = 0.10
 	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 	stroke.LineJoinMode = Enum.LineJoinMode.Round
 	return stroke
@@ -4155,9 +4153,9 @@ ensureCorner(
 )
 local outerBorder = New("UIStroke")
 outerBorder.Name = "OuterBorder"
-outerBorder.Color = RGB(58, 60, 66)
+outerBorder.Color = RGB(58, 61, 69)
 outerBorder.Thickness = LINE_THICKNESS
-outerBorder.Transparency = 0
+outerBorder.Transparency = 0.08
 outerBorder.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 outerBorder.LineJoinMode = Enum.LineJoinMode.Round
 outerBorder.Parent = outerBorderOverlay
@@ -4418,9 +4416,6 @@ local EMBEDDED_ICONS={
 	Home=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAADc0lEQVR4nO2by28NURzHvz/UgtJYIBEEkZII0YaF/6AhHonHQiIhHgubNrGQIGElttgg8Q+QkqAeG1bSDSIeiYUQj5K0EmmVTcvHYm6J68zcuTNz7mnT+SQ3uTmP3/n+fnPO78ycuVcqmdxYiEGBaZLWSFpSKXor6ZmZ/Qyhp2EALcAZYID/6QdOAy2hdXoBaAfeOxyv5h3QHlpvoQAdwGAK58cYBraG1l0IQBcwWofzY4wCXaH1ZwaYCpzL4Hg1l4iS5sQBmAX01Li6x4DZlc8JkmdJDzArtF+pABYAjxOcca5vaueJZ8DiED6lBlhDcqb/BKzz1T8oRV1BMs6goACdJK/he9RxgwM0AzcS7P0CTnl0KbXQNJk+Uxavw3aTD9/SCGwGbiaIGwWOFjDOIWAkYZy6Zlch0OB1ynjaIQiUqUONWy2iAxgKdSUIuUOQLtPP9jL4vzoau0PgMdM3QFO+HaIS7dsJgwR9YqP2k2YP0JzVeBPwIMH4MLClYJ+y6NxS0RLH/UwzATiZYLSPcXRqQ3Ta1Jeg93i9BluAbzHGngILPfmSGWBhRZuLQepJ0MCeGEN3GMfP5UTnEHdjtO+ux9B5h4HPwAyP+gsBmEl0wlzNWVf7KTF25jnKes3sR3FS/WBm3yU9dFTNd7WPC4DrhcloVlEBGHGUOX2NC8CkwfvdG9EDyg5JS5X+VRyS3ki6amZPfGmTPAYAmC7poqS9OcwcBS5LOmxmrmmdG58z4ILyOS9FM+ZA5fvBnLaceMkBwHpJ+wo0uR9oK9DeH3wlwe0F2zNFeaRwfC2BJY6yj5J6U/bfIKn6dntZHkFx+AqAa2b1mtmuNJ2BK5J2VhVPza3KwaS/DygDEFpAaMoAhBYQmjIAoQWEpgxAaAGhKQMQWkBoygCEFhCaMgB1tA3y34KMpNYaF4BhR9nybFqCsMJRNuRqGBeAl46ytUBnZkkNAjgiabWj6oWrvXOqAK2SXsXUP6/UJeE60sp7JJam/0q5nUdSq5m9rq6IXSvAdUnbagw4Ueg2M+ehalIAFkl6LGmuL1UNol9Su5n1uSpjdwEz+yBpo6QvnoQ1ggFJm+Kcl2psg2b2SFK7pGuK1tFEAUndktoqPsSSer8ElkvaLGmVpDQ/N5mjv2f5byR9TTtWjv5DirL9LVfCKykpKSmp4jcmJq1CdrrMbwAAAABJRU5ErkJggg==]],
 	Main=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAD70lEQVR4nO2bT6gVVRzHv0eflVmEoqYkRAVvo0/QdeHVQpC3yKXmQqKVL6i2uc3auHBn4EIIKqhFK99Cwv4Ltmhh/nmRUNGrCHkUZfog431azBm4XeY3c2bmzMy70/vu7r2/f59zzj3nzm/mSiv6f8t1XcCogJ2S9kh6RNKfkr6S9JFz7m6nhTUtYDvwKdn6CXiu6xobEzAAbhnww3qj61qjy8PfDoBPdajrmqOpAjzAj8BE17XXVkX4VM/EqmNVrEBlBAwkzUq63zD5WslJ8Jbx+e4GympHATN/GdjobfcaNq/FqqfVFRA480875xb86wOG3S+RS2teZWbe268C5g3bHV2ylBbwFPnn/H/gvc/AsL3eFUclVYH3fmcM+1e74KikGvD3AAsZ9kvAY12wlFZVeO970PD5om2OSqoD7/3fM/xm2uSopAjwD5J9WtwFNrfJUlp14X2Mo4bvbFsclRQD3sc5b/gfaYOjkiLCbyZZ6qO6DTzQBktpxYL3sV4yYrzTNEclxYT38S4ZcaabYqjcFKX8hU1RvCck3cioaVHSPklFTdGfnXO/huSqLUpe2ATGfCUnXqjmgBma7Bg1Ae/jnogwAKk+B9aPDbyPfTjiAAB8RsyV0CS8j38f8F3kQTgWC35Pk/BDebYD30ccgGtFOQtPAWCrpKuSNhgmpXb7gHxrJR2UtEPS6kC3dZJekLQ247OHnXM36xR0uumZjyHgTaPGnXWCrgZ+HwP4jcC3Rp2P1wk8aQSdW2bwl406F4DczndRW9y6ALkQ6ztfR34SLkiylvnbzrmlvBi5myDJBpjVg1+UdFbSXwF1StKSpOuSPnDO3Qn0yVUA/E1JU7U2QJ9ozlheVfQDMFWrIBUue0iO7Cfr5kmTzUQcgHQQso6rmPCDKPA+4QTJz8qYqvS0R+vwQ4k3RB6EE2MDP1TABHAMuBZhAF4umbsx+EoNEZL29LYC/zVKdumshsmkc+5GYK6i3f6OpGnn3Cch8VoTMG3M1pclYmwKmPl9TXJUFvBuneU/7vDryG6W/gNsCfAfX3hJAo4YhZ8P8B1veEkCZo3ijxb49QJ+E/B3RvGLwEMFfuMNL0nAiwbA+zk+/YCXJOCiAfGsYd8r+EdJHmMZ1W/AvRn2/YGXJOC4AXImw7Zf8JIEXDFgBiN2vYSfMmDmGerL0fVVXVPCvrd/cshm2cHHfFbY+ol7Tlq+V3UxbyPfMt5/nuQm5SlJVj9weV7SlhGwP2dp52k8v/OjAtZgP93db/hUlLvH3y/4VMDrAfB/9BI+FXCI5N9dWfoQmOy6xlSN/XWWZOcfSNolab2keUkfO+e+aSrnilZUXv8C6X11gNREwPYAAAAASUVORK5CYII=]],
 	Settings=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAHCUlEQVR4nO2bWaxeUxTH//vSGlpaLTFGi5irVR7aIqYSUwwlQgyVxhzU/CQSUSElRGNKPKBFxFBDqZpijKqS3N5SBBFNh1uUlpbetnp/HvZ3Of3u2vvb53zn9Jr+j/usvf5r7bPOPmuvdY70P/7bcD1BCuwoaaikvrWhFZLanHPtPWHPBgMwBphFGDOBE3vaztIBbAI8HnG8HlOATXra7lIAtADP5XC+C1OBHnlESwVwWQHnu3BJ1fZVusK1MJ4vaduCKtolDXbOrSnPqvXRUpXiGkbLdn6mpP1cDZKGSfrAkNte0hEV2lctgJuMsF4BDDRktwZWGvI3Vmlj1RGwjTHW6pz7sX7QObdU0hxDvujjk4SqF6CvMbYqIv+bMbZFSbaY2DjvBKCfpJ0krZE0P7RBAQMkHWdcWhhRv8gYOx4YaEVNjaePpF3lfVlQi6RyAWwKjAdagc7M89kBzACOr5MfAcwNvNrOi/CMC8yZBxyakXP4rPJt4HdD9lpgs7KcHwJ8HjAsi1nAHcD0ukXKYhkQDGlgy5qMhU7gdWASMCfBni+Boc06vw/wYwJZKq5M4BxfIt8yYN+izvcCPi3RmCdISG3x4Z3n3NAI84DeRRbgmpIM6ATuApI3XGAjYCKwriQbrs/r/BbATwFn7gSGA0cAzxJ+3sHvCyNzr/5fdgwH3onoX4ePrJH4vWpiwJ6fAOuVHCQeGyCcZMgOASYArwAfA28Cd5PZtZsFMKrm3Mu1RX0BuAHY3ZC9K2D72XkIHzQULAX6l+VUVcC/SZYa9j9gyYeeyx2NsVedc8tLMLCfpGMlDZFPqCSfHH0qaYZz7pdm9DvnfgHekHRG3aUdLPnQAljZXVN3H9hF0gRJp0sK7cprgKck3eic+7YJuq2NsdXJs4HbjRBaCxxWxBrgUmB14Nm00AFcXJDrGOy3xy15lBwZMGw1/ojbK4euO3I4Xo+JOXg2q3GtDeg6OM8COKAtYthbJLxWgPObcL4LDctiwADgo4iO2cnOZ5SOAtZElE4jktkBuxAP+0X4c8N0YHFEbhUwKMLTgr8hIXQAB+RegJrycwmHFMBZkbmPBeYsBE4ms3j4iDultigWpkR4LojYtxo4vZDzGYLDgW8CBK2BOf2w7/5CYCdrTm3eztjR0AFsGZjzRcC2z2kiC60n6YPP9Cx0C0/gjIDsSQlcYwJzu91JYPeA7FQSD0BJJTHn3K+Srghcto6b+xljiyW9mED3gnw5PEXn3gEdV6WW0pNrgs65ryR1Gpes0LSyrjbnHAk8nZLajEtWdtrHGFvnnFvQiKcLVRVFLUfzNGEsuxouXhEkLwCwW0B+hTFmhfAw0goiLfKt83osNsZWGmMbAYMb8XQhaQHwBcZ7A5fnGWNzjbHtJZ2cQDdG0naJOj8L6LiXEouiRwJfB3Zbq5HRdSS1XoOLgJ0jXIOAdmNeB4FiKuGy3dfA4c06P47uZecszonMfTQwZzFwKj7Uu2RbgNMCzgNMjvCcF7FvLTC2qPOHEM8CXyKeCg/G37kQ2vE9hRnAkojcKuJR00I4RwGfzo/K63wL8ElE6TtE6vsZPaFGRx5clMDTD3gvoqOVPB9bAKMDijrw9b/kMjO+llcUt+bg6Q3cQvgAll7LIFwQOSRZyfr6LsKHcipWAecX5DoMe9+6LY+S5w0F04sYlNE5CP/xU2xf6AAmE3nmE7leM3Q/bcmGaoJWxefnZoxyzs2XNBa4XN2Logvki6KvOOesxCovrOJtchXrn14W74/d1Lnfkg9FwHuSLqwbGyjpZknj6wiHSTpT0oGSBsh/5DBH0vOS3ko5AMWA371Hy2eRQ+UPQMskzZb0pHOuPkOcIGkrQ9W7eUj7YneFO/Ht6VHA0dh7RRazgBGFPPd2jAQ+bMDxHHAUcBBwX0BmKbB5XvIym6OTyNcc7QXcQ7zvmAfXFFn9XoS/8iiCp8ikvxHeFnxFpyy0kaOMX2/MXth9tqK4OoHzuhL5vgf2KOR8xqC98R8ZNMJMfAI1jXDoLidQ3Kxx9Qd+DsztxHeFb69xNcJcYM+mnM8Y1hvf3vqI9dtOv+EPRcfUyY8g3FgZF+EJlbhbqdtMgePwPYVshrkOmA1cTNGwT1iMzYFd8ae9IAmwFT4E6/FQZM4jhvwSIvkHfq8aXLMp305fNfBpbT1ei8i/bsg/XKWNVX8patXsYqUq69qvJdliouoF+MEYGw50698D20gabsh/V7pVGVS9ALOMsT6SpuFTaEkSsL+kaZKsZ/jDimyTVP0PE73lf5iwqrwpaJc0yDm3tjyrNjCASwKvthQ0LIf97YFvfRdJbZ/h3/DTlPTnb3NTcjj/CP+W3+ayAE7Ep7FWqtwJvA+csCFt6qlfZ7eTb3d3ZXjLJX3inFvSE/b8j/8y/gDXsy9oq2YXvAAAAABJRU5ErkJggg==]],
-	ConfigsLucide=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAr0lEQVR42u3ZQQ6DMAwAQRzx/y+nl16RoFDbbWbOSKkWk1SwbQAAAACsJc5eOOectxeLiG4BRvaCT4RMnYBv/eAu0zCqFu4yCaNy8Q4R9qzx7fbsp0/AUbTqMHuHu1C50abuAdk7/5mw6Ztgtwglp0Cnf4Rlx2C8/eQx2Hkarm6oY1ucAAIIIIAAAggggAACCCCAACv66H1A11fcJkCA6+KfR/6x7wIdv+sDAABwwwu5DDRI9Ip0wgAAAABJRU5ErkJggg==]],
-	ConfigsFolderLucide=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAr0lEQVR42u3ZQQ6DMAwAQRzx/y+nl16RoFDbbWbOSKkWk1SwbQAAAACsJc5eOOectxeLiG4BRvaCT4RMnYBv/eAu0zCqFu4yCaNy8Q4R9qzx7fbsp0/AUbTqMHuHu1C50abuAdk7/5mw6Ztgtwglp0Cnf4Rlx2C8/eQx2Hkarm6oY1ucAAIIIIAAAggggAACCCCAACv66H1A11fcJkCA6+KfR/6x7wIdv+sDAABwwwu5DDRI9Ip0wgAAAABJRU5ErkJggg==]],
-	ConfigsFolderCogLucide=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAEs0lEQVR4nO2b32scVRTHPydJxTSmNq0pvjS1INUWU2kffKj4C0GpD31rRCjquz/6I6VPKoIohCoU8S8oidIXKSoUAkoKVnxoqSgoFcVEKmojaZO0Gi3N14eZSWend37sTnZndrMfCOzec++5556Ze/bcH4E2bdq0WcFYklDSWmAP8BCwoUrd08DXwCdmNlubeQUhaZWkNyVdVX7mJb0uaVXR48qEpF5JE8sw8ChfSLqj6PElIskkfVaHwQeclJQ47QpF0r46Dj5gb9HjDFPxNCR9AzzoqPcH8BVwI6PeTmAXcLdD9jOwzcz+q8LO+iPpnpgndkrS6hr09Ugaj9G5vx5jyIWkZ2KMvTeHzs2SFhw6ZyRtX077a6Ur9LnHVcHMfqpVuZn9IukDYDgi6gPOSjoNXK5Vfwp/4uUhn5rZXGptSUOux5/XCkl9/hMvijlJr0nqctnXkXeAaZjZZeDVeveTQC/wFjAuRx5SdwcAmNkocATI/Ubl4AlgTJE8pCEOADCzo8DTwA+N6tPBHuDZcMGSNyQNASeiLcxsWTM3SR3Ao8CTwGbgtuXU79MFPIx7AXfezHa6DKtLECwKJechG4N6DZsCjcbMrgGvxIi3BR9a1gE+P8aUrwk+tLQDzCxuCi/FtZZ2QBbaDijagKJpO6BoA4qm7YCiDSialeCAa0llK8EBo5HvF4GJ4Itzl6TF2A9cAp7C25F+w18nVNJqq8GsrIQpkEjTTAFJA3i7OX8DH5nZTES+DngOWA2cMLNfq+2gtFNA0qCk2ZBZk5L6Q/J+vyxgVtJgFt3N8gYcJrSGBzYBJyUF6/0tflnAGr/NC2mKm8UBfY6yXf5fNW1uoVmC4NUa2sxXVbusMUDS0ZiNzSyMpOkv3RSQd2g6DKwF5oB9OdQdkbcD3APMAu+a2bdxHRf+BkgaiET7JBbkHd2fkvsE2sWcpHCwLF0MGKIy2ruYBg4A3Wa228x2A93AQV+WRK/fxxJlmwL/pMingZ1mdjFc6O/+HpP0MXAOuKvqPkoyBdapMqGJknrKLOlAQvtJeRmjs2HhDvDt6Jd0xmHKgjLcMJPUIXdM+FKh7DGgbDEAM5sGLjhEEwkHHeH2i8Bph+iCr7uCsAOct7Yk3ZnWaR1wDbSaU2rXg3U6L1xxMkZZQ293+K/pVofosaxTAHjEIbrfNQXC9wM6gd+BaCUBx4Fx4HqaASksAmfNbMol9APUeWAgpv1BMzuW1IGkQ8B7MeIpvF+RGadU0tsJEXS5uC7pxZj+X0ppe0nevkCc/Zsk/ZWi4+Vwm+hcGQGq20ioni7gfUm3O2TdKW37gXOSDsl71YGlyD+MlwOsT9FR0cctc0rSDuBzMi4nc7AxmtD4T/c70rNBgH+5Ge0fJ9tVm3lgMDwFnUFF0lZgDNiRQWktfA884PpZk7eTcxhvMXQFeD5nX2N4KXDyYshhSKekvfKuuP8mabGWCR/hhryE5L6s1ksaydHfO7X5rGRIGq1h8Mez6C5dJhhDlpgQJVMCV7bVYBxXHGVnuHkJagvevcC0Ns2JpO3yNjMCplS5Lb7BLwvIvC1e3v/fiSBvJyc4GPnQcTCynsqDEWe22aZNmwr+B2d8NHL6snKKAAAAAElFTkSuQmCC]],
 	SettingsLucide=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAABf0lEQVR42u1ZyxLEIAgrTv//l9mTMx13rVrDY6fJuZUQAQWPgyAIgiCIt0IijKqqfhERCeFS3h4BFIACUAAKAK/okaeJqwCVQIQIKNsFpb6nCEjbgg5B6wsN2qZEELrbsbt/LQQXr115EqbXNayiDXIMtkQQzrf/jWykaIZUVUe7tityayNtN2hxKlgUWIlwfrXQWYpwug4fJshfQ/0ve4Ee8dWd632PFqZkdN5ThDMq7GfPdRERy3QIaYd7DkU0VcXSqV87OnIStQ4sBWYMzeb4LOmVy84uP06EoglEvQekESBypMYUmCmC0M5r8kxfsbnLr1jm8pMhBmqd1CnQIx9REOEDEbRjFmuaRQC6ebF23iQFUCJ4OO8+EKlO7UyE0tcAy4lOPUZTpkD7VocO1esdAjpt9miFt97ubiIqxcPIDDHESMxqJhDyOPr0bdAiEsTbeY+UC4mAVQK7TuzYhtWAajjkDg+yXVBEMjVVHIhQAApAASgABSAIgiAIYoAPcrcwc7e0+MMAAAAASUVORK5CYII=]],
 	Search=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAE00lEQVR4nO2bzW9VRRjGnyHYVsGIFi1sbZFQm+iG1GiVIm4a0pBoCMbAxn8AV25Uov8AC4O6cKU2TdzUj6CJMaFFF7AwYgohROPGBtoSiOWjl7Zc/bmYg1zKmTlzeuacW/H+km7uPed9nveduWfmzEylFi1a/J8xVYgAbZIel9QlaV3y96ekmqQpY8xUFT7SKKUAQKekIUk7JQ3IJr/Wc8t1SWckjUs6JmnCGFMvw1tpAAYYAr4AFinGNHAY6G52XkEAe4CfCyadRh0YAXqanWMqQDfwbQmJL+cG8C7Q0eyc/wV4BZirIPlGzgBPNjvxNcD7FSfeyFVgKFY+uUYB7HD2qaR9OW5bkHRS0mlJv0m6Kjv8bZDUKWmrpO2S8rTsTUmvG2NGctxTjKTlPw9spTowhn04Bv1ugc3AQWAyUOMvYG/ZeTcaDO32o8CWAjoGGAbOBmgtAIMR03Saei3AzBSwK6LmfcAh4GaG7gywKZZumpFu7IPHxwSwsST9HcDlDP3vgXKm9WSP819T8vgM9AIXMnwcKEN4T0DLVzI5AZ4Grni8zAAPxhb9ySM4RUnd3uNnGPjb4+nNmGJDGa0f7YGX09fHGb3g/lhCYx6h0SgiK/PVCVzyeMszSXOKPIIdY9OoA09EyKWIv7c9BTgaQ2C/R2AsQg5F/W0Aag5/i8ADobHWOD7f6bnnk3x242OMmZP0lePrNknPhcZyFWDA8fmCpO9Cg5fMl57vng8NclcBuL2AmcZJY8xCaPCSmfB8ty00SFoP6JZ7AfN0aOCyMcbMSpp1fL01NE5aAR71XP97aOCKcPnx5XAHaQXwTSfnQgNXhMtP8JQ4rQBtnusXQwNXhOt51B4aIK0ANc/160IDV4SrpedDA6QV4Jrn+sdCA1eEy8/V0ABpBfjDc31Tp8CNYBdAXBsmwXuNaQU4L7tXl8b20MAV0Cf3T/JcaJC7CmCMQe7xvhfYHBq8ZHyv48HzFddUeMLxuVG+PYEy8fkYLxQZ2OV5G5ykrAXIcH99uFeGZgFXwwYLrMVuUbsYjpTLSv2NerwdiSVy2CNyFvvSVDlAP3ZXyEV/LKEe7OqPi0NRhPJ5agd+8Xg6EVtwxCNWB3ZEFcz284HHD8Du2II92MMJLi4DvVFF3V4+zEj+OGU8nIH3MoQvAE9FF77Tw0cZHpaAvrLEO4BTGQauAC+XoN1OdrcHeCe29nIjW8jeIAW7adEZSbMf/wPvFnXAt4gbB+xO0VKAoUvAW8BDK9Tpw47zvqFuOfNUdE5gfw5jtSSRV4EuT0yTJP0GcCJH0lGKkPupiT2W8plyrLokXJT0q+y7+rykhyVtlH3FDt7IyKAmadgYcyxSvHSwhxZmCrRWEXyTM7A94cVSC5AUYRP2ZEZVLGGPzLwAXMu4trIiGOAA5feG4zSM88AAq6UIiaH12CNu5yMnfgrYS8oMb9UVITHVAewDjrLyE+MXgSPAMwF6hYtQ2sIGdot6IPnbJvu075K0Xrf/YeK67ALmOdllrHFJk8myXKjOoKRv5B9JapKGjDE/5E7kvwAwmLS0j2liHZ9ZjQQW4aXl9xVbO1tFGGMmJO2Wf2fr3sfTE+7tn0AjyegwvSz5Z9OuberydpkkrX3rqMyPxpgbzfTTokWL1ck/FJbYJ0STWJAAAAAASUVORK5CYII=]],
 	ChevronRight=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAA8ElEQVR4nO3aMU7DMACF4d8MnKfHAKmiQ+/AkTpwB7YehNsQWF6HRkIqEV1qx9T/t2WJ/Z7sDI5BkiRJkgZUar04yQZ4nR/fSikftcbqTpJNks/8mJJs155XM0kO+e2rxxIeGo71CLz3WMLNzVtgWlgF3a6Em0vydPEduCxht/Ycq7MELAGwBMASAEsALAGwBMASAEsALAGwBACSbOewS6acD1ju25USDjXGbHkeoL8MvQWSPF/5CL6sPcdqDG94wxve8IY3vOHvkuEHDj/2z9Es3w/oMnzL84BvYF9KOTYccx35R1dkvCQlSZIkSSM6AfHCWA0+H77KAAAAAElFTkSuQmCC]],
@@ -4826,61 +4821,32 @@ local TRACKED_TAB_NAME={
 	Inventory="INVENTORY",
 	Booth="BOOTH",
 	System="SYSTEM",
-	Configs="CONFIGS",
 	Settings="SETTINGS",
 }
 local TRACKED_FEATURE="FEATURE"
--- Keep the visual letter spacing without creating line-break opportunities
--- between individual letters. Roblox may wrap normal spaces, so use a narrow
--- no-break space inside each word and ordinary spaces only between words.
+-- Keep navigation and panel headings readable and consistent. Use normal
+-- title casing rather than artificial letter spacing or all-caps tracking.
 local function formatPanelTitle(title, mode)
-	if type(title) ~= "string" or title == "" then title = TRACKED_FEATURE end
-	title = string.upper(title)
-	local words = {}
-	local letterGap = mode == "sidebar" and utf8.char(0x202F) or utf8.char(0x00A0)
-	local wordGap
-	if mode == "selected" then
-		-- Two full space-widths between words while keeping the only legal wrap
-		-- point between complete words.
-		wordGap = utf8.char(0x00A0) .. " "
-	elseif mode == "sidebar" then
-		-- Sidebar tabs use lighter/slighter tracking than panel headings.
-		-- Keep the legal wrap point at the end of the gap so wrapped lines
-		-- never inherit leading spacing.
-		wordGap = utf8.char(0x202F) .. utf8.char(0x202F) .. " "
-	else
-		-- Preserve the original panel-title appearance: one full space-width
-		-- between letters and three between words. Put the only breakable
-		-- space at the end of the gap so a wrapped word starts flush-left.
-		wordGap = utf8.char(0x00A0) .. utf8.char(0x00A0) .. " "
-	end
-	for word in string.gmatch(title, "%S+") do
-		local letters = table.create(#word)
-		local previous
-		for index = 1, #word do
-			local current = string.sub(word, index, index)
-			if index > 1 then
-				if mode ~= "sidebar" and (previous == "/" or current == "/") then
-					letters[#letters + 1] = letterGap .. letterGap
-				else
-					letters[#letters + 1] = letterGap
-				end
-			end
-			letters[#letters + 1] = current
-			previous = current
+	title = tostring(title or "")
+	if title == "" then title = TRACKED_FEATURE end
+	title = string.gsub(title, "_", " ")
+	local lower = string.lower(title)
+	return (string.gsub(lower, "%a+", function(word)
+		local upper = string.upper(word)
+		if upper == "ESP" or upper == "UI" or upper == "ID" or upper == "URL" or upper == "AFK" then
+			return upper
 		end
-		words[#words + 1] = table.concat(letters)
-	end
-	return table.concat(words, wordGap)
+		return string.upper(string.sub(word, 1, 1)) .. string.sub(word, 2)
+	end))
 end
 local selectedTabTitle = New("TextLabel")
 selectedTabTitle.Name = "SelectedTabTitle"
 selectedTabTitle.BackgroundTransparency = 1
 selectedTabTitle.BorderSizePixel = 0
 selectedTabTitle.Text = formatPanelTitle(TRACKED_TAB_NAME.Home, "selected")
-selectedTabTitle.TextColor3 = MUTED_TEXT_COLOR
+selectedTabTitle.TextColor3 = MENU_TEXT_SELECTED
 selectedTabTitle.FontFace = MENU_FONT_BOLD_FACE
-setResponsiveTextSize(selectedTabTitle, 20)
+setResponsiveTextSize(selectedTabTitle, 17)
 selectedTabTitle.TextScaled = false
 selectedTabTitle.TextWrapped = true
 selectedTabTitle.TextXAlignment = Enum.TextXAlignment.Left
@@ -5017,7 +4983,7 @@ local function syncPixelSnappedGeometry()
 		syncSearchPlaceholder()
 	end
 	-- Keep the main tab scroller between the header divider and the fixed
-	-- utility area. Home scrolls with the normal tabs; Configs / Settings stay fixed.
+	-- utility area. Home scrolls with the normal tabs; Settings stays fixed.
 	local quick = autoServerHopState.RuntimeSidebarQuickButtons
 	if not quick then
 		quick = {}
@@ -5105,61 +5071,31 @@ local function syncPixelSnappedGeometry()
 				if item and type(selector) == "function" then selector(item) end
 			end)
 		end
-		-- The folder glyph is intentionally rendered slightly larger so its visual
-		-- footprint matches the normal sidebar icons and the restored Settings gear.
-		makeQuickButton("Configs", "ConfigsFolderCogLucide", "▤", MENU_ICON_SIZE)
 		makeQuickButton("Settings", "Settings", "⚙", MENU_ICON_SIZE)
-		local separator = New("Frame")
-		separator.Name = "SidebarQuickSeparator1"
-		separator.AnchorPoint = V2(0.5, 0.5)
-		separator.BackgroundColor3 = LINE_COLOR
-		separator.BackgroundTransparency = LINE_TRANSPARENCY
-		separator.BorderSizePixel = 0
-		separator.ZIndex = 45002
-		separator.Parent = window
-		quick.Separator1 = separator
 		autoServerHopState.RuntimeSidebarQuickButtons = quick
 	end
 	local footerDividerY
 	if quick then
 		if sidebarCollapsed then
 			local collapsedWidth = roundPixel(dividerX * 0.70)
-			quick.Configs.Position = U2O(
-				sidebarVisualCenterX,
-				panelHeight - SIDEBAR_PADDING - MENU_ITEM_HEIGHT - MENU_ITEM_GAP - (MENU_ITEM_HEIGHT * 0.5)
-			)
 			quick.Settings.Position = U2O(
 				sidebarVisualCenterX,
 				panelHeight - SIDEBAR_PADDING - (MENU_ITEM_HEIGHT * 0.5)
 			)
-			quick.Configs.Size = U2O(collapsedWidth, MENU_ITEM_HEIGHT)
 			quick.Settings.Size = U2O(collapsedWidth, MENU_ITEM_HEIGHT)
 			footerDividerY = roundPixel(
-				panelHeight - SIDEBAR_PADDING - (MENU_ITEM_HEIGHT * 2) - MENU_ITEM_GAP - MENU_TOP_GAP
+				panelHeight - SIDEBAR_PADDING - MENU_ITEM_HEIGHT - MENU_TOP_GAP
 			)
 		else
 			local quickSize = math.max(px(28), math.min(px(34), roundPixel(dividerX * 0.16)))
 			local quickY = panelHeight - SIDEBAR_PADDING - (quickSize * 0.5)
-			quick.Configs.Position = U2O(roundPixel(dividerX / 3), quickY)
-			quick.Settings.Position = U2O(roundPixel(dividerX * 2 / 3), quickY)
-			quick.Configs.Size = U2O(quickSize, quickSize)
+			quick.Settings.Position = U2O(sidebarVisualCenterX, quickY)
 			quick.Settings.Size = U2O(quickSize, quickSize)
 			footerDividerY = roundPixel(panelHeight - SIDEBAR_PADDING - quickSize - MENU_TOP_GAP)
 		end
 		quick.Divider.Position = U2O(sidebarVisualCenterX, footerDividerY)
 		quick.Divider.Size = U2O(roundPixel(dividerX * 0.85), visibleDividerThickness)
 		quick.Divider.Visible = true
-		if quick.Separator1 then
-			quick.Separator1.Visible = not sidebarCollapsed
-			if not sidebarCollapsed then
-				local separatorHeight = math.max(
-					px(16),
-					roundPixel(math.min(quick.Configs.Size.Y.Offset, quick.Settings.Size.Y.Offset) * 0.68)
-				)
-				quick.Separator1.Position = U2O(roundPixel(dividerX * 0.5), quick.Configs.Position.Y.Offset)
-				quick.Separator1.Size = U2O(visibleDividerThickness, separatorHeight)
-			end
-		end
 	end
 	footerDividerY = footerDividerY or (panelHeight - SIDEBAR_PADDING)
 	local menuTop = roundPixel(
@@ -5846,7 +5782,7 @@ local function createEmptyCollapsiblePanel(
 	headerTitle.Text = formatPanelTitle(panelTitle)
 	headerTitle.TextColor3 = MENU_TEXT_SELECTED
 	headerTitle.FontFace = PANEL_FONT_FACE
-	setResponsiveTextSize(headerTitle, 15)
+	setResponsiveTextSize(headerTitle, 14)
 	headerTitle.TextScaled = false
 	headerTitle.TextWrapped = true
 	headerTitle.TextTruncate = Enum.TextTruncate.None
@@ -5947,17 +5883,17 @@ local function createEmptyCollapsiblePanel(
 	body.BorderSizePixel = 0
 	body.ZIndex = 45011
 	body.Parent = panel
-	local featureRowHeight = px(32)
-	local featureRowGap = px(2)
-	local featureTopPadding = px(8)
-	local featureBottomPadding = px(8)
-	local amountControlsHeight = px(40)
-	local secondaryControlHeight = px(32)
+	local featureRowHeight = px(34)
+	local featureRowGap = px(4)
+	local featureTopPadding = px(10)
+	local featureBottomPadding = px(10)
+	local amountControlsHeight = px(42)
+	local secondaryControlHeight = px(34)
 	local toggleWidth = px(34)
 	local toggleHeight = px(18)
 	local knobInset = px(2)
-	local dropdownWidth = px(118)
-	local amountValueWidth = px(58)
+	local dropdownWidth = px(124)
+	local amountValueWidth = px(60)
 	local featureRows = {}
 	local dropdownTextWidthCache = {}
 	local panelData
@@ -6558,8 +6494,8 @@ local function createEmptyCollapsiblePanel(
 		featureDivider.Size = U2(1, 0, 0, LINE_THICKNESS)
 		-- Feature separators are intentionally subtler than structural borders.
 		-- They should read as spacing guidance, not as another panel outline.
-		featureDivider.BackgroundColor3 = RGB(28, 29, 34)
-		featureDivider.BackgroundTransparency = 0.54
+		featureDivider.BackgroundColor3 = RGB(43, 45, 52)
+		featureDivider.BackgroundTransparency = 0.42
 		featureDivider.BorderSizePixel = 0
 		featureDivider.Active = false
 		featureDivider.Visible = false
@@ -6744,7 +6680,7 @@ local function createEmptyCollapsiblePanel(
 		featureLabel.FontFace = childIndentLevel <= 0
 			and MENU_FONT_SEMIBOLD_FACE
 			or (childIndentLevel == 1 and MENU_FONT_FACE or MENU_FONT_REGULAR_FACE)
-		setResponsiveTextSize(featureLabel, (utilityExclusiveGroup or isDependentText) and 14 or 15)
+		setResponsiveTextSize(featureLabel, (utilityExclusiveGroup or isDependentText) and 13 or 14)
 		featureLabel.TextXAlignment = Enum.TextXAlignment.Left
 		featureLabel.TextYAlignment = Enum.TextYAlignment.Center
 		featureLabel.TextWrapped = true
@@ -6780,14 +6716,14 @@ local function createEmptyCollapsiblePanel(
 			actionButton:SetAttribute("TuffHubStandardButtonFeedback", true)
 			actionButton.AnchorPoint = V2(0.5, 0.5)
 			actionButton.Position = U2S(0.5, 0.5)
-			actionButton.Size = U2(1, 0, 0, px(26))
+			actionButton.Size = U2(1, 0, 0, px(28))
 			actionButton.BackgroundColor3 = FEATURE_OFF_COLOR
 			actionButton.BorderSizePixel = 0
 			actionButton.AutoButtonColor = false
 			actionButton.Text = capitalizeUiWords(definition.Label or "Action")
 			actionButton.TextColor3 = MENU_TEXT_SELECTED
 			actionButton.FontFace = MENU_FONT_FACE
-			setResponsiveTextSize(actionButton, 14)
+			setResponsiveTextSize(actionButton, 13)
 			actionButton.TextTruncate = Enum.TextTruncate.None
 			actionButton.TextWrapped = true
 			actionButton.ZIndex = 45014
