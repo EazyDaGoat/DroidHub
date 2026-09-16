@@ -694,6 +694,14 @@ if MINIGAME_MODE then
 		PauseScript = false,
 		UndoAllSettings = false,
 		GuiMinimized = false,
+		GuiStartMinimized = false,
+		MenuBindKey = "LeftControl",
+		ThemeBackground = "#090A0C",
+		ThemeMain = "#0D0E11",
+		ThemeAccent = "#FF0062",
+		ThemeOutline = "#303239",
+		ThemeFont = "#EAECF1",
+		ThemeFontChoice = "BuilderSans",
 		PanelExpanded = {},
 		AutoBooth = false,
 		AutoBoothName = "",
@@ -2377,6 +2385,14 @@ if MINIGAME_MODE then
 			"JoinPlayerName",
 			"PauseScript",
 			"GuiMinimized",
+			"GuiStartMinimized",
+			"MenuBindKey",
+			"ThemeBackground",
+			"ThemeMain",
+			"ThemeAccent",
+			"ThemeOutline",
+			"ThemeFont",
+			"ThemeFontChoice",
 			"PanelExpanded",
 			"AutoBooth",
 			"AutoBoothName",
@@ -3541,6 +3557,11 @@ if MINIGAME_MODE then
 			end
 		end
 		if type(chosenSnapshot) == "table" then loadSettingsEnvelope(chosenSnapshot) end
+		do
+			local savedBind = tostring(autoServerHopState.Utility.MenuBindKey or "LeftControl")
+			local okKey, keyCode = pcall(function() return Enum.KeyCode[savedBind] end)
+			if okKey and keyCode then TOGGLE_KEY = keyCode end
+		end
 		if not regularProfileSnapshot then regularProfileSnapshot = snapshotSettings() end
 		local function stripTransientSettings(snapshot)
 			if type(snapshot) ~= "table" then return snapshot end
@@ -3721,6 +3742,23 @@ if MINIGAME_MODE then
 		end
 		rawset(_G, "__TUFFHUB_RESET_ALL_SETTINGS_STATE", resetAllSettingsState)
 		rawset(_G, SAVE_KEY, saveSettings)
+		rawset(_G, "__TUFFHUB_EXPORT_SETTINGS", function()
+			return copyJsonSafe(settingsEnvelopeForSave())
+		end)
+		rawset(_G, "__TUFFHUB_IMPORT_SETTINGS", function(snapshot)
+			if type(snapshot) ~= "table" then return false end
+			local imported = loadSettingsEnvelope(copyJsonSafe(snapshot))
+			if imported then
+				do
+					local savedBind = tostring(autoServerHopState.Utility.MenuBindKey or "LeftControl")
+					local okKey, keyCode = pcall(function() return Enum.KeyCode[savedBind] end)
+					if okKey and keyCode then TOGGLE_KEY = keyCode end
+				end
+				refreshSettingsUiSoon()
+				saveSettings(true)
+			end
+			return imported == true
+		end)
 		pcall(function()
 			if getgenv then getgenv()[SAVE_KEY] = saveSettings end
 		end)
@@ -3950,7 +3988,8 @@ window.BackgroundTransparency = 0
 window.BorderSizePixel = 0
 window.ClipsDescendants = true
 window.Active = true
-window.Visible = autoServerHopState.Utility.GuiMinimized ~= true
+window.Visible = autoServerHopState.Utility.GuiStartMinimized ~= true
+autoServerHopState.Utility.GuiMinimized = not window.Visible
 window.Parent = screenGui
 New("UIScale", window).Name = "ResponsiveWindowScale"
 local function roundPixel(value)
@@ -4116,7 +4155,7 @@ rawset(_G, "__TUFFHUB_ENSURE_INPUT_BORDER", function(object)
 		stroke.Name = "InputBorder"
 		stroke.Parent = object
 	end
-	stroke.Color = RGB(58, 61, 69)
+	stroke.Color = LINE_COLOR
 	stroke.Thickness = px(1)
 	stroke.Transparency = 0.10
 	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
@@ -4153,7 +4192,7 @@ ensureCorner(
 )
 local outerBorder = New("UIStroke")
 outerBorder.Name = "OuterBorder"
-outerBorder.Color = RGB(58, 61, 69)
+outerBorder.Color = LINE_COLOR
 outerBorder.Thickness = LINE_THICKNESS
 outerBorder.Transparency = 0.08
 outerBorder.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
@@ -5134,7 +5173,7 @@ local function syncPixelSnappedGeometry()
 		welcome.Text = "WELCOME,"
 		welcome.TextColor3 = MUTED_TEXT_COLOR
 		welcome.FontFace = MENU_FONT_REGULAR_FACE
-		setResponsiveTextSize(welcome, 11)
+		setResponsiveTextSize(welcome, 13)
 		welcome.TextScaled = false
 		welcome.TextWrapped = false
 		welcome.TextTruncate = Enum.TextTruncate.None
@@ -5151,7 +5190,7 @@ local function syncPixelSnappedGeometry()
 		playerName.Text = string.upper(tostring(startupPlayer.Name or "PLAYER"))
 		playerName.TextColor3 = MENU_TEXT_SELECTED
 		playerName.FontFace = MENU_FONT_SEMIBOLD_FACE
-		setResponsiveTextSize(playerName, 14)
+		setResponsiveTextSize(playerName, 16)
 		playerName.TextScaled = false
 		playerName.TextWrapped = false
 		playerName.TextTruncate = Enum.TextTruncate.None
@@ -5746,7 +5785,10 @@ tabs.Booth = createSidebarItem("Booth", 10, "B")
 tabs.Booth.Label.Text = formatPanelTitle("Booth", "sidebar")
 tabs.System = createSidebarItem("System", 11, "S")
 tabs.System.Label.Text = formatPanelTitle("System", "sidebar")
-selectedMenuItem = tabs.Autofarm
+tabs.Settings = autoServerHopState.RuntimeSidebarQuickButtons
+	and autoServerHopState.RuntimeSidebarQuickButtons.SettingsItem
+	or nil
+selectedMenuItem = tabs.Home
 for _, item in ipairs(
 	menuItems
 ) do
@@ -6632,7 +6674,7 @@ local function createEmptyCollapsiblePanel(
 		featureDivider.Size = U2(1, 0, 0, LINE_THICKNESS)
 		-- Feature separators are intentionally subtler than structural borders.
 		-- They should read as spacing guidance, not as another panel outline.
-		featureDivider.BackgroundColor3 = RGB(43, 45, 52)
+		featureDivider.BackgroundColor3 = LINE_COLOR
 		featureDivider.BackgroundTransparency = 0.42
 		featureDivider.BorderSizePixel = 0
 		featureDivider.Active = false
@@ -10332,6 +10374,948 @@ local function createEmptyCollapsiblePanel(
 	end)
 end
 
+-- Home + Settings dashboard panels. Kept in an isolated scope so the main UI
+-- chunk stays below Luau's local-register ceiling.
+;(function()
+	local settingsTab = tabs.Settings
+	local GOOD = RGB(94, 214, 137)
+	local WARNING = RGB(230, 188, 93)
+	local DANGER = RGB(226, 83, 91)
+	local ROW_HEIGHT = px(34)
+	local ROW_GAP = px(4)
+	local BODY_PAD_X = px(14)
+	local BODY_PAD_Y = px(10)
+	local CONTROL_HEIGHT = px(27)
+	local INPUT_BG = FEATURE_OFF_COLOR
+	local activeChoiceOverlay
+	local liveConnections = {}
+	local customRefreshers = {}
+	local currentConfigName
+	local bindCaptureConnection
+	local BUILDER_REGULAR_FACE = MENU_FONT_REGULAR_FACE
+	local BUILDER_SEMIBOLD_FACE = MENU_FONT_SEMIBOLD_FACE
+	local BUILDER_BOLD_FACE = MENU_FONT_BOLD_FACE
+
+	local function saveNow()
+		local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
+		if type(saver) == "function" then pcall(saver, true) end
+	end
+
+	local function closeChoicePopup()
+		if activeChoiceOverlay and activeChoiceOverlay.Parent then
+			activeChoiceOverlay:Destroy()
+		end
+		activeChoiceOverlay = nil
+	end
+
+	local function openChoicePopup(anchor, options, selected, onPick)
+		closeChoicePopup()
+		if not anchor or not anchor.Parent or type(options) ~= "table" or #options == 0 then return end
+		local overlay = New("TextButton")
+		overlay.Name = "TuffHubChoiceOverlay"
+		overlay.Size = U2S(1, 1)
+		overlay.BackgroundTransparency = 1
+		overlay.BorderSizePixel = 0
+		overlay.Text = ""
+		overlay.AutoButtonColor = false
+		overlay.ZIndex = 70000
+		overlay.Parent = screenGui
+		activeChoiceOverlay = overlay
+
+		local popup = New("ScrollingFrame")
+		popup.Name = "ChoicePopup"
+		popup.BackgroundColor3 = PANEL_BACKGROUND
+		popup.BackgroundTransparency = 0
+		popup.BorderSizePixel = 0
+		popup.Active = true
+		popup.ScrollingDirection = Enum.ScrollingDirection.Y
+		popup.ScrollBarThickness = px(2)
+		popup.ScrollBarImageColor3 = MUTED_TEXT_COLOR
+		popup.ScrollBarImageTransparency = 0.18
+		popup.ElasticBehavior = Enum.ElasticBehavior.WhenScrollable
+		popup.AutomaticCanvasSize = Enum.AutomaticSize.None
+		popup.ZIndex = 70001
+		popup.Parent = overlay
+		ensureCorner(popup, px(6))
+		local stroke = New("UIStroke")
+		stroke.Color = LINE_COLOR
+		stroke.Thickness = math.max(LINE_THICKNESS, 1)
+		stroke.Transparency = 0.05
+		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		stroke.Parent = popup
+		local rowHeight = px(29)
+		local visibleRows = math.min(7, #options)
+		local popupWidth = math.max(px(140), anchor.AbsoluteSize.X)
+		local popupHeight = visibleRows * rowHeight + px(8)
+		local anchorPos = anchor.AbsolutePosition
+		local anchorSize = anchor.AbsoluteSize
+		local viewport = (workspace.CurrentCamera or camera).ViewportSize
+		local x = math.clamp(anchorPos.X, px(4), math.max(px(4), viewport.X - popupWidth - px(4)))
+		local belowY = anchorPos.Y + anchorSize.Y + px(4)
+		local y = belowY + popupHeight <= viewport.Y - px(4)
+			and belowY
+			or math.max(px(4), anchorPos.Y - popupHeight - px(4))
+		popup.Position = U2O(x, y)
+		popup.Size = U2O(popupWidth, popupHeight)
+		popup.CanvasSize = U2O(0, #options * rowHeight + px(8))
+		local list = New("UIListLayout")
+		list.Padding = UDim.new(0, 0)
+		list.SortOrder = Enum.SortOrder.LayoutOrder
+		list.Parent = popup
+		local pad = New("UIPadding")
+		pad.PaddingTop = UDim.new(0, px(4))
+		pad.PaddingBottom = UDim.new(0, px(4))
+		pad.Parent = popup
+		for index, option in ipairs(options) do
+			local button = New("TextButton")
+			button.Name = "Option" .. tostring(index)
+			button.LayoutOrder = index
+			button.Size = U2(1, 0, 0, rowHeight)
+			button.BackgroundColor3 = SEARCH_BACKGROUND
+			button.BackgroundTransparency = tostring(option) == tostring(selected) and 0.12 or 1
+			button.BorderSizePixel = 0
+			button.AutoButtonColor = false
+			button.Text = tostring(option)
+			button.TextColor3 = tostring(option) == tostring(selected) and MENU_TEXT_SELECTED or MENU_TEXT_IDLE
+			button.FontFace = MENU_FONT_REGULAR_FACE
+			setResponsiveTextSize(button, 12)
+			button.TextXAlignment = Enum.TextXAlignment.Left
+			button.TextYAlignment = Enum.TextYAlignment.Center
+			button.ZIndex = 70002
+			button.Parent = popup
+			local bpad = New("UIPadding")
+			bpad.PaddingLeft = UDim.new(0, px(10))
+			bpad.PaddingRight = UDim.new(0, px(10))
+			bpad.Parent = button
+			button.MouseButton1Click:Connect(function()
+				closeChoicePopup()
+				if type(onPick) == "function" then onPick(option) end
+			end)
+		end
+		overlay.MouseButton1Click:Connect(closeChoicePopup)
+	end
+
+	local function makePanel(tabItem, panelIndex, column, order, panelTitle, searchText, builder)
+		if not tabItem then return nil end
+		local persistenceKey = tostring(tabItem.Name) .. "|" .. tostring(panelTitle) .. "|" .. tostring(column) .. "|" .. tostring(order)
+		local persisted = autoServerHopState.Utility.PanelExpanded
+			and autoServerHopState.Utility.PanelExpanded[persistenceKey]
+		local expanded = persisted ~= false
+		local panel = New("Frame")
+		panel.Name = tabItem.Name .. "CustomPanel" .. tostring(panelIndex)
+		panel.BackgroundColor3 = PANEL_BACKGROUND
+		panel.BackgroundTransparency = 0
+		panel.BorderSizePixel = 0
+		panel.ClipsDescendants = true
+		panel.Active = true
+		panel.Visible = false
+		panel.ZIndex = 45010
+		panel.Parent = rightContent
+		ensureCorner(panel, PANEL_CORNER_RADIUS)
+		local panelStroke = New("UIStroke")
+		panelStroke.Name = "PanelBorder"
+		panelStroke.Color = LINE_COLOR
+		panelStroke.Thickness = LINE_THICKNESS
+		panelStroke.Transparency = LINE_TRANSPARENCY
+		panelStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		panelStroke.LineJoinMode = Enum.LineJoinMode.Round
+		panelStroke.Parent = panel
+
+		local header = New("TextButton")
+		header.Name = "Header"
+		header.Size = U2(1, 0, 0, PANEL_HEADER_HEIGHT)
+		header.BackgroundTransparency = 1
+		header.BorderSizePixel = 0
+		header.AutoButtonColor = false
+		header.Text = ""
+		header.ZIndex = 45012
+		header.Parent = panel
+		local title = New("TextLabel")
+		title.Name = "Title"
+		title.Position = U2O(px(14), px(10))
+		title.Size = U2(1, px(-62), 1, px(-20))
+		title.BackgroundTransparency = 1
+		title.BorderSizePixel = 0
+		title.Text = formatPanelTitle(panelTitle)
+		title.TextColor3 = MENU_TEXT_SELECTED
+		title.FontFace = PANEL_FONT_FACE
+		setResponsiveTextSize(title, 14)
+		title.TextWrapped = true
+		title.TextTruncate = Enum.TextTruncate.None
+		title.TextXAlignment = Enum.TextXAlignment.Left
+		title.TextYAlignment = Enum.TextYAlignment.Center
+		title.ZIndex = 45013
+		title.Parent = header
+
+		local chevron
+		if panelChevronAsset then
+			chevron = New("ImageLabel")
+			chevron.Image = panelChevronAsset
+			chevron.ImageColor3 = PANEL_CHEVRON_COLOR
+			chevron.ScaleType = Enum.ScaleType.Fit
+		else
+			chevron = New("TextLabel")
+			chevron.Text = "⌄"
+			chevron.TextColor3 = PANEL_CHEVRON_COLOR
+			chevron.FontFace = MENU_FONT_FACE
+			setResponsiveTextSize(chevron, 14)
+		end
+		chevron.Name = "Chevron"
+		chevron.AnchorPoint = V2(0.5, 0.5)
+		chevron.Position = U2(1, px(-18), 0, PANEL_HEADER_HEIGHT * 0.5)
+		chevron.Size = U2O(px(18), px(18))
+		chevron.BackgroundTransparency = 1
+		chevron.BorderSizePixel = 0
+		chevron.Rotation = expanded and 0 or 180
+		chevron.ZIndex = 45013
+		chevron.Parent = panel
+
+		local divider = New("Frame")
+		divider.Name = "HeaderDivider"
+		divider.Position = U2O(0, PANEL_HEADER_HEIGHT)
+		divider.Size = U2(1, 0, 0, LINE_THICKNESS)
+		divider.BackgroundColor3 = LINE_COLOR
+		divider.BackgroundTransparency = LINE_TRANSPARENCY
+		divider.BorderSizePixel = 0
+		divider.ZIndex = 45011
+		divider.Visible = expanded
+		divider.Parent = panel
+
+		local body = New("Frame")
+		body.Name = "Body"
+		body.Position = U2O(0, PANEL_HEADER_HEIGHT + LINE_THICKNESS)
+		body.Size = U2(1, 0, 1, -(PANEL_HEADER_HEIGHT + LINE_THICKNESS))
+		body.BackgroundTransparency = 1
+		body.BorderSizePixel = 0
+		body.Visible = expanded
+		body.ZIndex = 45011
+		body.Parent = panel
+		local holder = New("Frame")
+		holder.Name = "Content"
+		holder.Position = U2O(BODY_PAD_X, BODY_PAD_Y)
+		holder.Size = U2(1, -(BODY_PAD_X * 2), 0, 0)
+		holder.BackgroundTransparency = 1
+		holder.BorderSizePixel = 0
+		holder.AutomaticSize = Enum.AutomaticSize.Y
+		holder.ZIndex = 45012
+		holder.Parent = body
+		local layout = New("UIListLayout")
+		layout.Padding = UDim.new(0, ROW_GAP)
+		layout.SortOrder = Enum.SortOrder.LayoutOrder
+		layout.Parent = holder
+
+		local panelData = {
+			Frame = panel,
+			Header = header,
+			Chevron = chevron,
+			Divider = divider,
+			Body = body,
+			TabItem = tabItem,
+			Column = column,
+			Order = order,
+			PersistenceKey = persistenceKey,
+			Expanded = expanded,
+			HeaderHeight = PANEL_HEADER_HEIGHT,
+			ExpandedHeight = PANEL_HEADER_HEIGHT + LINE_THICKNESS + (BODY_PAD_Y * 2),
+			Title = panelTitle,
+			SearchText = string.lower(tostring(searchText or panelTitle)),
+			FeatureRows = {},
+		}
+		local function relayout()
+			local contentHeight = layout.AbsoluteContentSize.Y
+			panelData.ExpandedHeight = PANEL_HEADER_HEIGHT + LINE_THICKNESS + (BODY_PAD_Y * 2) + contentHeight
+			if panelData.Expanded then
+				panel.Size = U2O(panel.Size.X.Offset, panelData.ExpandedHeight)
+			end
+		end
+		panelData.RelayoutRows = relayout
+		layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+			relayout()
+			local sync = rawget(_G, "__TUFFHUB_SYNC_RIGHT_PANEL_GEOMETRY")
+			if type(sync) == "function" then task.defer(sync, true) end
+		end)
+
+		local helpers = {}
+		function helpers.row(height)
+			local row = New("Frame")
+			row.Size = U2(1, 0, 0, height or ROW_HEIGHT)
+			row.BackgroundTransparency = 1
+			row.BorderSizePixel = 0
+			row.ZIndex = 45012
+			row.Parent = holder
+			return row
+		end
+		function helpers.subheading(text)
+			local row = helpers.row(px(22))
+			local label = New("TextLabel")
+			label.Size = U2S(1, 1)
+			label.BackgroundTransparency = 1
+			label.BorderSizePixel = 0
+			label.Text = string.upper(tostring(text or ""))
+			label.TextColor3 = MUTED_TEXT_COLOR
+			label.FontFace = MENU_FONT_SEMIBOLD_FACE
+			setResponsiveTextSize(label, 11)
+			label.TextXAlignment = Enum.TextXAlignment.Left
+			label.TextYAlignment = Enum.TextYAlignment.Center
+			label.Parent = row
+			return row, label
+		end
+		function helpers.info(labelText, valueText, valueColor)
+			local row = helpers.row()
+			local label = New("TextLabel")
+			label.Size = U2(0.50, px(-8), 1, 0)
+			label.BackgroundTransparency = 1
+			label.BorderSizePixel = 0
+			label.Text = tostring(labelText or "")
+			label.TextColor3 = MENU_TEXT_SELECTED
+			label.FontFace = MENU_FONT_SEMIBOLD_FACE
+			setResponsiveTextSize(label, 12.5)
+			label.TextXAlignment = Enum.TextXAlignment.Left
+			label.TextYAlignment = Enum.TextYAlignment.Center
+			label.TextWrapped = true
+			label.Parent = row
+			local value = New("TextLabel")
+			value.AnchorPoint = V2(1, 0)
+			value.Position = U2S(1, 0)
+			value.Size = U2(0.50, px(-8), 1, 0)
+			value.BackgroundTransparency = 1
+			value.BorderSizePixel = 0
+			value.Text = tostring(valueText or "")
+			value.TextColor3 = valueColor or MENU_TEXT_IDLE
+			value.FontFace = MENU_FONT_REGULAR_FACE
+			setResponsiveTextSize(value, 12.5)
+			value.TextXAlignment = Enum.TextXAlignment.Right
+			value.TextYAlignment = Enum.TextYAlignment.Center
+			value.TextWrapped = true
+			value.Parent = row
+			return value
+		end
+		function helpers.note(text, color, height)
+			local row = helpers.row(height or px(38))
+			local label = New("TextLabel")
+			label.Size = U2S(1, 1)
+			label.BackgroundTransparency = 1
+			label.BorderSizePixel = 0
+			label.Text = tostring(text or "")
+			label.TextColor3 = color or MENU_TEXT_IDLE
+			label.FontFace = MENU_FONT_REGULAR_FACE
+			setResponsiveTextSize(label, 12.5)
+			label.TextWrapped = true
+			label.TextTruncate = Enum.TextTruncate.None
+			label.TextXAlignment = Enum.TextXAlignment.Left
+			label.TextYAlignment = Enum.TextYAlignment.Center
+			label.Parent = row
+			return label
+		end
+		function helpers.button(text, onClick, color)
+			local row = helpers.row(px(31))
+			local button = New("TextButton")
+			button.Size = U2S(1, 1)
+			button.BackgroundColor3 = INPUT_BG
+			button.BackgroundTransparency = 0
+			button.BorderSizePixel = 0
+			button.AutoButtonColor = false
+			button.Text = tostring(text or "")
+			button.TextColor3 = color or MENU_TEXT_SELECTED
+			button.FontFace = MENU_FONT_REGULAR_FACE
+			setResponsiveTextSize(button, 12.5)
+			button.ZIndex = 45013
+			button.Parent = row
+			ensureCorner(button, px(5))
+			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(button)
+			if type(onClick) == "function" then button.MouseButton1Click:Connect(onClick) end
+			return button
+		end
+		function helpers.input(placeholder, initialText)
+			local row = helpers.row(px(31))
+			local box = New("TextBox")
+			box.Size = U2S(1, 1)
+			box.BackgroundColor3 = INPUT_BG
+			box.BackgroundTransparency = 0
+			box.BorderSizePixel = 0
+			box.ClearTextOnFocus = false
+			box.Text = tostring(initialText or "")
+			box.PlaceholderText = tostring(placeholder or "")
+			box.TextColor3 = MENU_TEXT_SELECTED
+			box.PlaceholderColor3 = SEARCH_PLACEHOLDER_COLOR
+			box.FontFace = MENU_FONT_REGULAR_FACE
+			setResponsiveTextSize(box, 12.5)
+			box.TextXAlignment = Enum.TextXAlignment.Left
+			box.TextYAlignment = Enum.TextYAlignment.Center
+			box.ZIndex = 45013
+			box.Parent = row
+			ensureCorner(box, px(5))
+			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(box)
+			local padding = New("UIPadding")
+			padding.PaddingLeft = UDim.new(0, px(9))
+			padding.PaddingRight = UDim.new(0, px(9))
+			padding.Parent = box
+			return box
+		end
+		function helpers.selectRow(labelText, currentText, onOpen)
+			local row = helpers.row()
+			local label = New("TextLabel")
+			label.Size = U2(0.47, px(-6), 1, 0)
+			label.BackgroundTransparency = 1
+			label.BorderSizePixel = 0
+			label.Text = tostring(labelText or "")
+			label.TextColor3 = MENU_TEXT_SELECTED
+			label.FontFace = MENU_FONT_REGULAR_FACE
+			setResponsiveTextSize(label, 12.5)
+			label.TextXAlignment = Enum.TextXAlignment.Left
+			label.TextYAlignment = Enum.TextYAlignment.Center
+			label.Parent = row
+			local button = New("TextButton")
+			button.AnchorPoint = V2(1, 0.5)
+			button.Position = U2(1, 0, 0.5, 0)
+			button.Size = U2(0.53, 0, 0, CONTROL_HEIGHT)
+			button.BackgroundColor3 = INPUT_BG
+			button.BorderSizePixel = 0
+			button.AutoButtonColor = false
+			button.Text = tostring(currentText or "")
+			button.TextColor3 = MENU_TEXT_IDLE
+			button.FontFace = MENU_FONT_REGULAR_FACE
+			setResponsiveTextSize(button, 12)
+			button.TextXAlignment = Enum.TextXAlignment.Left
+			button.ZIndex = 45013
+			button.Parent = row
+			ensureCorner(button, px(5))
+			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(button)
+			local pad = New("UIPadding")
+			pad.PaddingLeft = UDim.new(0, px(9))
+			pad.PaddingRight = UDim.new(0, px(22))
+			pad.Parent = button
+			local arrow = New("TextLabel")
+			arrow.AnchorPoint = V2(1, 0.5)
+			arrow.Position = U2(1, px(-7), 0.5, 0)
+			arrow.Size = U2O(px(12), px(16))
+			arrow.BackgroundTransparency = 1
+			arrow.Text = "⌄"
+			arrow.TextColor3 = MUTED_TEXT_COLOR
+			arrow.FontFace = MENU_FONT_REGULAR_FACE
+			setResponsiveTextSize(arrow, 11)
+			arrow.Parent = button
+			if type(onOpen) == "function" then button.MouseButton1Click:Connect(function() onOpen(button) end) end
+			return button
+		end
+		function helpers.colorRow(labelText, utilityKey, defaultHex, applyCallback)
+			local row = helpers.row()
+			local label = New("TextLabel")
+			label.Size = U2(0.46, px(-6), 1, 0)
+			label.BackgroundTransparency = 1
+			label.BorderSizePixel = 0
+			label.Text = tostring(labelText or "")
+			label.TextColor3 = MENU_TEXT_SELECTED
+			label.FontFace = MENU_FONT_REGULAR_FACE
+			setResponsiveTextSize(label, 12.5)
+			label.TextXAlignment = Enum.TextXAlignment.Left
+			label.TextYAlignment = Enum.TextYAlignment.Center
+			label.Parent = row
+			local swatch = New("Frame")
+			swatch.AnchorPoint = V2(1, 0.5)
+			swatch.Position = U2(1, 0, 0.5, 0)
+			swatch.Size = U2O(px(23), px(23))
+			swatch.BackgroundColor3 = RGB(255,255,255)
+			swatch.BorderSizePixel = 0
+			swatch.Parent = row
+			ensureCorner(swatch, px(5))
+			local swatchStroke = New("UIStroke")
+			swatchStroke.Color = LINE_COLOR
+			swatchStroke.Thickness = LINE_THICKNESS
+			swatchStroke.Transparency = 0.08
+			swatchStroke.Parent = swatch
+			local box = New("TextBox")
+			box.AnchorPoint = V2(1, 0.5)
+			box.Position = U2(1, px(-31), 0.5, 0)
+			box.Size = U2O(px(84), CONTROL_HEIGHT)
+			box.BackgroundColor3 = INPUT_BG
+			box.BorderSizePixel = 0
+			box.ClearTextOnFocus = false
+			box.Text = tostring(autoServerHopState.Utility[utilityKey] or defaultHex)
+			box.TextColor3 = MENU_TEXT_IDLE
+			box.FontFace = MENU_FONT_REGULAR_FACE
+			setResponsiveTextSize(box, 11.5)
+			box.TextXAlignment = Enum.TextXAlignment.Center
+			box.Parent = row
+			ensureCorner(box, px(5))
+			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(box)
+			local function syncSwatch()
+				local text = string.upper(tostring(box.Text or ""))
+				local hex = text:gsub("#", "")
+				if #hex == 6 and string.match(hex, "^[0-9A-F]+$") then
+					local r = tonumber(hex:sub(1,2),16)
+					local g = tonumber(hex:sub(3,4),16)
+					local b = tonumber(hex:sub(5,6),16)
+					if r and g and b then swatch.BackgroundColor3 = RGB(r,g,b) return true end
+				end
+				return false
+			end
+			syncSwatch()
+			box.FocusLost:Connect(function()
+				box.Text = string.upper(tostring(box.Text or ""))
+				if string.sub(box.Text,1,1) ~= "#" then box.Text = "#" .. box.Text end
+				if syncSwatch() then
+					autoServerHopState.Utility[utilityKey] = box.Text
+					saveNow()
+					if type(applyCallback) == "function" then applyCallback() end
+				else
+					box.Text = tostring(autoServerHopState.Utility[utilityKey] or defaultHex)
+					syncSwatch()
+				end
+			end)
+			customRefreshers[#customRefreshers + 1] = function()
+				box.Text = tostring(autoServerHopState.Utility[utilityKey] or defaultHex)
+				syncSwatch()
+			end
+			return box, swatch
+		end
+
+		if type(builder) == "function" then builder(helpers, panelData) end
+		relayout()
+		unsupportedPanelGroups[tabItem] = unsupportedPanelGroups[tabItem] or {}
+		table.insert(unsupportedPanelGroups[tabItem], panelData)
+		table.insert(allUnsupportedPanels, panelData)
+		header.MouseEnter:Connect(function() tweenChevronColor(chevron, MENU_TEXT_HOVER) end)
+		header.MouseLeave:Connect(function() tweenChevronColor(chevron, PANEL_CHEVRON_COLOR) end)
+		return panelData
+	end
+
+	local function identifyExecutorName()
+		local candidates = {rawget(_G, "identifyexecutor"), rawget(_G, "getexecutorname")}
+		pcall(function()
+			if getgenv then
+				candidates[#candidates + 1] = getgenv().identifyexecutor
+				candidates[#candidates + 1] = getgenv().getexecutorname
+			end
+		end)
+		for _, fn in ipairs(candidates) do
+			if type(fn) == "function" then
+				local ok, value = pcall(fn)
+				if ok and value ~= nil and tostring(value) ~= "" then return tostring(value) end
+			end
+		end
+		return "Unknown"
+	end
+
+	local function formatAccountAge(days)
+		days = math.max(0, math.floor(tonumber(days) or 0))
+		local years = math.floor(days / 365.2425)
+		local remaining = days - math.floor(years * 365.2425)
+		local months = math.floor(remaining / 30.4375)
+		if years > 0 then return string.format("%dy %dm (%d days)", years, months, days) end
+		if months > 0 then return string.format("%dm (%d days)", months, days) end
+		return string.format("%d days", days)
+	end
+
+	local function accountAgeBracket()
+		for _, attributeName in ipairs({"Age", "UserAge", "AgeBracket"}) do
+			local ok, value = pcall(startupPlayer.GetAttribute, startupPlayer, attributeName)
+			if ok and value ~= nil and tostring(value) ~= "" then return tostring(value) end
+		end
+		local method
+		pcall(function() method = startupPlayer and startupPlayer.GetUnder13 end)
+		if type(method) == "function" then
+			local ok, under = pcall(method, startupPlayer)
+			if ok then return under and "Under 13" or "13+" end
+		end
+		return "Unavailable"
+	end
+
+	local function hexColor(text, fallback)
+		local hex = string.upper(tostring(text or "")):gsub("#", "")
+		if #hex == 6 and string.match(hex, "^[0-9A-F]+$") then
+			local r = tonumber(hex:sub(1,2),16)
+			local g = tonumber(hex:sub(3,4),16)
+			local b = tonumber(hex:sub(5,6),16)
+			if r and g and b then return RGB(r,g,b) end
+		end
+		return fallback
+	end
+
+	local function blendColor(a, b, t)
+		return Color3.new(
+			a.R + (b.R - a.R) * t,
+			a.G + (b.G - a.G) * t,
+			a.B + (b.B - a.B) * t
+		)
+	end
+
+	local function resolveFontFaces(choice)
+		choice = tostring(choice or "BuilderSans")
+		if choice == "Gotham" then
+			return Enum.Font.Gotham, Font.fromEnum(Enum.Font.Gotham), Font.fromEnum(Enum.Font.GothamSemibold), Font.fromEnum(Enum.Font.GothamBold)
+		elseif choice == "SourceSans" then
+			return Enum.Font.SourceSans, Font.fromEnum(Enum.Font.SourceSans), Font.fromEnum(Enum.Font.SourceSansSemibold), Font.fromEnum(Enum.Font.SourceSansBold)
+		elseif choice == "Code" then
+			local face = Font.fromEnum(Enum.Font.Code)
+			return Enum.Font.Code, face, face, face
+		end
+		return Enum.Font.BuilderSans, BUILDER_REGULAR_FACE, BUILDER_SEMIBOLD_FACE, BUILDER_BOLD_FACE
+	end
+
+	local function applyTheme()
+		local utility = autoServerHopState.Utility
+		local old = {
+			Black = BLACK, Pink = PINK, Line = LINE_COLOR,
+			Panel = PANEL_BACKGROUND, Search = SEARCH_BACKGROUND, Feature = FEATURE_OFF_COLOR,
+			Selected = MENU_TEXT_SELECTED, Idle = MENU_TEXT_IDLE, Hover = MENU_TEXT_HOVER,
+			Muted = MUTED_TEXT_COLOR, SearchText = SEARCH_TEXT_COLOR,
+			Placeholder = SEARCH_PLACEHOLDER_COLOR, Chevron = PANEL_CHEVRON_COLOR,
+		}
+		local background = hexColor(utility.ThemeBackground, RGB(9,10,12))
+		local main = hexColor(utility.ThemeMain, RGB(13,14,17))
+		local accent = hexColor(utility.ThemeAccent, RGB(255,0,98))
+		local outline = hexColor(utility.ThemeOutline, RGB(48,50,57))
+		local font = hexColor(utility.ThemeFont, RGB(234,236,241))
+		local search = blendColor(main, font, 0.025)
+		local feature = blendColor(main, font, 0.045)
+		local idle = blendColor(font, background, 0.43)
+		local hover = blendColor(font, background, 0.14)
+		local muted = blendColor(font, background, 0.50)
+		local placeholder = blendColor(font, background, 0.54)
+
+		BLACK = background
+		PINK = accent
+		LINE_COLOR = outline
+		PANEL_BACKGROUND = main
+		SEARCH_BACKGROUND = search
+		FEATURE_OFF_COLOR = feature
+		MENU_TEXT_SELECTED = font
+		SEARCH_TEXT_COLOR = font
+		MENU_TEXT_IDLE = idle
+		MENU_TEXT_HOVER = hover
+		MUTED_TEXT_COLOR = muted
+		SEARCH_PLACEHOLDER_COLOR = placeholder
+		PANEL_CHEVRON_COLOR = idle
+		INPUT_BG = feature
+
+		local fontEnum, regularFace, semiboldFace, boldFace = resolveFontFaces(utility.ThemeFontChoice)
+		MENU_FONT = fontEnum
+		MENU_FONT_FACE = regularFace
+		MENU_FONT_REGULAR_FACE = regularFace
+		MENU_FONT_SEMIBOLD_FACE = semiboldFace
+		MENU_FONT_BOLD_FACE = boldFace
+		PANEL_FONT_FACE = semiboldFace
+
+		for _, object in ipairs(screenGui:GetDescendants()) do
+			if object:IsA("GuiObject") then
+				local bg = object.BackgroundColor3
+				if bg == old.Black then object.BackgroundColor3 = background
+				elseif bg == old.Panel then object.BackgroundColor3 = main
+				elseif bg == old.Search then object.BackgroundColor3 = search
+				elseif bg == old.Feature then object.BackgroundColor3 = feature
+				elseif bg == old.Pink then object.BackgroundColor3 = accent
+				elseif bg == old.Line or bg == RGB(43,45,52) then object.BackgroundColor3 = outline end
+			end
+			if object:IsA("UIStroke") then
+				if object.Color == old.Line or object.Color == RGB(58,61,69) then object.Color = outline end
+			elseif object:IsA("ImageLabel") or object:IsA("ImageButton") then
+				if object.ImageColor3 == old.Pink then object.ImageColor3 = accent
+				elseif object.ImageColor3 == old.Chevron then object.ImageColor3 = idle end
+			end
+			if object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox") then
+				local c = object.TextColor3
+				if c == old.Selected or c == old.SearchText then object.TextColor3 = font
+				elseif c == old.Idle or c == old.Chevron then object.TextColor3 = idle
+				elseif c == old.Hover then object.TextColor3 = hover
+				elseif c == old.Muted then object.TextColor3 = muted end
+				if object:IsA("TextBox") and object.PlaceholderColor3 == old.Placeholder then
+					object.PlaceholderColor3 = placeholder
+				end
+				local isLogoText = object == tuffLabel or object == hubLabel
+					or object == compactTLabel or object == compactHLabel
+					or object.Name == "CompactT" or object.Name == "CompactH"
+				if not isLogoText then
+					local weight
+					pcall(function() weight = object.FontFace.Weight end)
+					if weight == Enum.FontWeight.Bold or weight == Enum.FontWeight.Heavy then
+						object.FontFace = boldFace
+					elseif weight == Enum.FontWeight.SemiBold or weight == Enum.FontWeight.Medium then
+						object.FontFace = semiboldFace
+					else
+						object.FontFace = regularFace
+					end
+				end
+			end
+		end
+		window.BackgroundColor3 = background
+	end
+	rawset(_G, "__TUFFHUB_APPLY_THEME", applyTheme)
+
+	-- HOME
+	makePanel(tabs.Home, 1, 1, 1, "Tsunami Brainrot", "game version update status tsunami brainrot", function(h)
+		h.info("Version", "v1.0.0")
+		h.info("Last Update", "9/16/26")
+		h.info("Status", "Fully Functional", GOOD)
+	end)
+	makePanel(tabs.Home, 2, 2, 1, "Latest Updates", "latest updates changelog finished development", function(h)
+		h.note("• 9/16/26: Finished Development.", MENU_TEXT_SELECTED, px(38))
+	end)
+	makePanel(tabs.Home, 3, 1, 2, "Executor", "executor supported volt potassium delta", function(h)
+		local executorName = identifyExecutorName()
+		local normalized = string.lower(executorName)
+		local fullySupported = string.find(normalized, "volt", 1, true)
+			or string.find(normalized, "potassium", 1, true)
+			or string.find(normalized, "delta", 1, true)
+		h.info("Name", executorName)
+		h.info("Supported", fullySupported and "Fully Supported" or "Maybe", fullySupported and GOOD or WARNING)
+	end)
+	makePanel(tabs.Home, 4, 2, 2, "Roblox Account", "roblox account name account age age", function(h)
+		h.info("Name", tostring(startupPlayer.Name or "Unknown"))
+		h.info("Account Age", formatAccountAge(startupPlayer.AccountAge))
+		h.info("Age", accountAgeBracket())
+	end)
+	makePanel(tabs.Home, 5, 1, 3, "Feedback", "feedback message send", function(h)
+		h.subheading("Message")
+		h.input("Write feedback here...", "")
+		h.button("Send Feedback", nil)
+	end)
+	makePanel(tabs.Home, 6, 2, 3, "Connection", "connection ping fps", function(h)
+		local pingValue = h.info("Ping", "-- ms")
+		local fpsValue = h.info("FPS", "--")
+		local frameCount, elapsed = 0, 0
+		local connection = RunService.RenderStepped:Connect(function(dt)
+			frameCount += 1
+			elapsed += dt
+			if elapsed >= 0.45 then
+				if fpsValue.Parent then fpsValue.Text = tostring(math.floor((frameCount / elapsed) + 0.5)) end
+				frameCount, elapsed = 0, 0
+			end
+		end)
+		liveConnections[#liveConnections + 1] = connection
+		task.spawn(function()
+			local stats = game:GetService("Stats")
+			while pingValue.Parent and screenGui.Parent do
+				local display
+				pcall(function()
+					local item = stats.Network.ServerStatsItem["Data Ping"]
+					if item then display = item:GetValueString() end
+				end)
+				if not display then
+					pcall(function() display = string.format("%d ms", math.floor(startupPlayer:GetNetworkPing() * 1000 + 0.5)) end)
+				end
+				pingValue.Text = display or "-- ms"
+				task.wait(0.5)
+			end
+		end)
+	end)
+	makePanel(tabs.Home, 7, 1, 4, "Links", "links discord website", function(h)
+		h.button("Discord", nil)
+		h.button("Website", nil)
+	end)
+	makePanel(tabs.Home, 8, 2, 4, "Subscription", "subscription days remaining lifetime", function(h)
+		h.info("Days Remaining", "Lifetime", GOOD)
+	end)
+
+	-- SETTINGS
+	local themeFontButton
+	local startModeButton
+	local menuBindButton
+	local keybindValue
+	local configNameBox
+	local configSelectButton
+	local configStatus
+	local configNames = {}
+
+	local function refreshConfigList()
+		configNames = {}
+		if type(makefolder) == "function" then pcall(makefolder, "TuffHub_Configs") end
+		if type(listfiles) == "function" then
+			local ok, files = pcall(listfiles, "TuffHub_Configs")
+			if ok and type(files) == "table" then
+				for _, path in ipairs(files) do
+					local name = tostring(path):match("([^/\\]+)%.json$")
+					if name and name ~= "" then configNames[#configNames + 1] = name end
+				end
+			end
+		end
+		table.sort(configNames, function(a,b) return string.lower(a) < string.lower(b) end)
+		if currentConfigName and not table.find(configNames, currentConfigName) then currentConfigName = nil end
+		if not currentConfigName then currentConfigName = configNames[1] end
+		if configSelectButton then configSelectButton.Text = currentConfigName or "---" end
+	end
+
+	local function safeConfigName(text)
+		text = tostring(text or ""):match("^%s*(.-)%s*$") or ""
+		text = text:gsub("[^%w _%-]", "")
+		return text:sub(1, 48)
+	end
+	local function setConfigStatus(text, color)
+		if configStatus then
+			configStatus.Text = tostring(text or "")
+			configStatus.TextColor3 = color or MUTED_TEXT_COLOR
+		end
+	end
+	local function createConfig(overwrite)
+		if type(writefile) ~= "function" then setConfigStatus("File access unavailable", WARNING) return end
+		local name = safeConfigName(configNameBox and configNameBox.Text or currentConfigName)
+		if name == "" then setConfigStatus("Enter a config name", WARNING) return end
+		local exporter = rawget(_G, "__TUFFHUB_EXPORT_SETTINGS")
+		if type(exporter) ~= "function" then setConfigStatus("Settings exporter unavailable", DANGER) return end
+		local okSnapshot, snapshot = pcall(exporter)
+		if not okSnapshot or type(snapshot) ~= "table" then setConfigStatus("Could not capture settings", DANGER) return end
+		if type(makefolder) == "function" then pcall(makefolder, "TuffHub_Configs") end
+		local path = "TuffHub_Configs/" .. name .. ".json"
+		if not overwrite and type(isfile) == "function" then
+			local okExists, exists = pcall(isfile, path)
+			if okExists and exists then setConfigStatus("Config already exists", WARNING) return end
+		end
+		local okWrite = pcall(writefile, path, HttpService:JSONEncode(snapshot))
+		if okWrite then
+			currentConfigName = name
+			refreshConfigList()
+			setConfigStatus(overwrite and "Config overwritten" or "Config created", GOOD)
+		else
+			setConfigStatus("Could not write config", DANGER)
+		end
+	end
+	local function loadConfig()
+		if not currentConfigName or type(readfile) ~= "function" then setConfigStatus("Select a config", WARNING) return end
+		local okRead, encoded = pcall(readfile, "TuffHub_Configs/" .. currentConfigName .. ".json")
+		if not okRead or type(encoded) ~= "string" then setConfigStatus("Could not read config", DANGER) return end
+		local decoded
+		local okDecode = pcall(function() decoded = HttpService:JSONDecode(encoded) end)
+		local importer = rawget(_G, "__TUFFHUB_IMPORT_SETTINGS")
+		if not okDecode or type(decoded) ~= "table" or type(importer) ~= "function" then setConfigStatus("Invalid config", DANGER) return end
+		local okImport, imported = pcall(importer, decoded)
+		if okImport and imported then
+			applyTheme()
+			local refresh = rawget(_G, "__TUFFHUB_REFRESH_CUSTOM_SETTINGS_UI")
+			if type(refresh) == "function" then refresh() end
+			setConfigStatus("Config loaded", GOOD)
+		else
+			setConfigStatus("Could not load config", DANGER)
+		end
+	end
+	local function deleteConfig()
+		if not currentConfigName or type(delfile) ~= "function" then setConfigStatus("Select a config", WARNING) return end
+		local deleted = pcall(delfile, "TuffHub_Configs/" .. currentConfigName .. ".json")
+		if deleted then
+			currentConfigName = nil
+			refreshConfigList()
+			setConfigStatus("Config deleted", GOOD)
+		else
+			setConfigStatus("Could not delete config", DANGER)
+		end
+	end
+
+	local function beginMenuBindCapture()
+		if not menuBindButton then return end
+		if bindCaptureConnection then bindCaptureConnection:Disconnect(); bindCaptureConnection = nil end
+		menuBindButton.Text = "Press a key..."
+		bindCaptureConnection = UserInputService.InputBegan:Connect(function(input, processed)
+			if processed or input.UserInputType ~= Enum.UserInputType.Keyboard or input.KeyCode == Enum.KeyCode.Unknown then return end
+			if bindCaptureConnection then bindCaptureConnection:Disconnect(); bindCaptureConnection = nil end
+			TOGGLE_KEY = input.KeyCode
+			autoServerHopState.Utility.MenuBindKey = input.KeyCode.Name
+			menuBindButton.Text = input.KeyCode.Name
+			if keybindValue then keybindValue.Text = input.KeyCode.Name end
+			saveNow()
+		end)
+	end
+
+	makePanel(settingsTab, 1, 1, 1, "Menu", "settings menu start minimized open menu bind reset tuffhub", function(h)
+		startModeButton = h.selectRow("Start Mode", autoServerHopState.Utility.GuiStartMinimized and "Minimized" or "Open", function(button)
+			local selected = autoServerHopState.Utility.GuiStartMinimized and "Minimized" or "Open"
+			openChoicePopup(button, {"Open", "Minimized"}, selected, function(choice)
+				autoServerHopState.Utility.GuiStartMinimized = choice == "Minimized"
+				button.Text = choice
+				saveNow()
+			end)
+		end)
+		menuBindButton = h.selectRow("Menu Bind", tostring(autoServerHopState.Utility.MenuBindKey or TOGGLE_KEY.Name), function()
+			beginMenuBindCapture()
+		end)
+		h.button("Reset TuffHub", function()
+			local reset = rawget(_G, "__TUFFHUB_RESET_ALL_SETTINGS_STATE")
+			if type(reset) == "function" then pcall(reset) end
+			local savedBind = tostring(autoServerHopState.Utility.MenuBindKey or "LeftControl")
+			local okKey, keyCode = pcall(function() return Enum.KeyCode[savedBind] end)
+			TOGGLE_KEY = okKey and keyCode or Enum.KeyCode.LeftControl
+			applyTheme()
+			local refresh = rawget(_G, "__TUFFHUB_REFRESH_CUSTOM_SETTINGS_UI")
+			if type(refresh) == "function" then refresh() end
+		end, DANGER)
+	end)
+
+	makePanel(settingsTab, 2, 1, 2, "Themes", "settings themes colors background main accent outline font font choice buildersans", function(h)
+		h.subheading("Colors")
+		h.colorRow("Background", "ThemeBackground", "#090A0C", applyTheme)
+		h.colorRow("Main", "ThemeMain", "#0D0E11", applyTheme)
+		h.colorRow("Accent", "ThemeAccent", "#FF0062", applyTheme)
+		h.colorRow("Outline", "ThemeOutline", "#303239", applyTheme)
+		h.colorRow("Font", "ThemeFont", "#EAECF1", applyTheme)
+		themeFontButton = h.selectRow("Font Choice", tostring(autoServerHopState.Utility.ThemeFontChoice or "BuilderSans"), function(button)
+			local options = {"BuilderSans", "Gotham", "SourceSans", "Code"}
+			openChoicePopup(button, options, autoServerHopState.Utility.ThemeFontChoice, function(choice)
+				autoServerHopState.Utility.ThemeFontChoice = choice
+				button.Text = choice
+				saveNow()
+				applyTheme()
+			end)
+		end)
+	end)
+
+	makePanel(settingsTab, 3, 1, 3, "Keybinds", "settings keybinds menu toggle", function(h)
+		keybindValue = h.info("Menu Toggle", tostring(autoServerHopState.Utility.MenuBindKey or TOGGLE_KEY.Name))
+		h.button("Reset Keybinds", function()
+			TOGGLE_KEY = Enum.KeyCode.LeftControl
+			autoServerHopState.Utility.MenuBindKey = "LeftControl"
+			if menuBindButton then menuBindButton.Text = "LeftControl" end
+			if keybindValue then keybindValue.Text = "LeftControl" end
+			saveNow()
+		end)
+	end)
+
+	makePanel(settingsTab, 4, 2, 1, "Configs", "settings configs create load overwrite delete refresh", function(h)
+		h.subheading("Config Name")
+		configNameBox = h.input("Enter config name...", "")
+		h.button("Create Config", function() createConfig(false) end)
+		configSelectButton = h.selectRow("Config List", "---", function(button)
+			refreshConfigList()
+			if #configNames == 0 then setConfigStatus("No configs found", MUTED_TEXT_COLOR) return end
+			openChoicePopup(button, configNames, currentConfigName, function(choice)
+				currentConfigName = tostring(choice)
+				button.Text = currentConfigName
+				if configNameBox then configNameBox.Text = currentConfigName end
+				setConfigStatus("Selected " .. currentConfigName, MUTED_TEXT_COLOR)
+			end)
+		end)
+		h.button("Load Config", loadConfig)
+		h.button("Overwrite Config", function()
+			if currentConfigName and configNameBox and configNameBox.Text == "" then configNameBox.Text = currentConfigName end
+			createConfig(true)
+		end)
+		h.button("Delete Config", deleteConfig, DANGER)
+		h.button("Refresh List", function()
+			refreshConfigList()
+			setConfigStatus("Config list refreshed", MUTED_TEXT_COLOR)
+		end)
+		configStatus = h.note("Current config: none", MUTED_TEXT_COLOR, px(28))
+	end)
+
+	local function refreshCustomSettings()
+		for _, refresh in ipairs(customRefreshers) do pcall(refresh) end
+		if startModeButton then startModeButton.Text = autoServerHopState.Utility.GuiStartMinimized and "Minimized" or "Open" end
+		if menuBindButton then menuBindButton.Text = tostring(autoServerHopState.Utility.MenuBindKey or TOGGLE_KEY.Name) end
+		if keybindValue then keybindValue.Text = tostring(autoServerHopState.Utility.MenuBindKey or TOGGLE_KEY.Name) end
+		if themeFontButton then themeFontButton.Text = tostring(autoServerHopState.Utility.ThemeFontChoice or "BuilderSans") end
+		refreshConfigList()
+		if configStatus then configStatus.Text = currentConfigName and ("Current config: " .. currentConfigName) or "Current config: none" end
+	end
+	rawset(_G, "__TUFFHUB_REFRESH_CUSTOM_SETTINGS_UI", refreshCustomSettings)
+	refreshCustomSettings()
+	applyTheme()
+
+	screenGui.Destroying:Connect(function()
+		closeChoicePopup()
+		if bindCaptureConnection then bindCaptureConnection:Disconnect(); bindCaptureConnection = nil end
+		for _, connection in ipairs(liveConnections) do
+			if typeof(connection) == "RBXScriptConnection" then pcall(function() connection:Disconnect() end) end
+		end
+	end)
+end)()
+
 -- Build all tab panels in an isolated function scope. The main UI chunk already
 -- carries many long-lived locals; Luau caps each function/chunk at 200 local
 -- registers. Keeping panel-definition temporaries here prevents register
@@ -11404,6 +12388,7 @@ local function syncRightPanelGeometry(
 			)
 		)
 end
+rawset(_G, "__TUFFHUB_SYNC_RIGHT_PANEL_GEOMETRY", syncRightPanelGeometry)
 performSearch = function(resetScroll)
 	local query=string.lower(searchBox.Text:match("^%s*(.-)%s*$"))
 	for _,data in ipairs(allUnsupportedPanels) do
