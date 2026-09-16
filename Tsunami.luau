@@ -3489,7 +3489,7 @@ if MINIGAME_MODE then
 			end
 			return true
 		end
-		-- No settings are loaded automatically. Manual configs are explicit.
+		-- Settings only load automatically when the user explicitly selects an Autoload Config.
 		regularProfileSnapshot = snapshotSettings()
 		local function stripTransientSettings(snapshot)
 			if type(snapshot) ~= "table" then return snapshot end
@@ -3643,6 +3643,19 @@ if MINIGAME_MODE then
 				refreshSettingsUiSoon()
 			end
 			return imported == true
+		end)
+		pcall(function()
+			if type(readfile) ~= "function" then return end
+			local okName, name = pcall(readfile, "TuffHub_Configs/autoload.txt")
+			if not okName or type(name) ~= "string" then return end
+			name = (name:match("^%s*(.-)%s*$") or ""):gsub("[^%w _%-]", ""):sub(1, 48)
+			if name == "" then return end
+			local okRead, encoded = pcall(readfile, "TuffHub_Configs/" .. name .. ".json")
+			if not okRead or type(encoded) ~= "string" then return end
+			local decoded
+			if not pcall(function() decoded = HttpService:JSONDecode(encoded) end) or type(decoded) ~= "table" then return end
+			local importer = rawget(_G, "__TUFFHUB_IMPORT_SETTINGS")
+			if type(importer) == "function" then pcall(importer, decoded) end
 		end)
 		-- No teleport hooks, background flushes, or implicit settings files.
 	end)()
@@ -4995,7 +5008,7 @@ local function syncPixelSnappedGeometry()
 				if item and type(selector) == "function" then selector(item) end
 			end)
 		end
-		makeQuickButton("Settings", "Settings", "⚙", MENU_ICON_SIZE + px(2))
+		makeQuickButton("Settings", "Settings", "⚙", MENU_ICON_SIZE + px(4))
 
 		local profile = New("Frame")
 		profile.Name = "SidebarProfile"
@@ -5120,10 +5133,10 @@ local function syncPixelSnappedGeometry()
 			quick.PlayerName.Visible = true
 			local textLeft = avatarSize + px(8)
 			local textWidth = math.max(1, profileWidth - textLeft)
-			quick.Welcome.Position = U2O(textLeft, px(2))
-			quick.Welcome.Size = U2O(textWidth, roundPixel(footerHeight * 0.46))
-			quick.PlayerName.Position = U2O(textLeft, roundPixel(footerHeight * 0.46))
-			quick.PlayerName.Size = U2O(textWidth, roundPixel(footerHeight * 0.50))
+			quick.Welcome.Position = U2O(textLeft, px(1))
+			quick.Welcome.Size = U2O(textWidth, roundPixel(footerHeight * 0.36))
+			quick.PlayerName.Position = U2O(textLeft, roundPixel(footerHeight * 0.53))
+			quick.PlayerName.Size = U2O(textWidth, roundPixel(footerHeight * 0.43))
 			footerDividerY = roundPixel(panelHeight - SIDEBAR_PADDING - footerHeight - MENU_TOP_GAP)
 		end
 		quick.Divider.Position = U2O(sidebarVisualCenterX, footerDividerY)
@@ -6360,6 +6373,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			math.clamp(rightContent.CanvasPosition.Y + needed, 0, maxCanvasY)
 		)
 	end
+	rawset(_G, "__TUFFHUB_ENSURE_DROPDOWN_ROOM_BELOW", ensureDropdownRoomBelow)
 	local function attachDropdownOutsideClose(popup, button, overlay)
 		local openedAt = os.clock()
 		local outsideConnection
@@ -10287,7 +10301,10 @@ end
 		local visibleRows = math.min(7, #options)
 		local popupWidth = math.max(px(140), anchor.AbsoluteSize.X)
 		local popupHeight = visibleRows * rowHeight + px(8)
-		ensureDropdownRoomBelow(anchor, popupHeight)
+		do
+			local ensureRoom = rawget(_G, "__TUFFHUB_ENSURE_DROPDOWN_ROOM_BELOW")
+			if type(ensureRoom) == "function" then pcall(ensureRoom, anchor, popupHeight) end
+		end
 		local anchorPos = anchor.AbsolutePosition
 		local anchorSize = anchor.AbsoluteSize
 		local viewport = (workspace.CurrentCamera or camera).ViewportSize
@@ -10326,12 +10343,12 @@ end
 			bpad.PaddingLeft = UDim.new(0, px(10))
 			bpad.PaddingRight = UDim.new(0, px(10))
 			bpad.Parent = button
-			button.MouseButton1Click:Connect(function()
+			button.Activated:Connect(function()
 				closeChoicePopup()
 				if type(onPick) == "function" then onPick(option) end
 			end)
 		end
-		overlay.MouseButton1Click:Connect(closeChoicePopup)
+		overlay.Activated:Connect(closeChoicePopup)
 	end
 
 	local function makePanel(tabItem, panelIndex, column, order, panelTitle, searchText, builder)
@@ -10563,7 +10580,7 @@ end
 			button.Parent = row
 			ensureCorner(button, px(5))
 			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(button)
-			button.MouseButton1Click:Connect(function()
+			button.Activated:Connect(function()
 				if type(onClick) == "function" then onClick() end
 			end)
 			return button
@@ -10628,7 +10645,7 @@ end
 			pad.PaddingLeft = UDim.new(0, px(7))
 			pad.PaddingRight = UDim.new(0, px(7))
 			pad.Parent = button
-			if type(onOpen) == "function" then button.MouseButton1Click:Connect(function() onOpen(button) end) end
+			if type(onOpen) == "function" then button.Activated:Connect(function() onOpen(button) end) end
 			return button
 		end
 		function helpers.colorRow(labelText, utilityKey, defaultHex, applyCallback)
@@ -10946,8 +10963,33 @@ end
 	local keybindValue
 	local configNameBox
 	local configSelectButton
+	local autoloadSelectButton
 	local configStatus
 	local configNames = {}
+	local autoloadConfigName
+
+	local function readAutoloadConfigName()
+		autoloadConfigName = nil
+		if type(readfile) ~= "function" then return end
+		local ok, value = pcall(readfile, "TuffHub_Configs/autoload.txt")
+		if not ok or type(value) ~= "string" then return end
+		value = (value:match("^%s*(.-)%s*$") or ""):gsub("[^%w _%-]", ""):sub(1, 48)
+		if value ~= "" then autoloadConfigName = value end
+	end
+
+	local function writeAutoloadConfigName(name)
+		name = tostring(name or "")
+		if name == "" then
+			autoloadConfigName = nil
+			if type(delfile) == "function" then pcall(delfile, "TuffHub_Configs/autoload.txt") end
+			return true
+		end
+		if type(writefile) ~= "function" then return false end
+		if type(makefolder) == "function" then pcall(makefolder, "TuffHub_Configs") end
+		local ok = pcall(writefile, "TuffHub_Configs/autoload.txt", name)
+		if ok then autoloadConfigName = name end
+		return ok
+	end
 
 	local function refreshConfigList()
 		configNames = {}
@@ -10963,8 +11005,17 @@ end
 		end
 		table.sort(configNames, function(a,b) return string.lower(a) < string.lower(b) end)
 		if currentConfigName and not table.find(configNames, currentConfigName) then currentConfigName = nil end
-		if not currentConfigName then currentConfigName = configNames[1] end
-		if configSelectButton then configSelectButton.Text = currentConfigName or "---" end
+		readAutoloadConfigName()
+		if autoloadConfigName and not table.find(configNames, autoloadConfigName) then
+			writeAutoloadConfigName(nil)
+		end
+		if not currentConfigName and autoloadConfigName then currentConfigName = autoloadConfigName end
+		if configSelectButton then
+			configSelectButton.Text = currentConfigName or (#configNames > 0 and "Select Config" or "")
+		end
+		if autoloadSelectButton then
+			autoloadSelectButton.Text = autoloadConfigName or (#configNames > 0 and "None" or "")
+		end
 	end
 
 	local function safeConfigName(text)
@@ -10988,15 +11039,12 @@ end
 		if not okSnapshot or type(snapshot) ~= "table" then setConfigStatus("Could not capture settings", DANGER) return end
 		if type(makefolder) == "function" then pcall(makefolder, "TuffHub_Configs") end
 		local path = "TuffHub_Configs/" .. name .. ".json"
-		if not overwrite and type(isfile) == "function" then
-			local okExists, exists = pcall(isfile, path)
-			if okExists and exists then setConfigStatus("Config already exists", WARNING) return end
-		end
 		local okWrite = pcall(writefile, path, HttpService:JSONEncode(snapshot))
 		if okWrite then
 			currentConfigName = name
 			refreshConfigList()
-			setConfigStatus(overwrite and "Config overwritten" or "Config created", GOOD)
+			if configSelectButton then configSelectButton.Text = name end
+			setConfigStatus(overwrite and "Config overwritten" or "Config saved", GOOD)
 		else
 			setConfigStatus("Could not write config", DANGER)
 		end
@@ -11021,8 +11069,10 @@ end
 	end
 	local function deleteConfig()
 		if not currentConfigName or type(delfile) ~= "function" then setConfigStatus("Select a config", WARNING) return end
-		local deleted = pcall(delfile, "TuffHub_Configs/" .. currentConfigName .. ".json")
+		local deletingName = currentConfigName
+		local deleted = pcall(delfile, "TuffHub_Configs/" .. deletingName .. ".json")
 		if deleted then
+			if autoloadConfigName == deletingName then writeAutoloadConfigName(nil) end
 			currentConfigName = nil
 			refreshConfigList()
 			setConfigStatus("Config deleted", GOOD)
@@ -11103,11 +11153,11 @@ end
 		end)
 	end)
 
-	makePanel(settingsTab, 4, 2, 1, "Configs", "settings configs create load overwrite delete refresh", function(h)
+	makePanel(settingsTab, 4, 2, 1, "Configs", "settings configs create load overwrite delete refresh autoload", function(h)
 		h.subheading("Config Name")
 		configNameBox = h.input("Enter config name...", "")
 		h.button("Create Config", function() createConfig(false) end)
-		configSelectButton = h.selectRow("Config List", "---", function(button)
+		configSelectButton = h.selectRow("Config List", "", function(button)
 			refreshConfigList()
 			if #configNames == 0 then setConfigStatus("No configs found", MUTED_TEXT_COLOR) return end
 			openChoicePopup(button, configNames, currentConfigName, function(choice)
@@ -11117,9 +11167,29 @@ end
 				setConfigStatus("Selected " .. currentConfigName, MUTED_TEXT_COLOR)
 			end)
 		end)
+		autoloadSelectButton = h.selectRow("Autoload Config", "", function(button)
+			refreshConfigList()
+			local options = {"None"}
+			for _, name in ipairs(configNames) do options[#options + 1] = name end
+			openChoicePopup(button, options, autoloadConfigName or "None", function(choice)
+				if tostring(choice) == "None" then
+					writeAutoloadConfigName(nil)
+					button.Text = "None"
+					setConfigStatus("Autoload disabled", MUTED_TEXT_COLOR)
+				else
+					local name = tostring(choice)
+					if writeAutoloadConfigName(name) then
+						button.Text = name
+						setConfigStatus("Autoload set to " .. name, GOOD)
+					else
+						setConfigStatus("Could not save autoload selection", DANGER)
+					end
+				end
+			end)
+		end)
 		h.button("Load Config", loadConfig)
 		h.button("Overwrite Config", function()
-			if currentConfigName and configNameBox and configNameBox.Text == "" then configNameBox.Text = currentConfigName end
+			if configNameBox and configNameBox.Text == "" and currentConfigName then configNameBox.Text = currentConfigName end
 			createConfig(true)
 		end)
 		h.button("Delete Config", deleteConfig, DANGER)
@@ -11138,6 +11208,7 @@ end
 		if themeFontButton then themeFontButton.Text = tostring(autoServerHopState.Utility.ThemeFontChoice or "BuilderSans") end
 		refreshConfigList()
 		if configStatus then configStatus.Text = currentConfigName and ("Current config: " .. currentConfigName) or "Current config: none" end
+		if autoloadSelectButton then autoloadSelectButton.Text = autoloadConfigName or (#configNames > 0 and "None" or "") end
 	end
 	rawset(_G, "__TUFFHUB_REFRESH_CUSTOM_SETTINGS_UI", refreshCustomSettings)
 	refreshCustomSettings()
