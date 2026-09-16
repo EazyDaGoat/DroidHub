@@ -391,6 +391,8 @@ if MINIGAME_MODE then
 		RuntimeOwnedBrainrotOptionLabels = {},
 		RuntimeAutoSitBusy = false,
 		RuntimeBoothMutationBusy = false,
+		RuntimeBoothListingsPending = false,
+		RuntimeBoothLastEvaluationAt = 0,
 		RuntimeBoothMaxSlots = 3,
 		RuntimeSettingsResetEpoch = 0,
 		RuntimeSimpleAutofarmTargetRarity = nil,
@@ -660,6 +662,8 @@ if MINIGAME_MODE then
 		LeaveWhenAboutToLose = false,
 		PrintWinsLossesToTerminal = false,
 		PrintKicksToTerminal = false,
+		PrintAutoDeletesToTerminal = false,
+		PrintPurchasedBoothListingsToTerminal = false,
 		AutoReconnect = false,
 		PauseMinigameFeatures = false,
 		MoveDelayConnectFour = 0,
@@ -2009,6 +2013,60 @@ if MINIGAME_MODE then
 		if type(saver) == "function" then task.defer(saver, true) end
 		return true
 	end
+	autoServerHopState.ResetCanceledTradeStreak = function(userId)
+		userId = tonumber(userId)
+		local localPlayer = Players.LocalPlayer
+		if not userId or userId <= 0 or (localPlayer and userId == localPlayer.UserId) then
+			return false
+		end
+		local key = tostring(userId)
+		local changed = false
+		if type(autoServerHopState.CanceledTradeCounts) == "table"
+			and autoServerHopState.CanceledTradeCounts[key] ~= nil
+		then
+			autoServerHopState.CanceledTradeCounts[key] = nil
+			changed = true
+		end
+		if type(autoServerHopState.RuntimeCanceledTradeCounts) == "table" then
+			autoServerHopState.RuntimeCanceledTradeCounts[key] = nil
+		end
+		if type(autoServerHopState.RuntimeCanceledTradeLastCountAt) == "table" then
+			autoServerHopState.RuntimeCanceledTradeLastCountAt[key] = nil
+		end
+		if type(autoServerHopState.RuntimeTempBlacklistedUserIds) == "table"
+			and autoServerHopState.RuntimeTempBlacklistedUserIds[key] ~= nil
+		then
+			autoServerHopState.RuntimeTempBlacklistedUserIds[key] = nil
+			changed = true
+		end
+		if changed then
+			local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
+			if type(saver) == "function" then task.defer(saver, true) end
+		end
+		return changed
+	end
+	autoServerHopState.IsTempBlacklistedUser = function(userId)
+		if autoServerHopState.Utility.TempBlacklistPlayersAfterCanceledTrade ~= true then return false end
+		userId = tonumber(userId)
+		if not userId or userId <= 0 then return false end
+		local key = tostring(userId)
+		local threshold = math.clamp(
+			math.floor(tonumber(autoServerHopState.Utility.TempBlacklistAfterCanceledTrades) or 1),
+			1,
+			10
+		)
+		local streak = type(autoServerHopState.CanceledTradeCounts) == "table"
+			and math.max(0, math.floor(tonumber(autoServerHopState.CanceledTradeCounts[key]) or 0))
+			or 0
+		if streak >= threshold then
+			autoServerHopState.RuntimeTempBlacklistedUserIds = autoServerHopState.RuntimeTempBlacklistedUserIds or {}
+			autoServerHopState.RuntimeTempBlacklistedUserIds[key] = true
+			return true
+		end
+		local temporary = autoServerHopState.RuntimeTempBlacklistedUserIds
+		if type(temporary) == "table" then temporary[key] = nil end
+		return false
+	end
 	;(function()
 		local SETTINGS_FILE = "TuffHub_Settings_v1.json"
 		local SETTINGS_BACKUP_FILE = "TuffHub_Settings_v1.backup.json"
@@ -2290,6 +2348,8 @@ if MINIGAME_MODE then
 			"LeaveWhenAboutToLose",
 			"PrintWinsLossesToTerminal",
 			"PrintKicksToTerminal",
+			"PrintAutoDeletesToTerminal",
+			"PrintPurchasedBoothListingsToTerminal",
 			"AutoReconnect",
 			"PauseMinigameFeatures",
 			"MoveDelayConnectFour",
@@ -2427,7 +2487,7 @@ if MINIGAME_MODE then
 				utility[key] = copyJsonSafe(autoServerHopState.Utility[key])
 			end
 			return {
-				Version = 2,
+				Version = 3,
 				MinigameAutoplay = copyJsonSafe(minigameAutoplayState),
 				AutoOffer = copyJsonSafe(autoOfferState),
 				RegularAutoOffer = copyJsonSafe(regularAutoOfferState),
@@ -2558,6 +2618,7 @@ if MINIGAME_MODE then
 			utility.DeleteWorstBrainrotsFirst = false
 			utility.DeleteInventoryThreshold = 95
 			utility.AvoidDeletingSignedBrainrots = true
+			utility.AvoidDeletingLockedItems = true
 			utility.AutoshowBestBrainrots = true
 			utility.CustomOpeningOffer = false
 			utility.AutoshowAllTokens = true
@@ -2710,8 +2771,10 @@ if MINIGAME_MODE then
 						end
 					end
 				end
-				if type(serverHop.CanceledTradeCounts) == "table" then
-					autoServerHopState.CanceledTradeCounts = {}
+				autoServerHopState.CanceledTradeCounts = {}
+				if (tonumber(saved.Version) or 1) >= 3
+					and type(serverHop.CanceledTradeCounts) == "table"
+				then
 					for userId, count in pairs(serverHop.CanceledTradeCounts) do
 						local normalized = math.max(0, math.floor(tonumber(count) or 0))
 						if normalized > 0 then
@@ -3339,7 +3402,7 @@ if MINIGAME_MODE then
 			end
 			return ok
 		end
-		local SIMPLE_AUTOFARM_PROFILE_VERSION = 9
+		local SIMPLE_AUTOFARM_PROFILE_VERSION = 10
 		local function migrateSimpleAutofarmProfile(simple)
 			if type(simple) ~= "table" or type(simple.Profile) ~= "table" then return end
 			local version = math.floor(tonumber(simple.Version) or 1)
@@ -3365,7 +3428,7 @@ if MINIGAME_MODE then
 			utility.CheckServerHopNobodyMinigamesArea=true; utility.CheckServerHopPlayedEveryoneMinigamesArea=true
 			utility.CheckServerMustOwnAll=false; utility.CheckServerMustOwnOne=true
 			utility.AutoDeleteWorstInventory=true; utility.DeleteNonBrainrotsFirst=true; utility.DeleteWorstBrainrotsFirst=false
-			utility.DeleteInventoryThreshold=95; utility.AvoidDeletingSignedBrainrots=true
+			utility.DeleteInventoryThreshold=95; utility.AvoidDeletingSignedBrainrots=true; utility.AvoidDeletingLockedItems=true
 			utility.AutoshowBestBrainrots=true; utility.CustomOpeningOffer=false; utility.AutoshowAllTokens=true; utility.CustomOpeningTokens=false
 			utility.AutoChooseGame=true; utility.GameToChoose="Popcorn Burst"; utility.MatchOpponentGame=true
 			utility.FallbackGameChoices={["Candy Bomb"]=true,["Higher Or Lower"]=true,["Connect 4"]=true,["Battle Ship"]=true,["Knockout"]=true,["Football Draft"]=true}
@@ -3695,6 +3758,8 @@ if MINIGAME_MODE then
 		autoServerHopState.RuntimeManualServerHopRequested = false
 		autoServerHopState.RuntimeAutoSitBusy = false
 		autoServerHopState.RuntimeBoothMutationBusy = false
+		autoServerHopState.RuntimeBoothListingsPending = false
+		autoServerHopState.RuntimeBoothLastEvaluationAt = 0
 		pcall(function()
 			local player = Players.LocalPlayer
 			local character = player and player.Character
@@ -10841,6 +10906,8 @@ end
 		{
 			{Label = "Print Wins/Losses To Terminal", UtilityToggleKey = "PrintWinsLossesToTerminal"},
 			{Label = "Print Kicks To Terminal", UtilityToggleKey = "PrintKicksToTerminal"},
+			{Label = "Print Auto Deletes To Terminal", UtilityToggleKey = "PrintAutoDeletesToTerminal"},
+			{Label = "Print Purchased Booth Listings To Terminal", UtilityToggleKey = "PrintPurchasedBoothListingsToTerminal"},
 		}
 	)
 	do
@@ -10965,9 +11032,9 @@ end
 		"Blacklist Players",
 		{
 			{Label = "Temp Blacklist", UtilityToggleKey = "TempBlacklistPlayersAfterCanceledTrade"},
-			{Label = "After This Many Canceled Trades", UtilitySliderKey = "TempBlacklistAfterCanceledTrades", UtilityParentKey = "TempBlacklistPlayersAfterCanceledTrade", MinValue = 1, MaxValue = 10, UnitLabel = "Trades"},
+			{Label = "After This Many Canceled Trades In A Row", UtilitySliderKey = "TempBlacklistAfterCanceledTrades", UtilityParentKey = "TempBlacklistPlayersAfterCanceledTrade", MinValue = 1, MaxValue = 10, UnitLabel = "Trades"},
 			{Label = "Perm Blacklist", UtilityToggleKey = "PermanentBlacklistPlayersAfterCanceledTrade"},
-			{Label = "After This Many Canceled Trades", UtilitySliderKey = "PermanentBlacklistAfterCanceledTrades", UtilityParentKey = "PermanentBlacklistPlayersAfterCanceledTrade", MinValue = 1, MaxValue = 10, UnitLabel = "Trades"},
+			{Label = "After This Many Canceled Trades In A Row", UtilitySliderKey = "PermanentBlacklistAfterCanceledTrades", UtilityParentKey = "PermanentBlacklistPlayersAfterCanceledTrade", MinValue = 1, MaxValue = 10, UnitLabel = "Trades"},
 		}
 	)
 	createEmptyCollapsiblePanel(
@@ -12489,6 +12556,8 @@ if MINIGAME_MODE then
 				end
 			end
 			if utility.TempBlacklistPlayersAfterCanceledTrade == true then
+				local checker = autoServerHopState.IsTempBlacklistedUser
+				if type(checker) == "function" and checker(player.UserId) then return true end
 				local temporary = autoServerHopState.RuntimeTempBlacklistedUserIds
 				if type(temporary) == "table" and temporary[userId] == true then return true end
 			end
@@ -13833,6 +13902,8 @@ if MINIGAME_MODE then
 			local userId = tostring(player.UserId)
 			local utility = autoServerHopState.Utility
 			if utility.TempBlacklistPlayersAfterCanceledTrade == true then
+				local checker = autoServerHopState.IsTempBlacklistedUser
+				if type(checker) == "function" and checker(player.UserId) then return true end
 				local temporary = autoServerHopState.RuntimeTempBlacklistedUserIds
 				if type(temporary) == "table" and temporary[userId] == true then return true end
 			end
@@ -14297,6 +14368,12 @@ if MINIGAME_MODE then
 					sawSelectionBL = true
 				end
 				if phase == "Playing" and gameId ~= nil then
+					if not sawPlayingBL then
+						local resetStreak = autoServerHopState.ResetCanceledTradeStreak
+						if type(resetStreak) == "function" then
+							resetStreak(opponentUserId or lifecycleOpponentUserIdBL)
+						end
+					end
 					sawPlayingBL = true
 				end
 			elseif wasLifecycleBL then
@@ -15194,6 +15271,8 @@ if MINIGAME_MODE then
 					and opponent:IsA("Player")
 					and opponent ~= LocalPlayerCS
 				then
+					local resetStreak = autoServerHopState.ResetCanceledTradeStreak
+					if type(resetStreak) == "function" then resetStreak(opponent.UserId) end
 					autoServerHopState.RuntimePlayedMinigameUserIds =
 						autoServerHopState.RuntimePlayedMinigameUserIds or {}
 					autoServerHopState.RuntimePlayedMinigameUserIds[
@@ -15483,12 +15562,26 @@ if MINIGAME_MODE then
 		local function scanBoothPurchasesHP()
 			local state = myBoothStateHP()
 			local currentOffers = {}
-			for offerId in pairs(state and state.offers or {}) do
+			for offerId, offer in pairs(state and state.offers or {}) do
 				local item = state.items and (state.items[offerId] or state.items[tostring(offerId)]) or nil
 				local itemId = type(item) == "table" and (item.guid or item.id) or offerId
-				currentOffers[tostring(offerId)] = itemId or offerId
+				local name = type(item) == "table" and (item.name or (item.sub and item.sub.name)) or nil
+				local rarity = type(item) == "table" and autoServerHopState.ItemRarity(item) or nil
+				if type(item) == "table" then
+					local metaMarked = item.Meta == true or item.IsMeta == true
+						or (item.sub and (item.sub.Meta == true or item.sub.IsMeta == true))
+						or (type(name) == "string" and string.find(string.lower(name), "%f[%a]meta%f[%A]") ~= nil)
+					if metaMarked and rarity == "Infinity" then rarity = "Meta" end
+				end
+				currentOffers[tostring(offerId)] = {
+					ItemId = itemId or offerId,
+					Name = name,
+					Rarity = rarity,
+					Price = tonumber(offer and offer.cost and offer.cost.value),
+				}
 			end
-			for offerKey, itemId in pairs(previousBoothOffersHP) do
+			for offerKey, previousOffer in pairs(previousBoothOffersHP) do
+				local itemId = type(previousOffer) == "table" and previousOffer.ItemId or previousOffer
 				local suppressions = autoServerHopState.RuntimeBoothScriptRemoveUntil
 				local suppressedUntil = type(suppressions) == "table"
 					and tonumber(suppressions[offerKey]) or 0
@@ -15504,15 +15597,34 @@ if MINIGAME_MODE then
 					hopNotBeforeHP = math.max(hopNotBeforeHP, os.clock() + 2)
 					task.delay(0.75, function()
 						pendingBoothChecksHP[offerKey] = nil
-						if not screenGui.Parent or autoServerHopState.Enabled ~= true then return end
+						if not screenGui.Parent then return end
 						local liveState = myBoothStateHP()
 						if boothContainsItemHP(liveState, itemId) or inventoryContainsHP(itemId) then return end
-						local seconds = math.clamp(
-							math.floor(tonumber(autoServerHopState.BoothPurchaseTimeAdded) or 1),
-							1, 60
-						) * 60
-						boothBlockRemainingHP = math.max(boothBlockRemainingHP, seconds)
-						hopNotBeforeHP = math.max(hopNotBeforeHP, os.clock() + seconds)
+						if autoServerHopState.Utility.PrintPurchasedBoothListingsToTerminal == true then
+							local info = type(previousOffer) == "table" and previousOffer or {}
+							local parts = {"BOOTH PURCHASE"}
+							if info.Name ~= nil and tostring(info.Name) ~= "" then
+								parts[#parts + 1] = "Item: " .. tostring(info.Name)
+							else
+								parts[#parts + 1] = "Item: " .. tostring(itemId)
+							end
+							if info.Rarity ~= nil and tostring(info.Rarity) ~= "" then
+								parts[#parts + 1] = "Rarity: " .. tostring(info.Rarity)
+							end
+							if tonumber(info.Price) then
+								parts[#parts + 1] = "Tokens: " .. tostring(math.floor(tonumber(info.Price)))
+							end
+							print(table.concat(parts, " | "))
+							print(string.rep("\\", 10))
+						end
+						if autoServerHopState.Enabled == true then
+							local seconds = math.clamp(
+								math.floor(tonumber(autoServerHopState.BoothPurchaseTimeAdded) or 1),
+								1, 60
+							) * 60
+							boothBlockRemainingHP = math.max(boothBlockRemainingHP, seconds)
+							hopNotBeforeHP = math.max(hopNotBeforeHP, os.clock() + seconds)
+						end
 					end)
 				end
 			end
@@ -16577,6 +16689,7 @@ if MINIGAME_MODE then
 		local DeleteInventoryItemADI = RemotesADI.DeleteInventoryItem
 		local LockInventoryItemADI = RemotesADI.LockItem
 		local PlayerDataADI
+		local TradingBoothsADI
 		local ActiveNegotiationADI
 		local ActiveMinigameADI
 		local deleteBusyADI = false
@@ -16598,6 +16711,7 @@ if MINIGAME_MODE then
 		local tryIndexADI = safeTryIndex
 		local function refreshReplicatorsADI()
 			PlayerDataADI = safeRepGet(ReplicatorADI, "PlayerData") or PlayerDataADI
+			TradingBoothsADI = safeRepGet(ReplicatorADI, "TradingBooths") or TradingBoothsADI
 			ActiveNegotiationADI = safeRepGet(ReplicatorADI, "ActiveNegotiation") or ActiveNegotiationADI
 			ActiveMinigameADI = safeRepGet(ReplicatorADI, "ActiveMinigame") or ActiveMinigameADI
 		end
@@ -16605,6 +16719,25 @@ if MINIGAME_MODE then
 			refreshReplicatorsADI()
 			local inventory = tryIndexADI(PlayerDataADI, {"Inventory"})
 			return type(inventory) == "table" and inventory or nil
+		end
+		local function boothListedIdsADI()
+			refreshReplicatorsADI()
+			local listed = {}
+			local data = TradingBoothsADI and TradingBoothsADI.Data
+			if type(data) ~= "table" then return listed end
+			for _, entry in pairs(data) do
+				if type(entry) == "table" and entry.player == LocalPlayerADI then
+					for offerId, item in pairs(entry.items or {}) do
+						local id = type(item) == "table" and (item.guid or item.id) or offerId
+						listed[tostring(id or offerId)] = true
+					end
+					break
+				end
+			end
+			return listed
+		end
+		local function isBoothListedADI(id)
+			return id ~= nil and boothListedIdsADI()[tostring(id)] == true
 		end
 		local function inventoryItemTypeADI(item)
 			if type(item) ~= "table" then return nil end
@@ -16656,31 +16789,27 @@ if MINIGAME_MODE then
 				or tryIndexADI(ActiveMinigameADI, {"session", "gameId"}) ~= nil
 		end
 		local function effectiveInventoryCountADI()
+			local listed = boothListedIdsADI()
 			local count = 0
-			local backpack = LocalPlayerADI:FindFirstChildOfClass("Backpack")
-			local character = LocalPlayerADI.Character
-			if backpack then
-				for _, child in ipairs(backpack:GetChildren()) do
-					if child:IsA("Tool") then
-						count += 1
-					end
-				end
-			end
-			if character then
-				for _, child in ipairs(character:GetChildren()) do
-					if child:IsA("Tool") then
-						count += 1
-					end
-				end
-			end
-			if not backpack and not character then
-				local inventory = inventoryDataADI()
-				for _ in pairs(inventory or {}) do
-					count += 1
-				end
+			for id in pairs(inventoryDataADI() or {}) do
+				if listed[tostring(id)] ~= true then count += 1 end
 			end
 			return count
 		end
+		local function boothPriorityBlocksDeleteADI()
+			local utility = autoServerHopState and autoServerHopState.Utility
+			if not utility or utility.AutoBooth ~= true then return false end
+			if autoServerHopState.RuntimeBoothMutationBusy == true
+				or autoServerHopState.RuntimeBoothListingsPending == true
+			then
+				return true
+			end
+			local evaluatedAt = tonumber(autoServerHopState.RuntimeBoothLastEvaluationAt) or 0
+			-- A freshly enabled/re-executed Auto Booth gets first priority. Auto Delete
+			-- cannot act until the booth controller has completed a recent listing pass.
+			return evaluatedAt <= 0 or os.clock() - evaluatedAt > 2.25
+		end
+
 		local function configuredBrainrotRarityADI(item)
 			if type(item) ~= "table" then return nil end
 			local explicit = (item.sub and item.sub.rarity)
@@ -16788,8 +16917,12 @@ if MINIGAME_MODE then
 			end
 			return false
 		end
-		local function isCapacityNonBrainrotCandidateADI(item, id)
-			if id == nil or type(item) ~= "table" or neverDeleteADI(item) then
+		local function isCapacityNonBrainrotCandidateADI(item, id, listedIds)
+			if id == nil
+				or (listedIds or boothListedIdsADI())[tostring(id)] == true
+				or type(item) ~= "table"
+				or neverDeleteADI(item)
+			then
 				return false
 			end
 			if inventoryItemTypeADI(item) == "Brainrot" then
@@ -16799,8 +16932,9 @@ if MINIGAME_MODE then
 		end
 		local function nonBrainrotIdsADI()
 			local ids = {}
+			local listed = boothListedIdsADI()
 			for id, item in pairs(inventoryDataADI() or {}) do
-				if isCapacityNonBrainrotCandidateADI(item, id) then
+				if isCapacityNonBrainrotCandidateADI(item, id, listed) then
 					ids[#ids + 1] = id
 				end
 			end
@@ -16846,8 +16980,10 @@ if MINIGAME_MODE then
 			end
 			return count
 		end
-		local function deletionBucketADI(item)
-			if type(item) ~= "table"
+		local function deletionBucketADI(item, id, listedIds)
+			if id == nil
+				or (listedIds or boothListedIdsADI())[tostring(id)] == true
+				or type(item) ~= "table"
 				or neverDeleteADI(item)
 				or inventoryItemTypeADI(item) ~= "Brainrot"
 			then
@@ -16871,35 +17007,31 @@ if MINIGAME_MODE then
 		local function worstBrainrotIdADI()
 			local inventory = inventoryDataADI()
 			if not inventory then return nil end
+			local listed = boothListedIdsADI()
 			local worstBucket = math.huge
-			for _, item in pairs(inventory) do
-				local bucket = deletionBucketADI(item)
+			for id, item in pairs(inventory) do
+				local bucket = deletionBucketADI(item, id, listed)
 				if bucket ~= nil and bucket < worstBucket then
 					worstBucket = bucket
 				end
 			end
-			if worstBucket == math.huge then
-				return nil
-			end
+			if worstBucket == math.huge then return nil end
 			local minimumModifiers = math.huge
 			local exactWorst = {}
 			for id, item in pairs(inventory) do
-				if deletionBucketADI(item) == worstBucket then
+				if deletionBucketADI(item, id, listed) == worstBucket then
 					local modifiers = modifierCountADI(item)
 					if modifiers < minimumModifiers then
 						minimumModifiers = modifiers
 						table.clear(exactWorst)
 					end
-					if modifiers == minimumModifiers then
-						exactWorst[#exactWorst + 1] = id
-					end
+					if modifiers == minimumModifiers then exactWorst[#exactWorst + 1] = id end
 				end
 			end
-			if #exactWorst == 0 then
-				return nil
-			end
+			if #exactWorst == 0 then return nil end
 			return exactWorst[math.random(1, #exactWorst)]
 		end
+
 		local function unlockInventoryEntryIfNeededADI(id)
 			if autoServerHopState.Utility.PauseScript == true then return false end
 			local inventory = inventoryDataADI()
@@ -16940,6 +17072,7 @@ if MINIGAME_MODE then
 			if not state
 				or state.AutoDeleteWorstInventory ~= true
 				or id == nil
+				or isBoothListedADI(id)
 				or deleteBlockedADI()
 			then
 				return false
@@ -17045,6 +17178,7 @@ if MINIGAME_MODE then
 			if not state
 				or state.AutoDeleteWorstInventory ~= true
 				or id == nil
+				or isBoothListedADI(id)
 				or deleteBlockedADI()
 			then
 				return false
@@ -17175,6 +17309,7 @@ if MINIGAME_MODE then
 				or not state
 				or state.AutoDeleteWorstInventory ~= true
 				or deleteBlockedADI()
+				or boothPriorityBlocksDeleteADI()
 			then
 				continue
 			end
@@ -17220,13 +17355,44 @@ if MINIGAME_MODE then
 			if selectedId == nil then
 				continue
 			end
+			local selectedInventory = inventoryDataADI()
+			local selectedItem = selectedInventory and (
+				selectedInventory[selectedId]
+					or selectedInventory[tostring(selectedId)]
+					or (tonumber(selectedId) and selectedInventory[tonumber(selectedId)] or nil)
+			)
+			local selectedDisplay = tostring(selectedId)
+			local selectedRarity
+			if type(selectedItem) == "table" then
+				pcall(function()
+					selectedDisplay = tostring(ItemToStringADI(selectedItem, {
+						rich = false,
+						displayLevel = false,
+						displayMutation = false,
+					}) or selectedDisplay)
+				end)
+				selectedRarity = getItemRarityADI(selectedItem)
+			end
 			deleteBusyADI = true
+			local deleteOk, deleted
 			if selectedKind == "NonBrainrot" then
-				pcall(deleteNonBrainrotEntryCompletelyADI, selectedId)
+				deleteOk, deleted = pcall(deleteNonBrainrotEntryCompletelyADI, selectedId)
 			else
-				pcall(deleteBrainrotEntryCompletelyADI, selectedId)
+				deleteOk, deleted = pcall(deleteBrainrotEntryCompletelyADI, selectedId)
 			end
 			deleteBusyADI = false
+			if deleteOk and deleted == true
+				and autoServerHopState.Utility.PrintAutoDeletesToTerminal == true
+			then
+				local parts = {
+					"AUTO DELETE",
+					"Item: " .. selectedDisplay,
+					"Type: " .. tostring(selectedKind),
+				}
+				if selectedRarity then parts[#parts + 1] = "Rarity: " .. tostring(selectedRarity) end
+				print(table.concat(parts, " | "))
+				print(string.rep("\\", 10))
+			end
 		end
 	end)
 end
@@ -20709,6 +20875,8 @@ if MINIGAME_MODE then
 		local BOOTH_REPLICATION_CONFIRM_TIMEOUT_AB = 1.25
 		local BOOTH_MESSAGE_RETRY_HOLD_AB = 4.00
 		autoServerHopState.RuntimeBoothMutationBusy = false
+		autoServerHopState.RuntimeBoothListingsPending = false
+		autoServerHopState.RuntimeBoothLastEvaluationAt = 0
 		if type(BrainrotsConfigAB) == "table" then
 			for _, rarity in ipairs(BrainrotsConfigAB.ClassNames or {}) do
 				local entries = (BrainrotsConfigAB.Chances or {})[rarity]
@@ -20943,25 +21111,28 @@ if MINIGAME_MODE then
 			end
 			return false
 		end
+		local function boothListedIdsAB(state)
+			local listed = {}
+			for offerId, item in pairs(state and state.items or {}) do
+				local id = type(item) == "table" and (item.guid or item.id) or offerId
+				listed[tostring(id or offerId)] = true
+			end
+			return listed
+		end
 		local function boothOfferCountAB(state)
 			local count = 0
 			for _ in pairs(state and state.offers or {}) do count += 1 end
 			return count
 		end
 		local function ownedInventoryCountAB(state)
-			local seen = {}
+			local listed = boothListedIdsAB(state)
 			local count = 0
 			for id in pairs(inventoryAB() or {}) do
-				local key = tostring(id)
-				if not seen[key] then seen[key] = true; count += 1 end
-			end
-			for offerId, item in pairs(state and state.items or {}) do
-				local id = type(item) == "table" and (item.guid or item.id) or offerId
-				local key = tostring(id or offerId)
-				if not seen[key] then seen[key] = true; count += 1 end
+				if listed[tostring(id)] ~= true then count += 1 end
 			end
 			return count
 		end
+
 		local function maxBoothSlotsAB()
 			local maximum = tonumber(autoServerHopState.RuntimeBoothMaxSlots) or 3
 			pcall(function()
@@ -21005,8 +21176,15 @@ if MINIGAME_MODE then
 			return {}
 		end
 		local function itemPassesGlobalFiltersAB(item)
-			-- Eternal is receive-only and can never be listed by Auto Booth.
-			if rarityAB(item) == "Eternal" then return false end
+			-- Eternal is receive-only. Simple Autofarm also never sells Paradox.
+			local itemRarity = rarityAB(item)
+			if itemRarity == "Eternal" then return false end
+			if autoServerHopState.Utility.SimpleAutofarmEnabled == true
+				and itemRarity ~= "Infinity"
+				and itemRarity ~= "Meta"
+			then
+				return false
+			end
 			local utility = autoServerHopState.Utility
 			local avoidNames = utility.AutoBoothAvoidBrainrots
 			local avoidMutations = utility.AutoBoothAvoidMutations
@@ -21077,6 +21255,10 @@ if MINIGAME_MODE then
 			if type(item) ~= "table" or type(spec) ~= "table" then
 				return false
 			end
+			if spec.Mode == "SimpleAutofarm" then
+				local rarity = rarityAB(item)
+				return rarity == "Infinity" or rarity == "Meta"
+			end
 			if spec.Mode == "SpecificBrainrot" then
 				return itemId ~= nil and tostring(itemId) == tostring(spec.ItemId)
 			end
@@ -21100,75 +21282,122 @@ if MINIGAME_MODE then
 				}
 			)
 		end
-		local function ownedChoiceCountsAB(state)
-			local seen = {}
-			local nameCounts = {}
-			local rarityCounts = {}
-			local function addItem(id, item)
-				if type(item) ~= "table" then return end
-				local key = tostring(id)
-				if seen[key] then return end
-				seen[key] = true
-				local name = brainrotNameAB(item)
-				if name then
-					nameCounts[name] = (nameCounts[name] or 0) + 1
-				end
-				local rarity = rarityAB(item)
-				if rarity then
-					rarityCounts[rarity] = (rarityCounts[rarity] or 0) + 1
-				end
-			end
-			for id, item in pairs(inventoryAB() or {}) do
-				addItem(id, item)
-			end
-			for offerId, item in pairs(state and state.items or {}) do
-				local id = type(item) == "table" and (item.guid or item.id) or offerId
-				addItem(id or offerId, item)
-			end
-			return nameCounts, rarityCounts
-		end
+
 		local function ownedSpecCountAB(state, spec)
-			local seen, count = {}, 0
-			local function addItem(id, item)
-				if type(item) ~= "table" then return end
-				local key = tostring(id)
-				if seen[key] then return end
-				seen[key] = true
-				if itemMatchesListingSpecAB(item, spec, id) then count += 1 end
-			end
-			for id, item in pairs(inventoryAB() or {}) do addItem(id, item) end
-			for offerId, item in pairs(state and state.items or {}) do
-				local id = type(item) == "table" and (item.guid or item.id) or offerId
-				addItem(id or offerId, item)
+			local listed = boothListedIdsAB(state)
+			local count = 0
+			for id, item in pairs(inventoryAB() or {}) do
+				if listed[tostring(id)] ~= true
+					and type(item) == "table"
+					and itemMatchesListingSpecAB(item, spec, id)
+				then
+					count += 1
+				end
 			end
 			return count
 		end
-		local function simpleAutofarmBoothTierAB(inventoryCount, rarityCounts)
-			if autoServerHopState.Utility.SimpleAutofarmEnabled ~= true
-				or inventoryCount < 91
-			then
-				return nil
-			end
-			local infinityIndex = table.find(BRAINROT_RARITY_OPTIONS, "Infinity")
-			local metaIndex = table.find(BRAINROT_RARITY_OPTIONS, "Meta")
-			if not infinityIndex or not metaIndex then return nil end
-			for rarityIndex = 1, infinityIndex - 1 do
-				if math.max(0, math.floor(tonumber(rarityCounts[BRAINROT_RARITY_OPTIONS[rarityIndex]]) or 0)) > 0 then
-					return nil
+
+		local function simpleAutofarmDeleteProtectedAB(item)
+			if type(item) ~= "table" then return false end
+			local utility = autoServerHopState.Utility
+			local rarity = rarityAB(item)
+			if rarity == "Paradox" or rarity == "Eternal" then return true end
+			if utility.AvoidDeletingLockedItems == true and item.locked == true then return true end
+			local okType, itemType = pcall(GetItemTypeAB, item)
+			itemType = okType and itemType or nil
+			if utility.AvoidDeletingSignedBrainrots == true
+				and itemType == "Brainrot"
+				and autoServerHopState.ItemSignature(item) == "Signed"
+			then return true end
+			local mutation = brainrotMutationAB(item)
+			if mutation and type(utility.AvoidDeletingMutations) == "table"
+				and utility.AvoidDeletingMutations[mutation] == true
+			then return true end
+			if type(utility.AvoidDeletingTraits) == "table" then
+				for trait in pairs(autoServerHopState.ItemTraits(item)) do
+					if utility.AvoidDeletingTraits[tostring(trait)] == true then return true end
 				end
 			end
-			for rarityIndex = infinityIndex, metaIndex - 1 do
-				if math.max(0, math.floor(tonumber(rarityCounts[BRAINROT_RARITY_OPTIONS[rarityIndex]]) or 0)) > 0 then
-					return "Infinity"
+			local sizeName = autoServerHopState.ItemSizeName(item)
+			if sizeName and type(utility.AvoidDeletingSizes) == "table"
+				and utility.AvoidDeletingSizes[sizeName] == true
+			then return true end
+			local level = autoServerHopState.ItemLevel(item)
+			if level ~= nil and type(utility.AvoidDeletingLevels) == "table"
+				and utility.AvoidDeletingLevels[tostring(math.floor(level + 0.5))] == true
+			then return true end
+			if utility.NeverDeleteEnabled == true then
+				local directName = tostring(item.name or (item.sub and item.sub.name) or item.displayName or item.DisplayName or "")
+				for _, rule in ipairs(type(utility.NeverDeleteSpecificItems) == "table" and utility.NeverDeleteSpecificItems or {}) do
+					if type(rule) == "table" and rule.Item ~= nil and tostring(rule.Item) ~= ""
+						and autoServerHopState.SpecificItemNamesEquivalent(directName, rule.Item)
+						and autoServerHopState.ItemMatchesSpecificRule(item, rule)
+					then return true end
 				end
 			end
-			return "Meta"
+			return false
 		end
+		local function simpleAutofarmBoothPlanAB(state)
+			if autoServerHopState.Utility.SimpleAutofarmEnabled ~= true then return nil, 0 end
+			local listed = boothListedIdsAB(state)
+			local readinessCount = 0
+			local listableInfinity = 0
+			local listableMeta = 0
+			for id, item in pairs(inventoryAB() or {}) do
+				if listed[tostring(id)] ~= true and type(item) == "table" then
+					if simpleAutofarmDeleteProtectedAB(item) then
+						readinessCount += 1
+					else
+						local rarity = rarityAB(item)
+						if rarity == "Infinity" or rarity == "Meta" then
+							readinessCount += 1
+							if item.locked ~= true and itemPassesGlobalFiltersAB(item) then
+								if rarity == "Infinity" then
+									listableInfinity += 1
+								else
+									listableMeta += 1
+								end
+							end
+						end
+					end
+				end
+			end
+			-- Booth-listed items are intentionally excluded. Each new listing must be
+			-- backed by one qualifying item still present in inventory above the 90-item reserve.
+			local budget = math.clamp(readinessCount - 90, 0, maxBoothSlotsAB())
+			if budget <= 0 then return nil, 0 end
+			if listableInfinity > 0 then
+				return "Infinity", math.min(budget, listableInfinity)
+			end
+			if listableMeta > 0 then
+				return "Meta", math.min(budget, listableMeta)
+			end
+			return nil, 0
+		end
+
+		local function existingOfferMatchesSpecAB(state, spec)
+			if type(state) ~= "table" or type(spec) ~= "table" then return false end
+			for offerId, offer in pairs(state.offers or {}) do
+				local item = state.items and (state.items[offerId] or state.items[tostring(offerId)]) or nil
+				local itemId = type(item) == "table" and (item.guid or item.id) or offerId
+				if itemMatchesListingSpecAB(item, spec, itemId) and itemPassesGlobalFiltersAB(item) then
+					local price = tonumber(offer and offer.cost and offer.cost.value)
+					if spec.SimpleAutofarm == true then
+						local rarity = rarityAB(item)
+						if (rarity == "Infinity" and price == 100) or (rarity == "Meta" and price == 500) then
+							return true
+						end
+					elseif price == spec.Price then
+						return true
+					end
+				end
+			end
+			return false
+		end
+
 		local function desiredSpecsAB(state, inventoryCount)
 			local utility = autoServerHopState.Utility
 			local specs = {}
-			local nameCounts, rarityCounts = ownedChoiceCountsAB(state)
-			local simpleAutofarmRarity = simpleAutofarmBoothTierAB(inventoryCount, rarityCounts)
 			for index = 1, maxBoothSlotsAB() do
 				local prefix = "AutoBoothListing" .. tostring(index)
 				local pristineSimpleSlot = utility.SimpleAutofarmEnabled == true
@@ -21190,18 +21419,15 @@ if MINIGAME_MODE then
 					and next(type(utility[prefix .. "BrainrotSignatures"]) == "table" and utility[prefix .. "BrainrotSignatures"] or {}) == nil
 					and next(type(utility[prefix .. "BrainrotSizes"]) == "table" and utility[prefix .. "BrainrotSizes"] or {}) == nil
 					and next(type(utility[prefix .. "BrainrotLevels"]) == "table" and utility[prefix .. "BrainrotLevels"] or {}) == nil
-				if pristineSimpleSlot and simpleAutofarmRarity then
+				if pristineSimpleSlot then
 					specs[#specs + 1] = {
 						Index = index,
-						Mode = "Rarity",
-						Rarity = simpleAutofarmRarity,
-						Price = simpleAutofarmRarity == "Meta" and 500 or 100,
+						Mode = "SimpleAutofarm",
+						SimpleAutofarm = true,
 						MessageWhenListed = false,
 						ListedMessage = "",
 						MessageDelay = 0,
 					}
-					continue
-				elseif pristineSimpleSlot then
 					continue
 				end
 				local enabled = utility[prefix .. "Enabled"] == true
@@ -21216,101 +21442,70 @@ if MINIGAME_MODE then
 				local signatures = type(utility[prefix .. "BrainrotSignatures"]) == "table" and utility[prefix .. "BrainrotSignatures"] or {}
 				local sizes = type(utility[prefix .. "BrainrotSizes"]) == "table" and utility[prefix .. "BrainrotSizes"] or {}
 				local levels = type(utility[prefix .. "BrainrotLevels"]) == "table" and utility[prefix .. "BrainrotLevels"] or {}
-				local threshold = math.clamp(
-					math.floor(tonumber(
-						utility[prefix .. "InventoryThreshold"]
-					) or 95),
-					1,
-					100
-				)
-				local minimumCopies = math.clamp(
-					math.floor(tonumber(
-						utility[prefix .. "MinimumCopies"]
-					) or 1),
-					1,
-					100
-				)
+				local threshold = math.clamp(math.floor(tonumber(utility[prefix .. "InventoryThreshold"]) or 95), 1, 100)
+				local minimumCopies = math.clamp(math.floor(tonumber(utility[prefix .. "MinimumCopies"]) or 1), 1, 100)
 				local spec
 				if listSpecificBrainrot and specificBrainrotId ~= nil and tostring(specificBrainrotId) ~= "" then
-					spec = {
-						Index = index,
-						Mode = "SpecificBrainrot",
-						ItemId = tostring(specificBrainrotId),
-					}
+					spec = {Index = index, Mode = "SpecificBrainrot", ItemId = tostring(specificBrainrotId)}
 				elseif listByBrainrot and type(brainrot) == "string" and brainrot ~= "" then
-					spec = {
-						Index = index,
-						Mode = "Brainrot",
-						Brainrot = brainrot,
-						Mutations = mutations,
-						Traits = traits,
-						Signatures = signatures,
-						Sizes = sizes,
-						Levels = levels,
-					}
+					spec = {Index = index, Mode = "Brainrot", Brainrot = brainrot, Mutations = mutations, Traits = traits, Signatures = signatures, Sizes = sizes, Levels = levels}
 				elseif listByRarity and type(rarity) == "string" and rarity ~= "" then
-					spec = {
-						Index = index,
-						Mode = "Rarity",
-						Rarity = rarity,
-						Mutations = mutations,
-						Traits = traits,
-						Signatures = signatures,
-						Sizes = sizes,
-						Levels = levels,
-					}
+					spec = {Index = index, Mode = "Rarity", Rarity = rarity, Mutations = mutations, Traits = traits, Signatures = signatures, Sizes = sizes, Levels = levels}
 				end
-				local ownedCount = spec and ownedSpecCountAB(state, spec) or 0
-				if enabled
-					and spec
-					and inventoryCount >= threshold
-					and ownedCount >= minimumCopies
-				then
-					spec.Price = math.clamp(
-						math.floor(tonumber(
-							utility[prefix .. "Tokens"]
-						) or 1),
-						1,
-						1000000
-					)
-					spec.MessageWhenListed =
-						utility[prefix .. "MessageWhenListed"] == true
-					spec.ListedMessage =
-						tostring(utility[prefix .. "ListedMessage"] or "")
-					spec.MessageDelay = math.clamp(
-						tonumber(utility[prefix .. "MessageDelay"]) or 0,
-						0,
-						30
-					)
+				if enabled and spec then
+					spec.Price = math.clamp(math.floor(tonumber(utility[prefix .. "Tokens"]) or 1), 1, 1000000)
+					spec.MessageWhenListed = utility[prefix .. "MessageWhenListed"] == true
+					spec.ListedMessage = tostring(utility[prefix .. "ListedMessage"] or "")
+					spec.MessageDelay = math.clamp(tonumber(utility[prefix .. "MessageDelay"]) or 0, 0, 30)
 					spec.MessageGuardKey = prefix .. "MessageWhenListed"
-					specs[#specs + 1] = spec
+					local ownedCount = ownedSpecCountAB(state, spec)
+					local canCreateNew = inventoryCount >= threshold and ownedCount >= minimumCopies
+					if canCreateNew or existingOfferMatchesSpecAB(state, spec) then
+						specs[#specs + 1] = spec
+					end
 				end
 			end
 			return specs
 		end
+
 		local function matchExistingAB(state, specs)
 			local matchedOffers, matchedSpecs = {}, {}
 			local protected = simpleAutofarmProtectedBoothIdsAB(state)
-			for offerId, offer in pairs(state and state.offers or {}) do
-				local item = state.items and state.items[offerId] or nil
-				local protectedId = tostring((type(item) == "table" and (item.guid or item.id)) or offerId)
-				local rarity = rarityAB(item)
-				local price = tonumber(offer and offer.cost and offer.cost.value)
+			local function tryMatchPass(simplePass)
 				for specIndex, spec in ipairs(specs) do
-					if not matchedSpecs[specIndex]
-						and protected[protectedId] ~= true
-						and itemMatchesListingSpecAB(item, spec, protectedId)
-						and price == spec.Price
-						and itemPassesGlobalFiltersAB(item)
-					then
-						matchedSpecs[specIndex] = offerId
-						matchedOffers[tostring(offerId)] = true
-						break
+					if matchedSpecs[specIndex] == nil and (spec.SimpleAutofarm == true) == simplePass then
+						for offerId, offer in pairs(state and state.offers or {}) do
+							if matchedOffers[tostring(offerId)] ~= true then
+								local item = state.items and (state.items[offerId] or state.items[tostring(offerId)]) or nil
+								local itemId = type(item) == "table" and (item.guid or item.id) or offerId
+								local protectedId = tostring(itemId or offerId)
+								local price = tonumber(offer and offer.cost and offer.cost.value)
+								local priceMatches = price == spec.Price
+								if spec.SimpleAutofarm == true then
+									local rarity = rarityAB(item)
+									priceMatches = (rarity == "Infinity" and price == 100) or (rarity == "Meta" and price == 500)
+								end
+								if priceMatches
+									and (spec.SimpleAutofarm == true or protected[protectedId] ~= true)
+									and itemMatchesListingSpecAB(item, spec, itemId)
+									and itemPassesGlobalFiltersAB(item)
+								then
+									matchedSpecs[specIndex] = offerId
+									matchedOffers[tostring(offerId)] = true
+									break
+								end
+							end
+						end
 					end
 				end
 			end
+			-- Manual slots own their matching offers first; pristine Simple Autofarm slots
+			-- may then adopt only the remaining Infinity/Meta 100/500-token listings.
+			tryMatchPass(false)
+			tryMatchPass(true)
 			return matchedOffers, matchedSpecs
 		end
+
 		local function removeOfferAB(offerId)
 			local suppressions = autoServerHopState.RuntimeBoothScriptRemoveUntil
 			if type(suppressions) ~= "table" then
@@ -21332,10 +21527,17 @@ if MINIGAME_MODE then
 			local inventory = inventoryAB()
 			local protected = simpleAutofarmProtectedBoothIdsAB(state)
 			if not inventory or type(spec) ~= "table" then return nil end
+			local simpleTargetRarity
+			if spec.SimpleAutofarm == true then
+				local budget
+				simpleTargetRarity, budget = simpleAutofarmBoothPlanAB(state)
+				if not simpleTargetRarity or budget <= 0 then return nil end
+			end
 			local ok, sorted = pcall(SortItemsAB, inventory)
 			if not ok or type(sorted) ~= "table" then return nil end
 			local utility = autoServerHopState.Utility
 			local bestFirst = utility.AutoBoothListBestFirst == true
+			if spec.SimpleAutofarm == true then bestFirst = false end
 			local first = bestFirst and 1 or #sorted
 			local last = bestFirst and #sorted or 1
 			local step = bestFirst and 1 or -1
@@ -21347,18 +21549,18 @@ if MINIGAME_MODE then
 					and protected[sid] ~= true
 					and type(item) == "table"
 					and item.locked ~= true
+					and (spec.SimpleAutofarm ~= true or rarityAB(item) == simpleTargetRarity)
 					and itemMatchesListingSpecAB(item, spec, id)
 					and itemPassesGlobalFiltersAB(item)
 					and not boothContainsItemAB(state, id)
 				then
 					local tradeable = false
-					pcall(function()
-						tradeable = ItemIsTradeableAB(item) == true
-					end)
+					pcall(function() tradeable = ItemIsTradeableAB(item) == true end)
 					if tradeable then return sid end
 				end
 			end
 		end
+
 		local function sendPublicChatAB(message)
 			if autoServerHopState.Utility.PauseScript == true or autoServerHopState.Utility.PauseMinigameFeatures == true then return false end
 			message = tostring(message or "")
@@ -21396,7 +21598,14 @@ if MINIGAME_MODE then
 			local tradeable = false
 			pcall(function() tradeable = ItemIsTradeableAB(item) == true end)
 			if not tradeable then return false end
-			local invoked = invokeMutationAB(ListBoothOfferingAB, true, itemId, spec.Price)
+			local price = spec.Price
+			if spec.SimpleAutofarm == true then
+				local rarity = rarityAB(item)
+				if rarity ~= "Infinity" and rarity ~= "Meta" then return false end
+				price = rarity == "Meta" and 500 or 100
+			end
+			price = math.clamp(math.floor(tonumber(price) or 1), 1, 1000000)
+			local invoked = invokeMutationAB(ListBoothOfferingAB, true, itemId, price)
 			if not invoked then return false end
 			local deadline = os.clock() + BOOTH_REPLICATION_CONFIRM_TIMEOUT_AB
 			repeat
@@ -21404,17 +21613,14 @@ if MINIGAME_MODE then
 				local live = myBoothStateAB()
 				if boothContainsItemAB(live, itemId) then
 					if spec.MessageWhenListed == true and spec.ListedMessage ~= "" then
-						scheduleBoothMessageAB(
-							spec.ListedMessage,
-							spec.MessageDelay,
-							spec.MessageGuardKey
-						)
+						scheduleBoothMessageAB(spec.ListedMessage, spec.MessageDelay, spec.MessageGuardKey)
 					end
 					return true
 				end
 			until os.clock() >= deadline
 			return false
 		end
+
 		local function updateBoothNameAB(state)
 			local wanted = string.sub(tostring(autoServerHopState.Utility.AutoBoothName or ""), 1, 70)
 			local current = state.details and tostring(state.details.BoothMessage or "") or ""
@@ -21428,24 +21634,22 @@ if MINIGAME_MODE then
 			return false
 		end
 		local function maintainBoothAB()
+			autoServerHopState.RuntimeBoothLastEvaluationAt = os.clock()
+			autoServerHopState.RuntimeBoothListingsPending = false
 			if not boothMutationAllowedAB() then return end
 			local state = myBoothStateAB(true)
-			if autoServerHopState.Utility.SimpleAutofarmEnabled == true then
-				local inventoryCount = ownedInventoryCountAB(state)
-				local _, rarityCounts = ownedChoiceCountsAB(state)
-				if not simpleAutofarmBoothTierAB(inventoryCount, rarityCounts) then
-					if state then
-						for offerId in pairs(state.offers or {}) do
-							removeOfferAB(offerId)
-							return
-						end
-					end
+			if not state then
+				autoServerHopState.RuntimeBoothListingsPending = true
+				state = select(1, claimAnyBoothAB())
+				if not state then
+					autoServerHopState.RuntimeBoothListingsPending = false
 					return
 				end
 			end
-			if not state then state = select(1, claimAnyBoothAB()) end
-			if not state then return end
-			if updateBoothNameAB(state) then return end
+			if updateBoothNameAB(state) then
+				autoServerHopState.RuntimeBoothListingsPending = true
+				return
+			end
 			if autoServerHopState.Utility.AutoBoothMessageAllListingsCompleted ~= true then
 				configuredCompleteMessagedAB = false
 			end
@@ -21460,14 +21664,14 @@ if MINIGAME_MODE then
 				if not matchedOffers[tostring(offerId)] then
 					configuredCompleteMessagedAB = false
 					possibleCompleteMessagedAB = false
+					autoServerHopState.RuntimeBoothListingsPending = true
 					removeOfferAB(offerId)
 					return
 				end
 			end
 			local matchedCount = 0
 			for _ in pairs(matchedSpecs) do matchedCount += 1 end
-			local allConfiguredComplete =
-				#specs > 0 and matchedCount >= #specs
+			local allConfiguredComplete = #specs > 0 and matchedCount >= #specs
 			if allConfiguredComplete then
 				if not configuredCompleteMessagedAB
 					and autoServerHopState.Utility.AutoBoothMessageAllListingsCompleted == true
@@ -21514,6 +21718,7 @@ if MINIGAME_MODE then
 					local itemId = findListingItemAB(spec, state, reserved)
 					if itemId then
 						possibleCompleteMessagedAB = false
+						autoServerHopState.RuntimeBoothListingsPending = true
 						reserved[tostring(itemId)] = true
 						listItemAB(itemId, spec)
 						return
@@ -21524,21 +21729,26 @@ if MINIGAME_MODE then
 				and autoServerHopState.Utility.AutoBoothMessageAllPossibleCompleted == true
 			then
 				possibleCompleteMessagedAB = true
-				scheduleBoothMessageAB(
-					autoServerHopState.Utility.AutoBoothAllPossibleCompletedMessage
-				)
+				scheduleBoothMessageAB(autoServerHopState.Utility.AutoBoothAllPossibleCompletedMessage)
 			end
 		end
+
 		while screenGui.Parent do
 			if autoServerHopState.Utility.PauseScript ~= true
 			and autoServerHopState.Utility.PauseMinigameFeatures ~= true
 				and autoServerHopState.Utility.AutoBooth == true
 			then
 				local ok = pcall(maintainBoothAB)
-				if not ok then task.wait(0.50) end
+				if not ok then
+					autoServerHopState.RuntimeBoothListingsPending = true
+					autoServerHopState.RuntimeBoothLastEvaluationAt = 0
+					task.wait(0.50)
+				end
 			else
 				configuredCompleteMessagedAB = false
 				possibleCompleteMessagedAB = false
+				autoServerHopState.RuntimeBoothListingsPending = false
+				autoServerHopState.RuntimeBoothLastEvaluationAt = 0
 			end
 			task.wait(1.00)
 		end
