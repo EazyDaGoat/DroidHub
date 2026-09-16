@@ -1,15 +1,28 @@
--- Persist the outgoing execution immediately, before any startup waits,
--- asset loading, or UI reconstruction can delay the new execution.
+-- Automatic settings persistence was removed. Configs are now the only
+-- file-backed settings mechanism. Clean up legacy autosave state/files once.
 do
-	local previousSaver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
-	if type(previousSaver) ~= "function" then
-		pcall(function()
-			if getgenv then previousSaver = getgenv()["__TUFFHUB_SAVE_SETTINGS_NOW"] end
-		end)
-	end
-	if type(previousSaver) == "function" then
-		pcall(previousSaver, true)
-	end
+	rawset(_G, "__TUFFHUB_SAVE_SETTINGS_NOW", nil)
+	rawset(_G, "__TUFFHUB_PERSISTED_SETTINGS_V1", nil)
+	rawset(_G, "__TUFFHUB_SETTINGS_SAVE_GENERATION_V1", nil)
+	pcall(function()
+		if getgenv then
+			getgenv()["__TUFFHUB_SAVE_SETTINGS_NOW"] = nil
+			getgenv()["__TUFFHUB_PERSISTED_SETTINGS_V1"] = nil
+			getgenv()["__TUFFHUB_SETTINGS_SAVE_GENERATION_V1"] = nil
+		end
+	end)
+	pcall(function()
+		if type(delfile) == "function" then
+			for _, path in ipairs({"TuffHub_Settings_v1.json", "TuffHub_Settings_v1.backup.json"}) do
+				local exists = true
+				if type(isfile) == "function" then
+					local ok, value = pcall(isfile, path)
+					exists = ok and value == true
+				end
+				if exists then pcall(delfile, path) end
+			end
+		end
+	end)
 end
 local Players = game:GetService("Players")
 if not game:IsLoaded() then game.Loaded:Wait() end
@@ -2015,8 +2028,6 @@ if MINIGAME_MODE then
 				utility.PermanentBlacklistedUserIds[key] = true
 			end
 		end
-		local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
-		if type(saver) == "function" then task.defer(saver, true) end
 		return true
 	end
 	autoServerHopState.ResetCanceledTradeStreak = function(userId)
@@ -2045,10 +2056,6 @@ if MINIGAME_MODE then
 			autoServerHopState.RuntimeTempBlacklistedUserIds[key] = nil
 			changed = true
 		end
-		if changed then
-			local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
-			if type(saver) == "function" then task.defer(saver, true) end
-		end
 		return changed
 	end
 	autoServerHopState.IsTempBlacklistedUser = function(userId)
@@ -2074,39 +2081,6 @@ if MINIGAME_MODE then
 		return false
 	end
 	;(function()
-		local SETTINGS_FILE = "TuffHub_Settings_v1.json"
-		local SETTINGS_BACKUP_FILE = "TuffHub_Settings_v1.backup.json"
-		local MEMORY_KEY = "__TUFFHUB_PERSISTED_SETTINGS_V1"
-		local SAVE_KEY = "__TUFFHUB_SAVE_SETTINGS_NOW"
-		local GENERATION_KEY = "__TUFFHUB_SETTINGS_SAVE_GENERATION_V1"
-		local generation = {}
-		local lastEncoded
-		local lastDiskWriteAt = 0
-		rawset(_G, GENERATION_KEY, generation)
-		local function environmentFunction(name)
-			local environments = {_G}
-			pcall(function()
-				if getgenv then environments[#environments + 1] = getgenv() end
-			end)
-			pcall(function()
-				if getrenv then environments[#environments + 1] = getrenv() end
-			end)
-			pcall(function()
-				if getfenv then environments[#environments + 1] = getfenv(0) end
-			end)
-			for _, environment in ipairs(environments) do
-				if type(environment) == "table" then
-					local ok, value = pcall(function()
-						return environment[name]
-					end)
-					if ok and type(value) == "function" then
-						return value
-					end
-				end
-			end
-		end
-		local readFile = environmentFunction("readfile")
-		local writeFile = environmentFunction("writefile")
 		local function copyJsonSafe(value, seen)
 			local valueType = type(value)
 			if valueType == "boolean"
@@ -3492,7 +3466,7 @@ if MINIGAME_MODE then
 				simpleAutofarmProfile = copyJsonSafe(simple.Profile)
 			end
 			autoServerHopState.Utility.SimpleAutofarmEnabled = false
-			-- Persisted enable state is authoritative. Inventory replication is often
+			-- Imported config enable state is authoritative. Inventory replication is often
 			-- unavailable for a short window during auto-execute/teleport startup;
 			-- never interpret that transient state as the user disabling Autofarm.
 			if type(simple) == "table" and simple.Enabled == true then
@@ -3515,54 +3489,8 @@ if MINIGAME_MODE then
 			end
 			return true
 		end
-		-- Load both durable copies and choose the newest valid one. This prevents
-		-- a valid-but-stale primary file from beating a newer backup when a write
-		-- was interrupted during teleport or manual re-execution.
-		local function readSettingsFile(path)
-			if not readFile then return nil end
-			local okRead, encoded = pcall(readFile, path)
-			if not okRead or type(encoded) ~= "string" or encoded == "" then return nil end
-			local okDecode, decoded = pcall(HttpService.JSONDecode, HttpService, encoded)
-			return okDecode and type(decoded) == "table" and decoded or nil
-		end
-		local primarySnapshot = readSettingsFile(SETTINGS_FILE)
-		local backupSnapshot = readSettingsFile(SETTINGS_BACKUP_FILE)
-		local diskSnapshot = primarySnapshot
-		if type(backupSnapshot) == "table" then
-			local primarySavedAt = type(primarySnapshot) == "table" and tonumber(primarySnapshot._SavedAt) or -1
-			local backupSavedAt = tonumber(backupSnapshot._SavedAt) or -1
-			if type(primarySnapshot) ~= "table" or backupSavedAt > primarySavedAt then
-				diskSnapshot = backupSnapshot
-			end
-		end
-		local memorySnapshot = rawget(_G, MEMORY_KEY)
-		pcall(function()
-			if getgenv and type(getgenv()[MEMORY_KEY]) == "table" then
-				memorySnapshot = getgenv()[MEMORY_KEY]
-			end
-		end)
-		-- Use the newest durable/in-memory snapshot instead of blindly loading
-		-- process memory after disk. This prevents a stale executor-global table
-		-- from rolling back a newer file after a re-execution. Untimestamped
-		-- memory is used only when no durable snapshot exists (for executors
-		-- without filesystem APIs).
-		local chosenSnapshot = diskSnapshot
-		if type(memorySnapshot) == "table" then
-			local memorySavedAt = tonumber(memorySnapshot._SavedAt)
-			local diskSavedAt = type(diskSnapshot) == "table" and tonumber(diskSnapshot._SavedAt) or nil
-			if type(diskSnapshot) ~= "table"
-				or (memorySavedAt ~= nil and (diskSavedAt == nil or memorySavedAt >= diskSavedAt))
-			then
-				chosenSnapshot = memorySnapshot
-			end
-		end
-		if type(chosenSnapshot) == "table" then loadSettingsEnvelope(chosenSnapshot) end
-		do
-			local savedBind = tostring(autoServerHopState.Utility.MenuBindKey or "LeftControl")
-			local okKey, keyCode = pcall(function() return Enum.KeyCode[savedBind] end)
-			if okKey and keyCode then TOGGLE_KEY = keyCode end
-		end
-		if not regularProfileSnapshot then regularProfileSnapshot = snapshotSettings() end
+		-- No settings are loaded automatically. Manual configs are explicit.
+		regularProfileSnapshot = snapshotSettings()
 		local function stripTransientSettings(snapshot)
 			if type(snapshot) ~= "table" then return snapshot end
 			local serverHop = snapshot.ServerHop
@@ -3574,7 +3502,7 @@ if MINIGAME_MODE then
 			end
 			return snapshot
 		end
-		local function settingsEnvelopeForSave()
+		local function settingsEnvelopeForConfig()
 			local current = stripTransientSettings(snapshotSettings())
 			if autoServerHopState.Utility.SimpleAutofarmEnabled == true then
 				simpleAutofarmProfile = copyJsonSafe(current)
@@ -3588,47 +3516,10 @@ if MINIGAME_MODE then
 				Enabled = autoServerHopState.Utility.SimpleAutofarmEnabled == true,
 				Profile = profile,
 			}
-			-- Keep Pause Script as one global persisted switch independent of the
+			-- Keep Pause Script as one global value in exported manual configs, independent of the
 			-- Regular/Simple Autofarm profiles.
 			envelope.GlobalPauseScript = autoServerHopState.Utility.PauseScript == true
 			return envelope
-		end
-		local function saveSettings(forceDisk)
-			local snapshot = settingsEnvelopeForSave()
-			local savedAt = DateTime.now().UnixTimestampMillis
-			local stampedSnapshot = copyJsonSafe(snapshot) or snapshot
-			stampedSnapshot._SavedAt = savedAt
-			rawset(_G, MEMORY_KEY, stampedSnapshot)
-			pcall(function()
-				if getgenv then getgenv()[MEMORY_KEY] = stampedSnapshot end
-			end)
-			local ok, encoded = pcall(function()
-				return HttpService:JSONEncode(snapshot)
-			end)
-			if not ok or type(encoded) ~= "string" then return false end
-			if encoded == lastEncoded and not forceDisk then return true end
-			if not writeFile then
-				lastEncoded = encoded
-				return true
-			end
-			local now = os.clock()
-			if forceDisk or now - lastDiskWriteAt >= 0.20 then
-				local diskSnapshot = stampedSnapshot
-				local okDiskEncode, diskEncoded = pcall(HttpService.JSONEncode, HttpService, diskSnapshot)
-				if not okDiskEncode or type(diskEncoded) ~= "string" then return false end
-				-- Write both copies independently. A primary write interrupted by a
-				-- teleport/re-execution must not destroy the last durable settings.
-				local wroteBackup = pcall(writeFile, SETTINGS_BACKUP_FILE, diskEncoded)
-				local wroteMain = pcall(writeFile, SETTINGS_FILE, diskEncoded)
-				if wroteMain or wroteBackup then
-					rawset(_G, MEMORY_KEY, diskSnapshot)
-					pcall(function() if getgenv then getgenv()[MEMORY_KEY] = diskSnapshot end end)
-					lastDiskWriteAt = now
-					lastEncoded = encoded
-					return true
-				end
-			end
-			return false
 		end
 		local function refreshSettingsUiSoon()
 			autoServerHopState.RuntimeSettingsResetEpoch =
@@ -3647,7 +3538,6 @@ if MINIGAME_MODE then
 			enabled = enabled == true
 			local currentlyEnabled = autoServerHopState.Utility.SimpleAutofarmEnabled == true
 			if enabled == currentlyEnabled then
-				saveSettings(true)
 				return true
 			end
 			if enabled and autoServerHopState.HasAnyBrainrot() == false then
@@ -3668,7 +3558,6 @@ if MINIGAME_MODE then
 			autoServerHopState.RuntimeSimpleAutofarmTargetRarity = nil
 			autoServerHopState.RuntimePlayedMinigameUserIds = {}
 			refreshSettingsUiSoon()
-			saveSettings(true)
 			return true
 		end
 		local function resetSimpleAutofarmSettings()
@@ -3680,7 +3569,6 @@ if MINIGAME_MODE then
 				autoServerHopState.RuntimePlayedMinigameUserIds = {}
 			end
 			refreshSettingsUiSoon()
-			saveSettings(true)
 			return true
 		end
 		rawset(_G, "__TUFFHUB_SET_SIMPLE_AUTOFARM", setSimpleAutofarmEnabled)
@@ -3737,13 +3625,11 @@ if MINIGAME_MODE then
 			autoServerHopState.RuntimeStartedAt = os.clock()
 			autoServerHopState.RuntimeSettingsResetEpoch =
 				(tonumber(autoServerHopState.RuntimeSettingsResetEpoch) or 0) + 1
-			rawset(_G, MEMORY_KEY, nil)
-			return saveSettings(true)
+			return true
 		end
 		rawset(_G, "__TUFFHUB_RESET_ALL_SETTINGS_STATE", resetAllSettingsState)
-		rawset(_G, SAVE_KEY, saveSettings)
 		rawset(_G, "__TUFFHUB_EXPORT_SETTINGS", function()
-			return copyJsonSafe(settingsEnvelopeForSave())
+			return copyJsonSafe(settingsEnvelopeForConfig())
 		end)
 		rawset(_G, "__TUFFHUB_IMPORT_SETTINGS", function(snapshot)
 			if type(snapshot) ~= "table" then return false end
@@ -3755,33 +3641,10 @@ if MINIGAME_MODE then
 					if okKey and keyCode then TOGGLE_KEY = keyCode end
 				end
 				refreshSettingsUiSoon()
-				saveSettings(true)
 			end
 			return imported == true
 		end)
-		pcall(function()
-			if getgenv then getgenv()[SAVE_KEY] = saveSettings end
-		end)
-		-- Save as soon as Roblox begins any teleport. The generation guard prevents
-		-- stale callbacks from older re-executions from touching current settings.
-		pcall(function()
-			startupPlayer.OnTeleport:Connect(function()
-				if rawget(_G, GENERATION_KEY) == generation then
-					pcall(saveSettings, true)
-				end
-			end)
-		end)
-		saveSettings(false)
-		-- UI commits save immediately; this low-frequency flush only catches programmatic edits.
-		task.spawn(function()
-			-- UI commits and departures already force-save. This only catches
-			-- programmatic edits, so keep it low-frequency to avoid repeated deep
-			-- copies/JSON allocations during long sessions.
-			while rawget(_G, GENERATION_KEY) == generation do
-				task.wait(10)
-				saveSettings(false)
-			end
-		end)
+		-- No teleport hooks, background flushes, or implicit settings files.
 	end)()
 	autoServerHopState.ApplyPauseState = function(paused)
 		paused = paused == true
@@ -4207,10 +4070,6 @@ local function setPanelOpen(open)
 	panelOpen = open
 	window.Visible = open
 	autoServerHopState.Utility.GuiMinimized = not open
-	local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
-	if type(saver) == "function" then
-		pcall(saver, true)
-	end
 	local restoreButton = screenGui:FindFirstChild("MinimizedTHButton")
 	if restoreButton then
 		restoreButton.Visible = not open
@@ -5136,7 +4995,7 @@ local function syncPixelSnappedGeometry()
 				if item and type(selector) == "function" then selector(item) end
 			end)
 		end
-		makeQuickButton("Settings", "Settings", "⚙", MENU_ICON_SIZE)
+		makeQuickButton("Settings", "Settings", "⚙", MENU_ICON_SIZE + px(2))
 
 		local profile = New("Frame")
 		profile.Name = "SidebarProfile"
@@ -5173,7 +5032,7 @@ local function syncPixelSnappedGeometry()
 		welcome.Text = "WELCOME,"
 		welcome.TextColor3 = MUTED_TEXT_COLOR
 		welcome.FontFace = MENU_FONT_REGULAR_FACE
-		setResponsiveTextSize(welcome, 13)
+		setResponsiveTextSize(welcome, 12)
 		welcome.TextScaled = false
 		welcome.TextWrapped = false
 		welcome.TextTruncate = Enum.TextTruncate.None
@@ -6299,6 +6158,9 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			for _, parentKey in ipairs(rowData.UtilityParentKeys or {}) do
 				if parentKey == utilityKey then return true end
 			end
+			for _, parentKey in ipairs(rowData.VisibilityUtilityParentKeys or {}) do
+				if parentKey == utilityKey then return true end
+			end
 			return false
 		end
 		local function rowsAreGrouped(a, b)
@@ -7024,8 +6886,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 						end
 						if not targetPlaceId or not targetInstanceId or targetInstanceId == "" then return end
 						if targetPlaceId == game.PlaceId and targetInstanceId == game.JobId then return end
-						local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
-						if type(saver) == "function" then pcall(saver, true) end
 						pcall(function()
 							TeleportService:TeleportToPlaceInstance(targetPlaceId, targetInstanceId, localPlayer)
 						end)
@@ -7266,10 +7126,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				return dynamicHeightValue
 			end
 			local function saveCustomReplies()
-				local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
-				if type(saver) == "function" then
-					task.defer(saver, true)
-				end
 			end
 			local function makeReplyInput(y, placeholder, initialValue, onCommit)
 				local inputBox = New("TextBox")
@@ -7469,8 +7325,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			dynamicSecondaryHeight = function() return managerHeight end
 			local rebuildAutoOfferSource
 			local function saveAutoOfferSource()
-				local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
-				if type(saver) == "function" then task.defer(saver, true) end
 			end
 			local function selectedSpecificCount()
 				local count = 0
@@ -7806,8 +7660,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				return entry
 			end
 			local function saveTradeChatOffers()
-				local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
-				if type(saver) == "function" then task.defer(saver, true) end
 			end
 			rebuildTradeChatOffers = function()
 				closeActivePanelDropdown()
@@ -7922,8 +7774,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			local managerHeight = px(1)
 			dynamicSecondaryHeight = function() return managerHeight end
 			local function saveSpecificCriteria()
-				local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
-				if type(saver) == "function" then task.defer(saver, true) end
 			end
 			local function specificItemKind(name)
 				return autoServerHopState.SpecificItemKindFromName(name)
@@ -9111,8 +8961,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 								filterButton, options(), utility[stateKey], tostring, "Select",
 								function()
 									refreshText()
-									local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
-									if type(saver) == "function" then task.defer(saver, true) end
 								end
 							)
 						end)
@@ -9814,8 +9662,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					filterButton.MouseButton1Click:Connect(function()
 						openManagedMultiDropdown(filterButton, options(), utility[stateKey], tostring, "Select", function()
 							refreshText()
-							local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
-							if type(saver) == "function" then task.defer(saver, true) end
 						end)
 					end)
 				end
@@ -10055,8 +9901,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			TweenService:Create(toggleKnob, TI(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 				Position = featureEnabled and U2(0, toggleWidth - toggleHeight + knobInset, 0, knobInset) or U2O(knobInset, knobInset)
 			}):Play()
-			local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
-			if type(saver) == "function" then task.defer(saver, true) end
 		end)
 		local function refreshFeatureRowFromState()
 			if isSimpleAutofarmWarning then
@@ -10396,10 +10240,6 @@ end
 	local BUILDER_SEMIBOLD_FACE = MENU_FONT_SEMIBOLD_FACE
 	local BUILDER_BOLD_FACE = MENU_FONT_BOLD_FACE
 
-	local function saveNow()
-		local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
-		if type(saver) == "function" then pcall(saver, true) end
-	end
 
 	local function closeChoicePopup()
 		if activeChoiceOverlay and activeChoiceOverlay.Parent then
@@ -10447,16 +10287,15 @@ end
 		local visibleRows = math.min(7, #options)
 		local popupWidth = math.max(px(140), anchor.AbsoluteSize.X)
 		local popupHeight = visibleRows * rowHeight + px(8)
+		ensureDropdownRoomBelow(anchor, popupHeight)
 		local anchorPos = anchor.AbsolutePosition
 		local anchorSize = anchor.AbsoluteSize
 		local viewport = (workspace.CurrentCamera or camera).ViewportSize
 		local x = math.clamp(anchorPos.X, px(4), math.max(px(4), viewport.X - popupWidth - px(4)))
-		local belowY = anchorPos.Y + anchorSize.Y + px(4)
-		local y = belowY + popupHeight <= viewport.Y - px(4)
-			and belowY
-			or math.max(px(4), anchorPos.Y - popupHeight - px(4))
+		local y = anchorPos.Y + anchorSize.Y
+		local roomBelow = math.max(rowHeight + px(8), viewport.Y - y - px(4))
 		popup.Position = U2O(x, y)
-		popup.Size = U2O(popupWidth, popupHeight)
+		popup.Size = U2O(popupWidth, math.min(popupHeight, roomBelow))
 		popup.CanvasSize = U2O(0, #options * rowHeight + px(8))
 		local list = New("UIListLayout")
 		list.Padding = UDim.new(0, 0)
@@ -10715,6 +10554,7 @@ end
 			button.BackgroundTransparency = 0
 			button.BorderSizePixel = 0
 			button.AutoButtonColor = false
+			button:SetAttribute("TuffHubStandardButtonFeedback", true)
 			button.Text = tostring(text or "")
 			button.TextColor3 = color or MENU_TEXT_SELECTED
 			button.FontFace = MENU_FONT_REGULAR_FACE
@@ -10723,7 +10563,9 @@ end
 			button.Parent = row
 			ensureCorner(button, px(5))
 			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(button)
-			if type(onClick) == "function" then button.MouseButton1Click:Connect(onClick) end
+			button.MouseButton1Click:Connect(function()
+				if type(onClick) == "function" then onClick() end
+			end)
 			return button
 		end
 		function helpers.input(placeholder, initialText)
@@ -10776,25 +10618,16 @@ end
 			button.TextColor3 = MENU_TEXT_IDLE
 			button.FontFace = MENU_FONT_REGULAR_FACE
 			setResponsiveTextSize(button, 12)
-			button.TextXAlignment = Enum.TextXAlignment.Left
+			button.TextXAlignment = Enum.TextXAlignment.Center
+			button.TextYAlignment = Enum.TextYAlignment.Center
 			button.ZIndex = 45013
 			button.Parent = row
 			ensureCorner(button, px(5))
 			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(button)
 			local pad = New("UIPadding")
-			pad.PaddingLeft = UDim.new(0, px(9))
-			pad.PaddingRight = UDim.new(0, px(22))
+			pad.PaddingLeft = UDim.new(0, px(7))
+			pad.PaddingRight = UDim.new(0, px(7))
 			pad.Parent = button
-			local arrow = New("TextLabel")
-			arrow.AnchorPoint = V2(1, 0.5)
-			arrow.Position = U2(1, px(-7), 0.5, 0)
-			arrow.Size = U2O(px(12), px(16))
-			arrow.BackgroundTransparency = 1
-			arrow.Text = "⌄"
-			arrow.TextColor3 = MUTED_TEXT_COLOR
-			arrow.FontFace = MENU_FONT_REGULAR_FACE
-			setResponsiveTextSize(arrow, 11)
-			arrow.Parent = button
 			if type(onOpen) == "function" then button.MouseButton1Click:Connect(function() onOpen(button) end) end
 			return button
 		end
@@ -10856,7 +10689,6 @@ end
 				if string.sub(box.Text,1,1) ~= "#" then box.Text = "#" .. box.Text end
 				if syncSwatch() then
 					autoServerHopState.Utility[utilityKey] = box.Text
-					saveNow()
 					if type(applyCallback) == "function" then applyCallback() end
 				else
 					box.Text = tostring(autoServerHopState.Utility[utilityKey] or defaultHex)
@@ -11066,7 +10898,6 @@ end
 		h.info("Age", accountAgeBracket())
 	end)
 	makePanel(tabs.Home, 5, 1, 3, "Feedback", "feedback message send", function(h)
-		h.subheading("Message")
 		h.input("Write feedback here...", "")
 		h.button("Send Feedback", nil)
 	end)
@@ -11094,7 +10925,8 @@ end
 				if not display then
 					pcall(function() display = string.format("%d ms", math.floor(startupPlayer:GetNetworkPing() * 1000 + 0.5)) end)
 				end
-				pingValue.Text = display or "-- ms"
+				local pingNumber = display and tonumber(string.match(tostring(display), "[%d%.]+")) or nil
+				pingValue.Text = pingNumber and string.format("%d ms", math.floor(pingNumber + 0.5)) or "-- ms"
 				task.wait(0.5)
 			end
 		end)
@@ -11199,18 +11031,23 @@ end
 		end
 	end
 
-	local function beginMenuBindCapture()
-		if not menuBindButton then return end
+	local function beginMenuBindCapture(sourceButton)
+		if not menuBindButton and not keybindValue then return end
 		if bindCaptureConnection then bindCaptureConnection:Disconnect(); bindCaptureConnection = nil end
-		menuBindButton.Text = "Press a key..."
+		autoServerHopState.RuntimeMenuBindCaptureActive = true
+		local captureButton = sourceButton or menuBindButton or keybindValue
+		if captureButton then captureButton.Text = "Press a key..." end
 		bindCaptureConnection = UserInputService.InputBegan:Connect(function(input, processed)
 			if processed or input.UserInputType ~= Enum.UserInputType.Keyboard or input.KeyCode == Enum.KeyCode.Unknown then return end
 			if bindCaptureConnection then bindCaptureConnection:Disconnect(); bindCaptureConnection = nil end
 			TOGGLE_KEY = input.KeyCode
 			autoServerHopState.Utility.MenuBindKey = input.KeyCode.Name
-			menuBindButton.Text = input.KeyCode.Name
+			autoServerHopState.RuntimeSuppressMenuToggleUntil = os.clock() + 0.35
+			if menuBindButton then menuBindButton.Text = input.KeyCode.Name end
 			if keybindValue then keybindValue.Text = input.KeyCode.Name end
-			saveNow()
+			task.defer(function()
+				autoServerHopState.RuntimeMenuBindCaptureActive = false
+			end)
 		end)
 	end
 
@@ -11220,11 +11057,10 @@ end
 			openChoicePopup(button, {"Open", "Minimized"}, selected, function(choice)
 				autoServerHopState.Utility.GuiStartMinimized = choice == "Minimized"
 				button.Text = choice
-				saveNow()
 			end)
 		end)
-		menuBindButton = h.selectRow("Menu Bind", tostring(autoServerHopState.Utility.MenuBindKey or TOGGLE_KEY.Name), function()
-			beginMenuBindCapture()
+		menuBindButton = h.selectRow("Menu Bind", tostring(autoServerHopState.Utility.MenuBindKey or TOGGLE_KEY.Name), function(button)
+			beginMenuBindCapture(button)
 		end)
 		h.button("Reset TuffHub", function()
 			local reset = rawget(_G, "__TUFFHUB_RESET_ALL_SETTINGS_STATE")
@@ -11250,20 +11086,20 @@ end
 			openChoicePopup(button, options, autoServerHopState.Utility.ThemeFontChoice, function(choice)
 				autoServerHopState.Utility.ThemeFontChoice = choice
 				button.Text = choice
-				saveNow()
 				applyTheme()
 			end)
 		end)
 	end)
 
 	makePanel(settingsTab, 3, 1, 3, "Keybinds", "settings keybinds menu toggle", function(h)
-		keybindValue = h.info("Menu Toggle", tostring(autoServerHopState.Utility.MenuBindKey or TOGGLE_KEY.Name))
+		keybindValue = h.selectRow("Menu Toggle", tostring(autoServerHopState.Utility.MenuBindKey or TOGGLE_KEY.Name), function(button)
+			beginMenuBindCapture(button)
+		end)
 		h.button("Reset Keybinds", function()
 			TOGGLE_KEY = Enum.KeyCode.LeftControl
 			autoServerHopState.Utility.MenuBindKey = "LeftControl"
 			if menuBindButton then menuBindButton.Text = "LeftControl" end
 			if keybindValue then keybindValue.Text = "LeftControl" end
-			saveNow()
 		end)
 	end)
 
@@ -11308,6 +11144,7 @@ end
 	applyTheme()
 
 	screenGui.Destroying:Connect(function()
+		autoServerHopState.RuntimeMenuBindCaptureActive = false
 		closeChoicePopup()
 		if bindCaptureConnection then bindCaptureConnection:Disconnect(); bindCaptureConnection = nil end
 		for _, connection in ipairs(liveConnections) do
@@ -12411,8 +12248,6 @@ local function setPanelExpanded(
 		autoServerHopState.Utility.PanelExpanded = autoServerHopState.Utility.PanelExpanded or {}
 		if data.PersistenceKey then
 			autoServerHopState.Utility.PanelExpanded[data.PersistenceKey] = expanded
-			local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
-			if type(saver) == "function" then task.defer(saver, true) end
 		end
 	end
 	data.Body.Visible = expanded
@@ -13038,10 +12873,6 @@ closeButton.MouseButton1Click:Connect(function()
 	guiDestroyed = true
 	panelOpen = false
 	autoServerHopState.Utility.GuiMinimized = false
-	local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
-	if type(saver) == "function" then
-		pcall(saver, true)
-	end
 	screenGui:Destroy()
 end)
 end)()
@@ -13055,6 +12886,11 @@ UserInputService.InputBegan:Connect(
 			return
 		end
 		if UserInputService:GetFocusedTextBox() then
+			return
+		end
+		if autoServerHopState.RuntimeMenuBindCaptureActive == true
+			or os.clock() < (tonumber(autoServerHopState.RuntimeSuppressMenuToggleUntil) or 0)
+		then
 			return
 		end
 		if input.KeyCode == TOGGLE_KEY then
@@ -16943,8 +16779,6 @@ if MINIGAME_MODE then
 			local originJobId = game.JobId
 			recordRecentServerHP(originJobId)
 			recordRecentServerHP(chosen.id)
-			local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
-			if type(saver) == "function" then pcall(saver, true) end
 			if hopPreparationBlockedHP(activeMinigameHP()) then
 				hoppingHP = false
 				return
@@ -30777,8 +30611,6 @@ local function rememberAutoleaveDestination(serverId)
     end
     recent[#recent + 1] = serverId
     while #recent > 50 do table.remove(recent, 1) end
-    local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
-    if type(saver) == "function" then pcall(saver, true) end
 end
 local function resolveDestinationServer()
     local requestFn = getRequestFunction()
@@ -30918,8 +30750,6 @@ local function performDisconnectAndTeleport(destinationServerId, reason)
         print("KICKED | Game: " .. tostring(kickedGameName))
         print(kickLogSeparator)
     end
-    local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
-    if type(saver) == "function" then pcall(saver, true) end
     if utility.PauseScript == true or utility.PauseMinigameFeatures == true then
         controller.pendingLossReason = nil
         controller.lastDepartureAttemptAt = 0
