@@ -1,3 +1,16 @@
+-- Persist the outgoing execution immediately, before any startup waits,
+-- asset loading, or UI reconstruction can delay the new execution.
+do
+	local previousSaver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
+	if type(previousSaver) ~= "function" then
+		pcall(function()
+			if getgenv then previousSaver = getgenv()["__TUFFHUB_SAVE_SETTINGS_NOW"] end
+		end)
+	end
+	if type(previousSaver) == "function" then
+		pcall(previousSaver, true)
+	end
+end
 local Players = game:GetService("Players")
 if not game:IsLoaded() then game.Loaded:Wait() end
 -- Startup waits only for real dependencies; no arbitrary sleeps delay execution.
@@ -65,7 +78,7 @@ end
 if viewportSize.X < 320 or viewportSize.Y < 240 then
 	viewportSize = V2(1920, 1080)
 end
-local DEFAULT_WIDTH_SCALE = 0.50
+local DEFAULT_WIDTH_SCALE = 0.60
 local DEFAULT_HEIGHT_SCALE = 0.60
 local FONT_SIZE_SCALE = 1.17188
 local function isPhonePanelLayout()
@@ -106,8 +119,21 @@ local BLACK = RGB(7, 7, 8)
 local PINK = RGB(255, 0, 98)
 local LOGO_FONT = Enum.Font.GothamBlack
 local MENU_FONT = Enum.Font.Nunito
+local MENU_FONT_REGULAR_FACE = Font.new("rbxasset://fonts/families/Nunito.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
 local MENU_FONT_FACE = Font.new("rbxasset://fonts/families/Nunito.json", Enum.FontWeight.Medium, Enum.FontStyle.Normal)
-local PANEL_FONT_FACE = MENU_FONT_FACE
+local MENU_FONT_SEMIBOLD_FACE = Font.new("rbxasset://fonts/families/Nunito.json", Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+local MENU_FONT_BOLD_FACE = Font.new("rbxasset://fonts/families/Nunito.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+local PANEL_FONT_FACE = MENU_FONT_BOLD_FACE
+local function capitalizeUiWords(value)
+	value = tostring(value or "")
+	return (string.gsub(value, "%S+", function(word)
+		local letters = string.gsub(word, "[^%a]", "")
+		if letters ~= "" and letters == string.upper(letters) and #letters > 1 then
+			return word
+		end
+		return (string.gsub(word, "(%a)", string.upper, 1))
+	end))
+end
 local LOGO_FONT_FACE = (function()
 	local fallback = Font.fromEnum(LOGO_FONT)
 	local ok, face = pcall(function()
@@ -182,7 +208,7 @@ local SEARCH_ICON_SIZE = px(15)
 local MENU_TOP_GAP = px(12)
 local MENU_ITEM_HEIGHT = px(36)
 local MENU_ITEM_GAP = px(8)
-local MENU_TEXT_SIZE = 14
+local MENU_TEXT_SIZE = 15
 local MENU_CORNER_RADIUS = px(7)
 local MENU_NORMAL_TRANSPARENCY = 1
 local MENU_HOVER_TRANSPARENCY = 0.72
@@ -192,9 +218,9 @@ local MENU_TEXT_SELECTED = RGB(228, 231, 236)
 local MENU_TEXT_HOVER = RGB(172, 176, 184)
 local MENU_ACTIVE_LINE_WIDTH = px(4)
 local MENU_ACTIVE_LINE_HEIGHT = px(20)
-local MENU_ICON_SIZE = px(17)
-local MENU_ICON_X = px(11)
-local MENU_TEXT_X = px(37)
+local MENU_ICON_SIZE = px(21)
+local MENU_ICON_X = px(9)
+local MENU_TEXT_X = px(40)
 local CONTENT_SIDE_PADDING = px(12)
 local CONTENT_TOP_PADDING = px(56)
 local CONTENT_COLUMN_GAP = px(10)
@@ -267,6 +293,13 @@ if MINIGAME_MODE then
 				SpecificTargets = {},
 				SpecificMutations = {},
 				SpecificTraits = {},
+				SpecificSignatures = {},
+				SpecificSizes = {},
+				SpecificLevels = {},
+				SpecificRarities = {},
+				SpecificMultiplier = nil,
+				SpecificCooldown = nil,
+				SpecificPower = nil,
 				Tokens = 0,
 				OfferAllTokens = false,
 			}
@@ -376,7 +409,7 @@ if MINIGAME_MODE then
 		AutoOfferBrainrotMatchOfferAllTokens = false,
 		AutoOfferBasedOnTradeChat = false,
 		AutoOfferTradeChatOffers = {
-			{LookFor = "", Targets = {}, Amounts = {}, SpecificItems = {}, SpecificMutations = {}, SpecificTraits = {}, BrainrotId = nil, TokenAmount = 0, OfferAllTokens = false},
+			{LookFor = "", Targets = {}, Amounts = {}, SpecificItems = {}, SpecificMutations = {}, SpecificTraits = {}, SpecificSignatures = {}, SpecificSizes = {}, SpecificLevels = {}, SpecificRarities = {}, SpecificMultiplier = nil, SpecificCooldown = nil, SpecificPower = nil, BrainrotId = nil, TokenAmount = 0, OfferAllTokens = false},
 		},
 		AutoAcceptMaster = false,
 		AutoAcceptMustHaveOne = true,
@@ -414,7 +447,7 @@ if MINIGAME_MODE then
 		RegularAutoOfferTokenRarity = nil,
 		RegularAutoOfferBasedOnTradeChat = false,
 		RegularAutoOfferTradeChatOffers = {
-			{LookFor = "", Targets = {}, Amounts = {}, SpecificItems = {}, SpecificMutations = {}, SpecificTraits = {}, TokenAmount = 0, OfferAllTokens = false},
+			{LookFor = "", Targets = {}, Amounts = {}, SpecificItems = {}, SpecificMutations = {}, SpecificTraits = {}, SpecificSignatures = {}, SpecificSizes = {}, SpecificLevels = {}, SpecificRarities = {}, SpecificMultiplier = nil, SpecificCooldown = nil, SpecificPower = nil, TokenAmount = 0, OfferAllTokens = false},
 		},
 
 		AutoAcceptTradesAcceptSpecificItems = {
@@ -441,6 +474,9 @@ if MINIGAME_MODE then
 		RegularOpeningTokenAmount = 0,
 		RegularOpeningSpecificMutations = {},
 		RegularOpeningSpecificTraits = {},
+		RegularOpeningSpecificSignatures = {},
+		RegularOpeningSpecificSizes = {},
+		RegularOpeningSpecificLevels = {},
 
 		-- Regular-trade fallbacks. These never modify minigame/wager fallback settings.
 		RegularFallbackOffers = false,
@@ -530,9 +566,15 @@ if MINIGAME_MODE then
 		DeleteWorstBrainrotsFirst = false,
 		DeleteInventoryThreshold = 95,
 		NeverDeleteEnabled = false,
-		NeverDeleteItems = {},
+		NeverDeleteItems = {}, -- legacy migration source
+		NeverDeleteSpecificItems = {
+			{Item = nil, Mutations = {}, Traits = {}},
+		},
 		NeverDeleteSpecificMutations = {},
 		NeverDeleteSpecificTraits = {},
+		NeverDeleteSpecificSignatures = {},
+		NeverDeleteSpecificSizes = {},
+		NeverDeleteSpecificLevels = {},
 		AvoidDeletingTraits = {},
 		AvoidDeletingMutations = {},
 		AutoEquipBestBrainrot = false,
@@ -546,11 +588,17 @@ if MINIGAME_MODE then
 		HoldSpecificBrainrotId = nil,
 		HoldSpecificBrainrotMutations = {},
 		HoldSpecificBrainrotTraits = {},
+		HoldSpecificBrainrotSignatures = {},
+		HoldSpecificBrainrotSizes = {},
+		HoldSpecificBrainrotLevels = {},
 		MountEquipBestBrainrot = true,
 		MountEquipSpecificBrainrot = false,
 		MountSpecificBrainrotId = nil,
 		MountSpecificBrainrotMutations = {},
 		MountSpecificBrainrotTraits = {},
+		MountSpecificBrainrotSignatures = {},
+		MountSpecificBrainrotSizes = {},
+		MountSpecificBrainrotLevels = {},
 		-- Legacy keys kept for migration/backward compatibility.
 		EquipBestBrainrot = false,
 		EquipBestMountableBrainrot = false,
@@ -572,6 +620,9 @@ if MINIGAME_MODE then
 		OpeningOfferShowAllTokens = false,
 		OpeningOfferSpecificMutations = {},
 		OpeningOfferSpecificTraits = {},
+		OpeningOfferSpecificSignatures = {},
+		OpeningOfferSpecificSizes = {},
+		OpeningOfferSpecificLevels = {},
 		InitialJoinDelay = 1.125,
 		DelayAfterTradeMessage = 0.75,
 		ReactionDelay = 1.6875,
@@ -620,6 +671,9 @@ if MINIGAME_MODE then
 		},
 		CheckServerMutations = {},
 		CheckServerTraits = {},
+		CheckServerSignatures = {},
+		CheckServerSizes = {},
+		CheckServerLevels = {},
 		CheckServerMustOwnAll = false,
 		CheckServerMustOwnOne = true,
 		PauseScript = false,
@@ -671,12 +725,24 @@ if MINIGAME_MODE then
 		autoServerHopState.Utility["FallbackSpecific" .. rarity .. "Traits"] = {}
 		autoServerHopState.Utility["AutoAccept" .. rarity .. "Mutations"] = {}
 		autoServerHopState.Utility["AutoAccept" .. rarity .. "Traits"] = {}
+		autoServerHopState.Utility["AutoAccept" .. rarity .. "Signatures"] = {}
+		autoServerHopState.Utility["AutoAccept" .. rarity .. "Sizes"] = {}
+		autoServerHopState.Utility["AutoAccept" .. rarity .. "Levels"] = {}
 		autoServerHopState.Utility["AutoAcceptTradesRequest" .. rarity .. "Mutations"] = {}
 		autoServerHopState.Utility["AutoAcceptTradesRequest" .. rarity .. "Traits"] = {}
+		autoServerHopState.Utility["AutoAcceptTradesRequest" .. rarity .. "Signatures"] = {}
+		autoServerHopState.Utility["AutoAcceptTradesRequest" .. rarity .. "Sizes"] = {}
+		autoServerHopState.Utility["AutoAcceptTradesRequest" .. rarity .. "Levels"] = {}
 		autoServerHopState.Utility["AutoSit" .. rarity .. "Mutations"] = {}
 		autoServerHopState.Utility["AutoSit" .. rarity .. "Traits"] = {}
+		autoServerHopState.Utility["AutoSit" .. rarity .. "Signatures"] = {}
+		autoServerHopState.Utility["AutoSit" .. rarity .. "Sizes"] = {}
+		autoServerHopState.Utility["AutoSit" .. rarity .. "Levels"] = {}
 		autoServerHopState.Utility["AutoCancel" .. rarity .. "Mutations"] = {}
 		autoServerHopState.Utility["AutoCancel" .. rarity .. "Traits"] = {}
+		autoServerHopState.Utility["AutoCancel" .. rarity .. "Signatures"] = {}
+		autoServerHopState.Utility["AutoCancel" .. rarity .. "Sizes"] = {}
+		autoServerHopState.Utility["AutoCancel" .. rarity .. "Levels"] = {}
 		autoServerHopState.Utility["AutoAcceptTradesAccept" .. rarity .. "Enabled"] = false -- legacy; migrated into shared Accept Offer criteria
 		autoServerHopState.Utility["AutoAcceptTradesAccept" .. rarity .. "Amount"] = 1
 		autoServerHopState.Utility["RegularFallbackSpecific" .. rarity .. "Items"] = {}
@@ -702,9 +768,11 @@ if MINIGAME_MODE then
 			end
 			autoServerHopState.Utility[prefix .. "ListByRarity"] = true
 			autoServerHopState.Utility[prefix .. "ListByBrainrot"] = false
+			autoServerHopState.Utility[prefix .. "ListSpecificBrainrot"] = false
 			autoServerHopState.Utility[prefix .. "Brainrot"] = nil
-			autoServerHopState.Utility[prefix .. "BrainrotMutations"] = {}
-			autoServerHopState.Utility[prefix .. "BrainrotTraits"] = {}
+			autoServerHopState.Utility[prefix .. "SpecificBrainrotId"] = nil
+			autoServerHopState.Utility[prefix .. "BrainrotMutations"] = {} -- legacy
+			autoServerHopState.Utility[prefix .. "BrainrotTraits"] = {} -- legacy
 			autoServerHopState.Utility[prefix .. "MinimumCopies"] = 1
 			autoServerHopState.Utility[prefix .. "MessageDelay"] = 0
 		end
@@ -1084,7 +1152,219 @@ if MINIGAME_MODE then
 		end
 		return out
 	end
-	autoServerHopState.ItemMatchesSpecificFilters = function(item, mutations, traits)
+	local specificItemTypeModule
+	autoServerHopState.ItemKind = function(item)
+		if type(item) ~= "table" then return nil end
+		if specificItemTypeModule == nil then
+			pcall(function()
+				specificItemTypeModule = require(
+					ReplicatedStorage:WaitForChild("Shared")
+						:WaitForChild("utils")
+						:WaitForChild("GetItemType")
+				)
+			end)
+		end
+		if type(specificItemTypeModule) == "function" then
+			local ok, kind = pcall(specificItemTypeModule, item)
+			if ok and kind ~= nil then return tostring(kind) end
+		end
+		local sub = type(item.sub) == "table" and item.sub or {}
+		if sub.luckyBlockType or sub.LuckyBlockType or item.luckyBlockType then return "LuckyBlock" end
+		if sub.gearType or sub.GearType or item.gearType then return "Gear" end
+		if item.name or sub.name then return "Brainrot" end
+		return nil
+	end
+	autoServerHopState.ItemLevel = function(item)
+		if type(item) ~= "table" then return nil end
+		local sub = type(item.sub) == "table" and item.sub or nil
+		return tonumber(item.level or item.Level or (sub and (sub.level or sub.Level)))
+	end
+	autoServerHopState.ItemScale = function(item)
+		if type(item) ~= "table" then return nil end
+		local sub = type(item.sub) == "table" and item.sub or nil
+		return tonumber(item.scale or item.Scale or (sub and (sub.scale or sub.Scale)))
+	end
+	autoServerHopState.ItemSizeName = function(item)
+		local scale = type(item) == "number" and item or autoServerHopState.ItemScale(item)
+		if not scale then return nil end
+		if scale > 1.75 then return "Colossal" end
+		if scale < 0.25 then return "Lil Baby" end
+		if math.abs(scale - 0.25) < 0.0001 then return "Baby" end
+		if math.abs(scale - 0.5) < 0.0001 then return "Mini" end
+		if math.abs(scale - 1) < 0.0001 then return "Default" end
+		if math.abs(scale - 1.5) < 0.0001 then return "Big" end
+		if math.abs(scale - 2) < 0.0001 then return "Titan" end
+		if scale < 0.4 then return "Baby" end
+		if scale < 0.75 then return "Mini" end
+		if scale < 1.25 then return "Default" end
+		if scale < 1.75 then return "Big" end
+		return "Titan"
+	end
+	autoServerHopState.ItemRarity = function(item)
+		if type(item) ~= "table" then return nil end
+		local sub = type(item.sub) == "table" and item.sub or nil
+		local rarity = item.rarity or item.Rarity or (sub and (sub.rarity or sub.Rarity))
+		return rarity ~= nil and tostring(rarity) or nil
+	end
+	autoServerHopState.ItemSignature = function(item)
+		if type(item) ~= "table" then return "Unsigned" end
+		local sub = type(item.sub) == "table" and item.sub or nil
+		local signed = item.signedByUserId or item.signedByName or item.signedAt
+			or (sub and (sub.signedByUserId or sub.signedByName or sub.signedAt))
+		return signed ~= nil and signed ~= false and tostring(signed) ~= "" and "Signed" or "Unsigned"
+	end
+	autoServerHopState.ItemGearAttribute = function(item, key)
+		if type(item) ~= "table" then return nil end
+		local sub = type(item.sub) == "table" and item.sub or nil
+		local attributes = item.attributes or item.Attributes or (sub and (sub.attributes or sub.Attributes))
+		if type(attributes) ~= "table" then return nil end
+		return tonumber(attributes[key] or attributes[string.lower(key)] or attributes[string.upper(key)])
+	end
+	autoServerHopState.SpecificSizeOptions = function()
+		return {"Lil Baby", "Baby", "Mini", "Default", "Big", "Titan", "Colossal"}
+	end
+	autoServerHopState.SpecificLevelOptions = function()
+		local cached = autoServerHopState.RuntimeSpecificLevelOptions
+		if type(cached) == "table" then return cached end
+		local options = {}
+		for level = 1, 125 do options[#options + 1] = tostring(level) end
+		autoServerHopState.RuntimeSpecificLevelOptions = options
+		return options
+	end
+	autoServerHopState.SpecificItemKindFromName = function(name)
+		name = tostring(name or "")
+		if name == "" then return nil end
+		autoServerHopState.RuntimeSpecificItemKindByName = autoServerHopState.RuntimeSpecificItemKindByName or {}
+		local cached = autoServerHopState.RuntimeSpecificItemKindByName[name]
+		if cached ~= nil then return cached ~= false and cached or nil end
+		for _, brainrotName in ipairs(autoServerHopState.BoothBrainrotOptions()) do
+			if tostring(brainrotName) == name then
+				autoServerHopState.RuntimeSpecificItemKindByName[name] = "Brainrot"
+				return "Brainrot"
+			end
+		end
+		local kind
+		pcall(function()
+			local config = ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config")
+			local luckyBlocks = require(config:WaitForChild("LuckyBlocks"))
+			for key, entry in pairs(luckyBlocks or {}) do
+				if type(entry) == "table" then
+					local display = tostring(entry.DisplayName or entry.displayName or (key == "Default" and "Lucky Block" or (tostring(key) .. " Lucky Block")))
+					if display == name then kind = "LuckyBlock" break end
+				end
+			end
+		end)
+		if not kind then
+			pcall(function()
+				local gear = require(ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("GearModule"))
+				for _, gearName in ipairs(gear.GearNames or {}) do
+					if tostring(gearName) == name then kind = "Gear" break end
+				end
+			end)
+		end
+		autoServerHopState.RuntimeSpecificItemKindByName[name] = kind or false
+		return kind
+	end
+	local function numberMatchesRule(actual, expected)
+		if expected == nil or tostring(expected) == "" then return true end
+		actual, expected = tonumber(actual), tonumber(expected)
+		if actual == nil or expected == nil then return false end
+		return math.abs(actual - expected) < 0.0001
+	end
+	autoServerHopState.ItemMatchesSpecificRule = function(item, rule)
+		if type(item) ~= "table" or type(rule) ~= "table" then return false end
+		if not autoServerHopState.ItemMatchesSpecificFilters(item, rule.Mutations, rule.Traits, rule) then return false end
+		if rule.Signature ~= nil and rule.Signature ~= "" and rule.Signature ~= "Any"
+			and autoServerHopState.ItemSignature(item) ~= rule.Signature
+		then return false end
+		if type(rule.Sizes) == "table" and next(rule.Sizes) ~= nil then
+			local sizeName = autoServerHopState.ItemSizeName(item)
+			if not sizeName or rule.Sizes[sizeName] ~= true then return false end
+		end
+		if rule.Level ~= nil and tostring(rule.Level) ~= "" then
+			local actualLevel = autoServerHopState.ItemLevel(item)
+			local minimumLevel = tonumber(rule.Level)
+			if actualLevel == nil or minimumLevel == nil
+				or math.floor(actualLevel + 0.5) < math.floor(minimumLevel + 0.5)
+			then return false end
+		end
+		if type(rule.Rarities) == "table" and next(rule.Rarities) ~= nil then
+			local rarity = autoServerHopState.ItemRarity(item)
+			if not rarity or rule.Rarities[rarity] ~= true then return false end
+		end
+		if not numberMatchesRule(autoServerHopState.ItemGearAttribute(item, "Multiplier"), rule.Multiplier) then return false end
+		if not numberMatchesRule(autoServerHopState.ItemGearAttribute(item, "Cooldown"), rule.Cooldown) then return false end
+		if not numberMatchesRule(autoServerHopState.ItemGearAttribute(item, "Power"), rule.Power) then return false end
+		return true
+	end
+	autoServerHopState.ToolMatchesSpecificRule = function(tool, rule)
+		if typeof(tool) ~= "Instance" or not tool:IsA("Tool") or type(rule) ~= "table" then return false end
+		local mutations = type(rule.Mutations) == "table" and rule.Mutations or {}
+		if next(mutations) ~= nil then
+			local mutation = tool:GetAttribute("Mutation") or tool:GetAttribute("BrainrotMutation")
+			if type(mutation) ~= "string" or mutations[mutation] ~= true then return false end
+		end
+		local traits = type(rule.Traits) == "table" and rule.Traits or {}
+		if next(traits) ~= nil then
+			local present = {}
+			for _, attributeName in ipairs({"Traits", "BrainrotTraits", "Trait"}) do
+				local value = tool:GetAttribute(attributeName)
+				if type(value) == "string" then
+					for trait in string.gmatch(value, "[^,|;]+") do
+						trait = string.gsub(trait, "^%s*(.-)%s*$", "%1")
+						if trait ~= "" then present[trait] = true end
+					end
+				end
+			end
+			local matched = false
+			for trait in pairs(traits) do if present[tostring(trait)] == true then matched = true break end end
+			if not matched then return false end
+		end
+		local signed = tool:GetAttribute("Signed") == true
+			or tool:GetAttribute("SignedByUserId") ~= nil
+			or tool:GetAttribute("SignedByName") ~= nil
+			or tool:GetAttribute("SignedAt") ~= nil
+		local signatureState = signed and "Signed" or "Unsigned"
+		local signatureSet = type(rule.Signatures) == "table" and rule.Signatures
+			or (type(rule.SpecificSignatures) == "table" and rule.SpecificSignatures or nil)
+		if signatureSet and next(signatureSet) ~= nil and signatureSet[signatureState] ~= true then return false end
+		if rule.Signature ~= nil and rule.Signature ~= "" and rule.Signature ~= "Any"
+			and signatureState ~= rule.Signature
+		then return false end
+		local scale = tonumber(tool:GetAttribute("Scale") or tool:GetAttribute("BrainrotScale") or tool:GetAttribute("ItemScale"))
+		local sizeName = scale and autoServerHopState.ItemSizeName(scale) or tool:GetAttribute("Size")
+		local sizeSet = type(rule.Sizes) == "table" and rule.Sizes
+			or (type(rule.SpecificSizes) == "table" and rule.SpecificSizes or nil)
+		if sizeSet and next(sizeSet) ~= nil then
+			if not sizeName or sizeSet[tostring(sizeName)] ~= true then return false end
+		end
+		local level = tonumber(tool:GetAttribute("Level") or tool:GetAttribute("BrainrotLevel") or tool:GetAttribute("ItemLevel"))
+		local levelSet = type(rule.Levels) == "table" and rule.Levels
+			or (type(rule.SpecificLevels) == "table" and rule.SpecificLevels or nil)
+		if levelSet and next(levelSet) ~= nil then
+			if level == nil or levelSet[tostring(math.floor(level + 0.5))] ~= true then return false end
+		end
+		if rule.Level ~= nil and tostring(rule.Level) ~= "" then
+			local minimumLevel = tonumber(rule.Level)
+			if level == nil or minimumLevel == nil
+				or math.floor(level + 0.5) < math.floor(minimumLevel + 0.5)
+			then return false end
+		end
+		if type(rule.Rarities) == "table" and next(rule.Rarities) ~= nil then
+			local rarity = tool:GetAttribute("Rarity") or tool:GetAttribute("BrainrotRarity") or tool:GetAttribute("ItemRarity")
+			if rarity == nil or rule.Rarities[tostring(rarity)] ~= true then return false end
+		end
+		for _, key in ipairs({"Multiplier", "Cooldown", "Power"}) do
+			local expected = rule[key]
+			if expected ~= nil and tostring(expected) ~= "" then
+				local actual = tonumber(tool:GetAttribute(key))
+				expected = tonumber(expected)
+				if actual == nil or expected == nil or math.abs(actual - expected) >= 0.0001 then return false end
+			end
+		end
+		return true
+	end
+	autoServerHopState.ItemMatchesSpecificFilters = function(item, mutations, traits, extra)
 		if type(item) ~= "table" then return false end
 		if type(mutations) == "table" and next(mutations) ~= nil then
 			local mutation = autoServerHopState.ItemMutation(item)
@@ -1098,19 +1378,96 @@ if MINIGAME_MODE then
 			end
 			if not matched then return false end
 		end
+		extra = type(extra) == "table" and extra or nil
+		if extra then
+			local signatureSet = type(extra.Signatures) == "table" and extra.Signatures
+				or (type(extra.SpecificSignatures) == "table" and extra.SpecificSignatures or nil)
+			if signatureSet and next(signatureSet) ~= nil
+				and signatureSet[autoServerHopState.ItemSignature(item)] ~= true
+			then return false end
+			if extra.Signature ~= nil and extra.Signature ~= "" and extra.Signature ~= "Any"
+				and autoServerHopState.ItemSignature(item) ~= extra.Signature
+			then return false end
+			local sizeSet = type(extra.Sizes) == "table" and extra.Sizes
+				or (type(extra.SpecificSizes) == "table" and extra.SpecificSizes or nil)
+			if sizeSet and next(sizeSet) ~= nil then
+				local sizeName = autoServerHopState.ItemSizeName(item)
+				if not sizeName or sizeSet[sizeName] ~= true then return false end
+			end
+			local levelSet = type(extra.Levels) == "table" and extra.Levels
+				or (type(extra.SpecificLevels) == "table" and extra.SpecificLevels or nil)
+			if levelSet and next(levelSet) ~= nil then
+				local level = autoServerHopState.ItemLevel(item)
+				if level == nil or levelSet[tostring(math.floor(level + 0.5))] ~= true then return false end
+			end
+			if extra.Level ~= nil and tostring(extra.Level) ~= "" then
+				local actual, expected = autoServerHopState.ItemLevel(item), tonumber(extra.Level)
+				if actual == nil or expected == nil
+					or math.floor(actual + 0.5) < math.floor(expected + 0.5)
+				then return false end
+			end
+			local raritySet = type(extra.Rarities) == "table" and extra.Rarities
+				or (type(extra.SpecificRarities) == "table" and extra.SpecificRarities or nil)
+			if raritySet and next(raritySet) ~= nil then
+				local rarity = autoServerHopState.ItemRarity(item)
+				if not rarity or raritySet[rarity] ~= true then return false end
+			end
+			for _, key in ipairs({"Multiplier", "Cooldown", "Power"}) do
+				local expected = extra[key]
+				if expected == nil then expected = extra["Specific" .. key] end
+				if expected ~= nil and tostring(expected) ~= "" then
+					local actual = autoServerHopState.ItemGearAttribute(item, key)
+					expected = tonumber(expected)
+					if actual == nil or expected == nil or math.abs(actual - expected) >= 0.0001 then return false end
+				end
+			end
+		end
 		return true
 	end
-	autoServerHopState.OwnedTradeableItemMatchesFilters = function(id, mutations, traits)
-		return autoServerHopState.ItemMatchesSpecificFilters(
-			autoServerHopState.OwnedTradeableItemData(id),
-			mutations,
-			traits
-		)
+	autoServerHopState.OwnedTradeableItemMatchesFilters = function(id, mutations, traits, extra)
+		local item = autoServerHopState.OwnedTradeableItemData(id)
+		if type(item) ~= "table" then return false end
+		local kind = autoServerHopState.ItemKind(item)
+		extra = type(extra) == "table" and extra or {}
+		local typedExtra = {}
+		local typedMutations = {}
+		local typedTraits = {}
+		if kind == "Brainrot" then
+			typedMutations = mutations
+			typedTraits = traits
+			typedExtra.SpecificSignatures = extra.SpecificSignatures or extra.Signatures
+			typedExtra.SpecificSizes = extra.SpecificSizes or extra.Sizes
+			typedExtra.SpecificLevels = extra.SpecificLevels or extra.Levels
+		elseif kind == "LuckyBlock" then
+			typedMutations = mutations
+			typedTraits = traits
+			typedExtra.SpecificRarities = extra.SpecificRarities or extra.Rarities
+			typedExtra.SpecificSizes = extra.SpecificSizes or extra.Sizes
+			typedExtra.SpecificLevels = extra.SpecificLevels or extra.Levels
+		elseif kind == "Gear" then
+			typedMutations = mutations
+			typedExtra.SpecificMultiplier = extra.SpecificMultiplier or extra.Multiplier
+			typedExtra.SpecificCooldown = extra.SpecificCooldown or extra.Cooldown
+			typedExtra.SpecificPower = extra.SpecificPower or extra.Power
+		else
+			-- Items without these attributes remain selectable only when no attribute
+			-- filter is active. This prevents a filtered offer from silently matching
+			-- an unrelated item class.
+			local anyFilter = (type(mutations) == "table" and next(mutations) ~= nil)
+				or (type(traits) == "table" and next(traits) ~= nil)
+			for _, value in pairs(extra) do
+				if (type(value) == "table" and next(value) ~= nil)
+					or (type(value) ~= "table" and value ~= nil and tostring(value) ~= "")
+				then anyFilter = true break end
+			end
+			if anyFilter then return false end
+		end
+		return autoServerHopState.ItemMatchesSpecificFilters(item, typedMutations, typedTraits, typedExtra)
 	end
-	autoServerHopState.FilterOwnedTradeableItemOptions = function(mutations, traits)
+	autoServerHopState.FilterOwnedTradeableItemOptions = function(mutations, traits, extra)
 		local options = {}
 		for _, id in ipairs(autoServerHopState.RefreshOwnedTradeableItemOptions()) do
-			if autoServerHopState.OwnedTradeableItemMatchesFilters(id, mutations, traits) then
+			if autoServerHopState.OwnedTradeableItemMatchesFilters(id, mutations, traits, extra) then
 				options[#options + 1] = id
 			end
 		end
@@ -1127,28 +1484,28 @@ if MINIGAME_MODE then
 		end
 		return options
 	end
-	autoServerHopState.FilterOwnedOfferableBrainrotOptions = function(mutations, traits)
+	autoServerHopState.FilterOwnedOfferableBrainrotOptions = function(mutations, traits, extra)
 		local options = {}
 		for _, id in ipairs(autoServerHopState.RefreshOwnedOfferableBrainrotOptions()) do
-			if autoServerHopState.OwnedTradeableItemMatchesFilters(id, mutations, traits) then
+			if autoServerHopState.OwnedTradeableItemMatchesFilters(id, mutations, traits, extra) then
 				options[#options + 1] = id
 			end
 		end
 		return options
 	end
-	autoServerHopState.FilterOwnedBrainrotOptions = function(mutations, traits)
+	autoServerHopState.FilterOwnedBrainrotOptions = function(mutations, traits, extra)
 		local options = {}
 		for _, id in ipairs(autoServerHopState.RefreshOwnedBrainrotOptions()) do
-			if autoServerHopState.OwnedTradeableItemMatchesFilters(id, mutations, traits) then
+			if autoServerHopState.OwnedTradeableItemMatchesFilters(id, mutations, traits, extra) then
 				options[#options + 1] = id
 			end
 		end
 		return options
 	end
-	autoServerHopState.FilterOwnedMountableBrainrotOptions = function(mutations, traits)
+	autoServerHopState.FilterOwnedMountableBrainrotOptions = function(mutations, traits, extra)
 		local options = {}
 		for _, id in ipairs(autoServerHopState.RefreshOwnedMountableBrainrotOptions()) do
-			if autoServerHopState.OwnedTradeableItemMatchesFilters(id, mutations, traits) then
+			if autoServerHopState.OwnedTradeableItemMatchesFilters(id, mutations, traits, extra) then
 				options[#options + 1] = id
 			end
 		end
@@ -1516,6 +1873,9 @@ if MINIGAME_MODE then
 			"RegularOpeningTokenAmount",
 			"RegularOpeningSpecificMutations",
 			"RegularOpeningSpecificTraits",
+			"RegularOpeningSpecificSignatures",
+			"RegularOpeningSpecificSizes",
+			"RegularOpeningSpecificLevels",
 			"RegularFallbackOffers",
 			"RegularFallbackToSpecificItems",
 			"RegularFallbackToTokens",
@@ -1592,8 +1952,12 @@ if MINIGAME_MODE then
 			"DeleteInventoryThreshold",
 			"NeverDeleteEnabled",
 			"NeverDeleteItems",
+			"NeverDeleteSpecificItems",
 			"NeverDeleteSpecificMutations",
 			"NeverDeleteSpecificTraits",
+			"NeverDeleteSpecificSignatures",
+			"NeverDeleteSpecificSizes",
+			"NeverDeleteSpecificLevels",
 			"AvoidDeletingTraits",
 			"AvoidDeletingMutations",
 			"AutoEquipBestBrainrot",
@@ -1607,11 +1971,17 @@ if MINIGAME_MODE then
 			"HoldSpecificBrainrotId",
 			"HoldSpecificBrainrotMutations",
 			"HoldSpecificBrainrotTraits",
+			"HoldSpecificBrainrotSignatures",
+			"HoldSpecificBrainrotSizes",
+			"HoldSpecificBrainrotLevels",
 			"MountEquipBestBrainrot",
 			"MountEquipSpecificBrainrot",
 			"MountSpecificBrainrotId",
 			"MountSpecificBrainrotMutations",
 			"MountSpecificBrainrotTraits",
+			"MountSpecificBrainrotSignatures",
+			"MountSpecificBrainrotSizes",
+			"MountSpecificBrainrotLevels",
 			"EquipBestBrainrot",
 			"EquipBestMountableBrainrot",
 			"EquipSpecificBrainrot",
@@ -1632,6 +2002,9 @@ if MINIGAME_MODE then
 			"OpeningOfferShowAllTokens",
 			"OpeningOfferSpecificMutations",
 			"OpeningOfferSpecificTraits",
+			"OpeningOfferSpecificSignatures",
+			"OpeningOfferSpecificSizes",
+			"OpeningOfferSpecificLevels",
 			"InitialJoinDelay",
 			"DelayAfterTradeMessage",
 			"ReactionDelay",
@@ -1678,8 +2051,12 @@ if MINIGAME_MODE then
 			"CheckServerSpecificItems",
 			"CheckServerMutations",
 			"CheckServerTraits",
+			"CheckServerSignatures",
+			"CheckServerSizes",
+			"CheckServerLevels",
 			"CheckServerMustOwnAll",
 			"CheckServerMustOwnOne",
+			"PauseScript",
 			"GuiMinimized",
 			"PanelExpanded",
 			"AutoBooth",
@@ -1727,12 +2104,24 @@ if MINIGAME_MODE then
 			utilityKeys[#utilityKeys + 1] = "FallbackSpecific" .. rarity .. "Traits"
 			utilityKeys[#utilityKeys + 1] = "AutoAccept" .. rarity .. "Mutations"
 			utilityKeys[#utilityKeys + 1] = "AutoAccept" .. rarity .. "Traits"
+			utilityKeys[#utilityKeys + 1] = "AutoAccept" .. rarity .. "Signatures"
+			utilityKeys[#utilityKeys + 1] = "AutoAccept" .. rarity .. "Sizes"
+			utilityKeys[#utilityKeys + 1] = "AutoAccept" .. rarity .. "Levels"
 			utilityKeys[#utilityKeys + 1] = "AutoAcceptTradesRequest" .. rarity .. "Mutations"
 			utilityKeys[#utilityKeys + 1] = "AutoAcceptTradesRequest" .. rarity .. "Traits"
+			utilityKeys[#utilityKeys + 1] = "AutoAcceptTradesRequest" .. rarity .. "Signatures"
+			utilityKeys[#utilityKeys + 1] = "AutoAcceptTradesRequest" .. rarity .. "Sizes"
+			utilityKeys[#utilityKeys + 1] = "AutoAcceptTradesRequest" .. rarity .. "Levels"
 			utilityKeys[#utilityKeys + 1] = "AutoSit" .. rarity .. "Mutations"
 			utilityKeys[#utilityKeys + 1] = "AutoSit" .. rarity .. "Traits"
+			utilityKeys[#utilityKeys + 1] = "AutoSit" .. rarity .. "Signatures"
+			utilityKeys[#utilityKeys + 1] = "AutoSit" .. rarity .. "Sizes"
+			utilityKeys[#utilityKeys + 1] = "AutoSit" .. rarity .. "Levels"
 			utilityKeys[#utilityKeys + 1] = "AutoCancel" .. rarity .. "Mutations"
 			utilityKeys[#utilityKeys + 1] = "AutoCancel" .. rarity .. "Traits"
+			utilityKeys[#utilityKeys + 1] = "AutoCancel" .. rarity .. "Signatures"
+			utilityKeys[#utilityKeys + 1] = "AutoCancel" .. rarity .. "Sizes"
+			utilityKeys[#utilityKeys + 1] = "AutoCancel" .. rarity .. "Levels"
 			utilityKeys[#utilityKeys + 1] = "AutoAcceptTradesAccept" .. rarity .. "Enabled" -- legacy migration source
 			utilityKeys[#utilityKeys + 1] = "AutoAcceptTradesAccept" .. rarity .. "Amount"
 			utilityKeys[#utilityKeys + 1] = "RegularFallbackSpecific" .. rarity .. "Items"
@@ -1757,7 +2146,9 @@ if MINIGAME_MODE then
 			local prefix = "AutoBoothListing" .. tostring(index)
 			utilityKeys[#utilityKeys + 1] = prefix .. "ListByRarity"
 			utilityKeys[#utilityKeys + 1] = prefix .. "ListByBrainrot"
+			utilityKeys[#utilityKeys + 1] = prefix .. "ListSpecificBrainrot"
 			utilityKeys[#utilityKeys + 1] = prefix .. "Brainrot"
+			utilityKeys[#utilityKeys + 1] = prefix .. "SpecificBrainrotId"
 			utilityKeys[#utilityKeys + 1] = prefix .. "BrainrotMutations"
 			utilityKeys[#utilityKeys + 1] = prefix .. "BrainrotTraits"
 			utilityKeys[#utilityKeys + 1] = prefix .. "MinimumCopies"
@@ -1881,6 +2272,9 @@ if MINIGAME_MODE then
 			utility.CheckServerSpecificItems = {}
 			utility.CheckServerMutations = {}
 			utility.CheckServerTraits = {}
+			utility.CheckServerSignatures = {}
+			utility.CheckServerSizes = {}
+			utility.CheckServerLevels = {}
 			utility.CheckServerMustOwnAll = false
 			utility.CheckServerMustOwnOne = true
 			utility.AutoDeleteWorstInventory = true
@@ -2137,9 +2531,13 @@ if MINIGAME_MODE then
 						end
 						if savedUtility[prefix .. "ListByRarity"] == nil
 							and savedUtility[prefix .. "ListByBrainrot"] == nil
+							and savedUtility[prefix .. "ListSpecificBrainrot"] == nil
 						then
 							autoServerHopState.Utility[prefix .. "ListByRarity"] = true
 							autoServerHopState.Utility[prefix .. "ListByBrainrot"] = false
+							autoServerHopState.Utility[prefix .. "ListSpecificBrainrot"] = false
+						elseif savedUtility[prefix .. "ListSpecificBrainrot"] == nil then
+							autoServerHopState.Utility[prefix .. "ListSpecificBrainrot"] = false
 						end
 						if savedUtility[prefix .. "MinimumCopies"] == nil then
 							autoServerHopState.Utility[prefix .. "MinimumCopies"] = 1
@@ -2341,6 +2739,35 @@ if MINIGAME_MODE then
 				end
 				converted[#converted + 1] = {Item=nil, Mutations={}, Traits={}}
 				autoServerHopState.Utility.CheckServerSpecificItems = converted
+			end
+			-- Never Delete now uses the same type-aware specific-item rule editor as the
+			-- rest of the UI. Convert legacy name-map selections once, preserving the
+			-- old Brainrot filters on those migrated rules.
+			do
+				local current = autoServerHopState.Utility.NeverDeleteSpecificItems
+				local hasConfiguredRule = false
+				if type(current) == "table" then
+					for _, rule in ipairs(current) do
+						if type(rule) == "table" and rule.Item ~= nil and tostring(rule.Item) ~= "" then hasConfiguredRule = true break end
+					end
+				end
+				if not hasConfiguredRule and type(autoServerHopState.Utility.NeverDeleteItems) == "table" then
+					local converted = {}
+					for itemName, enabled in pairs(autoServerHopState.Utility.NeverDeleteItems) do
+						if type(itemName) == "string" and itemName ~= "" and enabled == true then
+							converted[#converted + 1] = {
+								Item = itemName,
+								Mutations = copyJsonSafe(autoServerHopState.Utility.NeverDeleteSpecificMutations) or {},
+								Traits = copyJsonSafe(autoServerHopState.Utility.NeverDeleteSpecificTraits) or {},
+								SpecificSignatures = copyJsonSafe(autoServerHopState.Utility.NeverDeleteSpecificSignatures) or {},
+								Sizes = copyJsonSafe(autoServerHopState.Utility.NeverDeleteSpecificSizes) or {},
+								SpecificLevels = copyJsonSafe(autoServerHopState.Utility.NeverDeleteSpecificLevels) or {},
+							}
+						end
+					end
+					converted[#converted + 1] = {Item=nil, Mutations={}, Traits={}}
+					autoServerHopState.Utility.NeverDeleteSpecificItems = converted
+				end
 			end
 			-- Migrate the old opening-token controls into the new independent token mode.
 			if autoServerHopState.Utility.OpeningOfferCustomTokenAmount == true then
@@ -2578,6 +3005,7 @@ if MINIGAME_MODE then
 		end
 		local function applyProfileSnapshot(profile)
 			if type(profile) ~= "table" then return false end
+			local globalPause = autoServerHopState.Utility.PauseScript == true
 			local toggleRegistry = autoServerHopState.RuntimeUtilityToggleRows
 			local joinedBlacklist = copyJsonSafe(autoServerHopState.JoinedServerBlacklist) or {}
 			local canceledCounts = copyJsonSafe(autoServerHopState.CanceledTradeCounts) or {}
@@ -2620,6 +3048,9 @@ if MINIGAME_MODE then
 			autoServerHopState.CanceledTradeCounts = canceledCounts
 			autoServerHopState.RecentServerIds = recentServers
 			autoServerHopState.Utility.PermanentBlacklistedUserIds = permanentBlacklisted
+			-- Pause Script is global, not profile-specific. Switching between Regular
+			-- and Simple Autofarm must never silently unpause or pause the script.
+			autoServerHopState.Utility.PauseScript = globalPause
 			autoServerHopState.RuntimeCanceledTradeCounts = copyJsonSafe(canceledCounts) or {}
 			if type(toggleRegistry) == "table" and next(toggleRegistry) ~= nil then
 				autoServerHopState.RuntimeUtilityToggleRows = toggleRegistry
@@ -2672,6 +3103,8 @@ if MINIGAME_MODE then
 		end
 		local function loadSettingsEnvelope(saved)
 			if type(saved) ~= "table" then return false end
+			local savedGlobalPause = type(saved.GlobalPauseScript) == "boolean"
+				and saved.GlobalPauseScript or nil
 			applySnapshot(saved)
 			regularProfileSnapshot = snapshotSettings()
 			local simple = saved.SimpleAutofarm
@@ -2684,40 +3117,73 @@ if MINIGAME_MODE then
 			-- unavailable for a short window during auto-execute/teleport startup;
 			-- never interpret that transient state as the user disabling Autofarm.
 			if type(simple) == "table" and simple.Enabled == true then
+				-- Backward compatibility: old saves stored Pause Script only inside
+				-- the active profile. Capture it before profile application preserves
+				-- the current global value.
+				if savedGlobalPause == nil
+					and type(simple.Profile) == "table"
+					and type(simple.Profile.ServerHop) == "table"
+					and type(simple.Profile.ServerHop.Utility) == "table"
+					and type(simple.Profile.ServerHop.Utility.PauseScript) == "boolean"
+				then
+					savedGlobalPause = simple.Profile.ServerHop.Utility.PauseScript
+				end
 				applyProfileSnapshot(simpleAutofarmProfile or buildSimpleAutofarmDefaultSnapshot())
 				autoServerHopState.Utility.SimpleAutofarmEnabled = true
 			end
-			-- Pause Script is intentionally session-only. A previous paused session
-			-- must never make a fresh execution silently start paused.
-			autoServerHopState.Utility.PauseScript = false
+			if savedGlobalPause ~= nil then
+				autoServerHopState.Utility.PauseScript = savedGlobalPause
+			end
 			return true
 		end
-		local memorySnapshot = rawget(_G, MEMORY_KEY)
-		if type(memorySnapshot) == "table" then
-			loadSettingsEnvelope(memorySnapshot)
-		end
-		-- Disk is the durable source of truth across executions. Load it after
-		-- process memory so a stale executor-global snapshot cannot override a
-		-- newer settings file. Fall back to the backup only if the main file is
-		-- missing, empty, or invalid JSON.
-		local function tryLoadSettingsFile(path)
-			if not readFile then return false end
+		-- Load both durable copies and choose the newest valid one. This prevents
+		-- a valid-but-stale primary file from beating a newer backup when a write
+		-- was interrupted during teleport or manual re-execution.
+		local function readSettingsFile(path)
+			if not readFile then return nil end
 			local okRead, encoded = pcall(readFile, path)
-			if not okRead or type(encoded) ~= "string" or encoded == "" then return false end
+			if not okRead or type(encoded) ~= "string" or encoded == "" then return nil end
 			local okDecode, decoded = pcall(HttpService.JSONDecode, HttpService, encoded)
-			if not okDecode or type(decoded) ~= "table" then return false end
-			return loadSettingsEnvelope(decoded) == true
+			return okDecode and type(decoded) == "table" and decoded or nil
 		end
-		if readFile and not tryLoadSettingsFile(SETTINGS_FILE) then
-			tryLoadSettingsFile(SETTINGS_BACKUP_FILE)
+		local primarySnapshot = readSettingsFile(SETTINGS_FILE)
+		local backupSnapshot = readSettingsFile(SETTINGS_BACKUP_FILE)
+		local diskSnapshot = primarySnapshot
+		if type(backupSnapshot) == "table" then
+			local primarySavedAt = type(primarySnapshot) == "table" and tonumber(primarySnapshot._SavedAt) or -1
+			local backupSavedAt = tonumber(backupSnapshot._SavedAt) or -1
+			if type(primarySnapshot) ~= "table" or backupSavedAt > primarySavedAt then
+				diskSnapshot = backupSnapshot
+			end
 		end
+		local memorySnapshot = rawget(_G, MEMORY_KEY)
+		pcall(function()
+			if getgenv and type(getgenv()[MEMORY_KEY]) == "table" then
+				memorySnapshot = getgenv()[MEMORY_KEY]
+			end
+		end)
+		-- Use the newest durable/in-memory snapshot instead of blindly loading
+		-- process memory after disk. This prevents a stale executor-global table
+		-- from rolling back a newer file after a re-execution. Untimestamped
+		-- memory is used only when no durable snapshot exists (for executors
+		-- without filesystem APIs).
+		local chosenSnapshot = diskSnapshot
+		if type(memorySnapshot) == "table" then
+			local memorySavedAt = tonumber(memorySnapshot._SavedAt)
+			local diskSavedAt = type(diskSnapshot) == "table" and tonumber(diskSnapshot._SavedAt) or nil
+			if type(diskSnapshot) ~= "table"
+				or (memorySavedAt ~= nil and (diskSavedAt == nil or memorySavedAt >= diskSavedAt))
+			then
+				chosenSnapshot = memorySnapshot
+			end
+		end
+		if type(chosenSnapshot) == "table" then loadSettingsEnvelope(chosenSnapshot) end
 		if not regularProfileSnapshot then regularProfileSnapshot = snapshotSettings() end
 		local function stripTransientSettings(snapshot)
 			if type(snapshot) ~= "table" then return snapshot end
 			local serverHop = snapshot.ServerHop
 			local utility = type(serverHop) == "table" and serverHop.Utility or nil
 			if type(utility) == "table" then
-				utility.PauseScript = nil
 				utility.UndoAllSettings = nil
 				utility.AutoChatEditing = nil
 				utility.AutoTradeChatEditing = nil
@@ -2738,11 +3204,20 @@ if MINIGAME_MODE then
 				Enabled = autoServerHopState.Utility.SimpleAutofarmEnabled == true,
 				Profile = profile,
 			}
+			-- Keep Pause Script as one global persisted switch independent of the
+			-- Regular/Simple Autofarm profiles.
+			envelope.GlobalPauseScript = autoServerHopState.Utility.PauseScript == true
 			return envelope
 		end
 		local function saveSettings(forceDisk)
 			local snapshot = settingsEnvelopeForSave()
-			rawset(_G, MEMORY_KEY, snapshot)
+			local savedAt = DateTime.now().UnixTimestampMillis
+			local stampedSnapshot = copyJsonSafe(snapshot) or snapshot
+			stampedSnapshot._SavedAt = savedAt
+			rawset(_G, MEMORY_KEY, stampedSnapshot)
+			pcall(function()
+				if getgenv then getgenv()[MEMORY_KEY] = stampedSnapshot end
+			end)
 			local ok, encoded = pcall(function()
 				return HttpService:JSONEncode(snapshot)
 			end)
@@ -2754,12 +3229,16 @@ if MINIGAME_MODE then
 			end
 			local now = os.clock()
 			if forceDisk or now - lastDiskWriteAt >= 0.20 then
-				local wroteMain = pcall(writeFile, SETTINGS_FILE, encoded)
-				if wroteMain then
-					-- Keep a second valid copy for executors that occasionally interrupt a
-					-- write during teleport/re-execution. Failure here does not invalidate
-					-- the successful primary save.
-					pcall(writeFile, SETTINGS_BACKUP_FILE, encoded)
+				local diskSnapshot = stampedSnapshot
+				local okDiskEncode, diskEncoded = pcall(HttpService.JSONEncode, HttpService, diskSnapshot)
+				if not okDiskEncode or type(diskEncoded) ~= "string" then return false end
+				-- Write both copies independently. A primary write interrupted by a
+				-- teleport/re-execution must not destroy the last durable settings.
+				local wroteBackup = pcall(writeFile, SETTINGS_BACKUP_FILE, diskEncoded)
+				local wroteMain = pcall(writeFile, SETTINGS_FILE, diskEncoded)
+				if wroteMain or wroteBackup then
+					rawset(_G, MEMORY_KEY, diskSnapshot)
+					pcall(function() if getgenv then getgenv()[MEMORY_KEY] = diskSnapshot end end)
 					lastDiskWriteAt = now
 					lastEncoded = encoded
 					return true
@@ -2879,17 +3358,55 @@ if MINIGAME_MODE then
 		end
 		rawset(_G, "__TUFFHUB_RESET_ALL_SETTINGS_STATE", resetAllSettingsState)
 		rawset(_G, SAVE_KEY, saveSettings)
+		pcall(function()
+			if getgenv then getgenv()[SAVE_KEY] = saveSettings end
+		end)
+		-- Save as soon as Roblox begins any teleport. The generation guard prevents
+		-- stale callbacks from older re-executions from touching current settings.
+		pcall(function()
+			startupPlayer.OnTeleport:Connect(function()
+				if rawget(_G, GENERATION_KEY) == generation then
+					pcall(saveSettings, true)
+				end
+			end)
+		end)
 		saveSettings(false)
 		-- UI commits save immediately; this low-frequency flush only catches programmatic edits.
 		task.spawn(function()
+			-- UI commits and departures already force-save. This only catches
+			-- programmatic edits, so keep it low-frequency to avoid repeated deep
+			-- copies/JSON allocations during long sessions.
 			while rawget(_G, GENERATION_KEY) == generation do
-				task.wait(1)
+				task.wait(10)
 				saveSettings(false)
 			end
 		end)
 	end)()
-	-- Pause Script is a live session control, never a persisted startup state.
-	autoServerHopState.Utility.PauseScript = false
+	autoServerHopState.ApplyPauseState = function(paused)
+		paused = paused == true
+		if not paused then return end
+		-- A global pause must cancel pending script actions immediately, not only
+		-- prevent the next scheduler tick. Keep user configuration untouched.
+		autoServerHopState.RuntimeServerHopPending = false
+		autoServerHopState.RuntimeScriptUserHopRequested = false
+		autoServerHopState.RuntimeCheckServerHopRequested = false
+		autoServerHopState.RuntimeManualServerHopRequested = false
+		autoServerHopState.RuntimeAutoSitBusy = false
+		autoServerHopState.RuntimeBoothMutationBusy = false
+		pcall(function()
+			local player = Players.LocalPlayer
+			local character = player and player.Character
+			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+			local root = character and character:FindFirstChild("HumanoidRootPart")
+			if humanoid then
+				humanoid:Move(Vector3.zero, false)
+				if root then humanoid:MoveTo(root.Position) end
+			end
+		end)
+	end
+	if autoServerHopState.Utility.PauseScript == true then
+		task.defer(autoServerHopState.ApplyPauseState, true)
+	end
 end
 local PANEL_TWEEN_INFO = TI(
 		0.16,
@@ -3030,15 +3547,24 @@ local FIXED_SIDEBAR_WIDTH = roundPixel(
 		MIN_WIDTH
 			* SIDEBAR_WIDTH_SCALE
 	)
+autoServerHopState.RuntimeSidebarMinimumWidth = nil
 local sidebarCollapsed = false
 local function getSidebarWidth()
 	if sidebarCollapsed then
 		return COLLAPSED_SIDEBAR_WIDTH
 	end
 	local currentWidth = window.Size.X.Offset
-	return roundPixel(
-		((currentWidth > 1) and currentWidth or MIN_WIDTH)
-			* SIDEBAR_WIDTH_SCALE
+	currentWidth = (currentWidth > 1) and currentWidth or MIN_WIDTH
+	local proportionalWidth = roundPixel(currentWidth * SIDEBAR_WIDTH_SCALE)
+	local textFitWidth = math.max(
+		0,
+		math.floor(tonumber(autoServerHopState.RuntimeSidebarMinimumWidth) or 0)
+	)
+	-- 25% is the preferred/minimum width. On compact displays, widen only as
+	-- much as necessary to keep every expanded sidebar tab label fully visible.
+	return math.min(
+		math.max(proportionalWidth, textFitWidth),
+		math.max(proportionalWidth, currentWidth - LINE_THICKNESS)
 	)
 end
 local FIXED_SIDEBAR_CONTENT_WIDTH = roundEvenPixel(
@@ -3080,22 +3606,18 @@ local function applyDeviceWindowSize(
 	local responsiveWindowScale = window:FindFirstChild("ResponsiveWindowScale")
 	local viewportX = math.max(320, tonumber(currentViewport.X) or 1920)
 	local viewportY = math.max(240, tonumber(currentViewport.Y) or 1080)
-	local scale = math.clamp(
-		math.min(
-			viewportX / math.max(320, viewportSize.X),
-			viewportY / math.max(240, viewportSize.Y)
-		),
-		0.25,
-		4
-	)
 	local renderedWidth = math.min(viewportX * DEFAULT_WIDTH_SCALE, viewportX * 0.92)
 	local renderedHeight = math.min(viewportY * DEFAULT_HEIGHT_SCALE, viewportY * 0.92)
+	-- Keep UI controls/text at their established logical size while Roblox is
+	-- resized. Scaling the entire Window a second time made every child shrink
+	-- on smaller desktop windows even though the Window itself was already being
+	-- resized to a viewport percentage. Let the panel layout reflow/scroll instead.
 	if responsiveWindowScale then
-		responsiveWindowScale.Scale = scale
+		responsiveWindowScale.Scale = 1
 	end
 	window.Size = U2O(
-		roundEvenPixel(renderedWidth / scale),
-		roundEvenPixel(renderedHeight / scale)
+		roundEvenPixel(renderedWidth),
+		roundEvenPixel(renderedHeight)
 	)
 	if recenter then
 		window.Position = U2S(0.5, 0.5)
@@ -3814,7 +4336,9 @@ menuHolder.ClipsDescendants = true
 menuHolder.Active = true
 menuHolder.ScrollingDirection = Enum.ScrollingDirection.Y
 menuHolder.ScrollBarThickness = 0
-menuHolder.ScrollBarImageTransparency = 1
+menuHolder.ScrollBarImageTransparency = 0.22
+menuHolder.ScrollBarImageColor3 = MUTED_TEXT_COLOR
+menuHolder.VerticalScrollBarInset = Enum.ScrollBarInset.None
 menuHolder.AutomaticCanvasSize = Enum.AutomaticSize.Y
 menuHolder.CanvasSize = U2O(
 		0,
@@ -3839,8 +4363,8 @@ local TRACKED_TAB_NAME={
 	Autofarm="AUTOFARM",
 	Games="GAMES",
 	Matchmaking="MATCHMAKING",
-	Offers="MINIGAME OFFERS",
-	AutoAcceptTrades="REGULAR TRADE OFFER",
+	Offers="MINIGAME OFFER",
+	AutoAcceptTrades="TRADE OFFER",
 	Cancel="CANCEL CRITERIA",
 	Fallbacks="FALLBACKS",
 	Messages="MESSAGES",
@@ -3850,24 +4374,62 @@ local TRACKED_TAB_NAME={
 	Settings="SETTINGS",
 }
 local TRACKED_FEATURE="FEATURE"
-local function formatPanelTitle(title)
-	if type(title) ~= "string" or title == "" then return TRACKED_FEATURE end
-	-- Keep words intact. The old letter-spaced title format made every letter a
-	-- legal wrap point, so narrow panels could split a title in the middle of a word.
-	return string.upper(title)
+-- Keep the visual letter spacing without creating line-break opportunities
+-- between individual letters. Roblox may wrap normal spaces, so use a narrow
+-- no-break space inside each word and ordinary spaces only between words.
+local function formatPanelTitle(title, mode)
+	if type(title) ~= "string" or title == "" then title = TRACKED_FEATURE end
+	title = string.upper(title)
+	local words = {}
+	local letterGap = mode == "sidebar" and utf8.char(0x202F) or utf8.char(0x00A0)
+	local wordGap
+	if mode == "selected" then
+		-- Two full space-widths between words while keeping the only legal wrap
+		-- point between complete words.
+		wordGap = utf8.char(0x00A0) .. " "
+	elseif mode == "sidebar" then
+		-- Sidebar tabs use lighter/slighter tracking than panel headings.
+		-- Keep the legal wrap point at the end of the gap so wrapped lines
+		-- never inherit leading spacing.
+		wordGap = utf8.char(0x202F) .. utf8.char(0x202F) .. " "
+	else
+		-- Preserve the original panel-title appearance: one full space-width
+		-- between letters and three between words. Put the only breakable
+		-- space at the end of the gap so a wrapped word starts flush-left.
+		wordGap = utf8.char(0x00A0) .. utf8.char(0x00A0) .. " "
+	end
+	for word in string.gmatch(title, "%S+") do
+		local letters = table.create(#word)
+		local previous
+		for index = 1, #word do
+			local current = string.sub(word, index, index)
+			if index > 1 then
+				if mode ~= "sidebar" and (previous == "/" or current == "/") then
+					letters[#letters + 1] = letterGap .. letterGap
+				else
+					letters[#letters + 1] = letterGap
+				end
+			end
+			letters[#letters + 1] = current
+			previous = current
+		end
+		words[#words + 1] = table.concat(letters)
+	end
+	return table.concat(words, wordGap)
 end
 local selectedTabTitle = New("TextLabel")
 selectedTabTitle.Name = "SelectedTabTitle"
 selectedTabTitle.BackgroundTransparency = 1
 selectedTabTitle.BorderSizePixel = 0
-selectedTabTitle.Text = TRACKED_TAB_NAME.Home
+selectedTabTitle.Text = formatPanelTitle(TRACKED_TAB_NAME.Home, "selected")
 selectedTabTitle.TextColor3 = MUTED_TEXT_COLOR
-selectedTabTitle.FontFace = MENU_FONT_FACE
+selectedTabTitle.FontFace = MENU_FONT_BOLD_FACE
 setResponsiveTextSize(selectedTabTitle, 17)
 selectedTabTitle.TextScaled = false
+selectedTabTitle.TextWrapped = true
 selectedTabTitle.TextXAlignment = Enum.TextXAlignment.Left
 selectedTabTitle.TextYAlignment = Enum.TextYAlignment.Center
-selectedTabTitle.TextTruncate = Enum.TextTruncate.AtEnd
+selectedTabTitle.TextTruncate = Enum.TextTruncate.None
 selectedTabTitle.ZIndex = 54000
 selectedTabTitle.Parent = nil
 local function syncPixelSnappedGeometry()
@@ -4177,6 +4739,37 @@ local function syncPixelSnappedGeometry()
 		end
 	end
 end
+autoServerHopState.RefreshSidebarMinimumWidth = function(skipSync)
+	if sidebarCollapsed or type(menuItems) ~= "table" or #menuItems == 0 then
+		return
+	end
+	local widestText = 0
+	for _, item in ipairs(menuItems) do
+		local label = item and item.Label
+		if label and label.Parent then
+			local measured = TextService:GetTextSize(
+				label.Text,
+				label.TextSize,
+				MENU_FONT,
+				V2(10000, math.max(label.TextSize + px(8), 32))
+			).X
+			widestText = math.max(widestText, measured)
+		end
+	end
+	if widestText <= 0 then return end
+	-- TextService returns logical text width, so do not divide by UIScale here.
+	-- Dividing again caused the sidebar to balloon when the Roblox window was
+	-- resized smaller, which in turn made the right-side panels visually jump.
+	local logicalTextWidth = math.ceil(widestText)
+	-- Allow for the icon, icon/text gap, active indicator, and right breathing room.
+	-- The 0.78 factor mirrors the usable text share of the 90%-wide tab button.
+	local requiredWidth = roundPixel((logicalTextWidth + px(40)) / 0.78)
+	local previousWidth = math.floor(tonumber(autoServerHopState.RuntimeSidebarMinimumWidth) or 0)
+	if math.abs(requiredWidth - previousWidth) > 1 then
+		autoServerHopState.RuntimeSidebarMinimumWidth = requiredWidth
+		if not skipSync then syncPixelSnappedGeometry() end
+	end
+end
 syncPixelSnappedGeometry()
 window:GetPropertyChangedSignal(
 	"AbsoluteSize"
@@ -4231,7 +4824,7 @@ local function selectMenuItem(item)
 	end
 	local previous = selectedMenuItem
 	selectedMenuItem = item
-	selectedTabTitle.Text = TRACKED_TAB_NAME[item.Name] or item.Name
+	selectedTabTitle.Text = formatPanelTitle(TRACKED_TAB_NAME[item.Name] or item.Name, "selected")
 	if previous then
 		updateMenuItemVisual(
 			previous,
@@ -4407,14 +5000,20 @@ local function createSidebarItem(
 		)
 	label.BackgroundTransparency = 1
 	label.BorderSizePixel = 0
-	label.Text = name
+	label.Text = formatPanelTitle(TRACKED_TAB_NAME[name] or name, "sidebar")
 	label.TextColor3 = MENU_TEXT_IDLE
-	label.FontFace = MENU_FONT_FACE
+	label.FontFace = MENU_FONT_SEMIBOLD_FACE
 	setResponsiveTextSize(label, MENU_TEXT_SIZE)
 	label.TextXAlignment = Enum.TextXAlignment.Left
 	label.TextYAlignment = Enum.TextYAlignment.Center
 	label.ZIndex = 45002
 	label.Parent = button
+	label:GetPropertyChangedSignal("TextBounds"):Connect(function()
+		local refreshSidebarWidth = autoServerHopState.RefreshSidebarMinimumWidth
+		if type(refreshSidebarWidth) == "function" then
+			task.defer(refreshSidebarWidth)
+		end
+	end)
 	local item = {
 		Name = name,
 		Row = row,
@@ -4450,31 +5049,31 @@ local function createSidebarItem(
 end
 local tabs = {}
 tabs.Home = createSidebarItem("Home", 1, "⌂")
-tabs.Home.Label.Text = "Home"
+tabs.Home.Label.Text = formatPanelTitle("Home", "sidebar")
 tabs.Autofarm = createSidebarItem("Autofarm", 2, "A")
-tabs.Autofarm.Label.Text = "Autofarm"
+tabs.Autofarm.Label.Text = formatPanelTitle("Autofarm", "sidebar")
 tabs.Games = createSidebarItem("Games", 3, "G")
-tabs.Games.Label.Text = "Games"
+tabs.Games.Label.Text = formatPanelTitle("Games", "sidebar")
 tabs.Matchmaking = createSidebarItem("Matchmaking", 4, "M")
-tabs.Matchmaking.Label.Text = "Matchmaking"
+tabs.Matchmaking.Label.Text = formatPanelTitle("Matchmaking", "sidebar")
 tabs.Offers = createSidebarItem("Offers", 5, "O")
-tabs.Offers.Label.Text = "Minigame Offers"
+tabs.Offers.Label.Text = formatPanelTitle("Minigame Offer", "sidebar")
 tabs.AutoAcceptTrades = createSidebarItem("AutoAcceptTrades", 6, "✓")
-tabs.AutoAcceptTrades.Label.Text = "Regular Trade Offer"
+tabs.AutoAcceptTrades.Label.Text = formatPanelTitle("Trade Offer", "sidebar")
 tabs.Cancel = createSidebarItem("Cancel", 7, "C")
-tabs.Cancel.Label.Text = "Cancel Criteria"
+tabs.Cancel.Label.Text = formatPanelTitle("Cancel Criteria", "sidebar")
 tabs.Fallbacks = createSidebarItem("Fallbacks", 8, "F")
-tabs.Fallbacks.Label.Text = "Fallbacks"
+tabs.Fallbacks.Label.Text = formatPanelTitle("Fallbacks", "sidebar")
 tabs.Messages = createSidebarItem("Messages", 9, "M")
-tabs.Messages.Label.Text = "Messages"
+tabs.Messages.Label.Text = formatPanelTitle("Messages", "sidebar")
 tabs.Inventory = createSidebarItem("Inventory", 10, "I")
-tabs.Inventory.Label.Text = "Inventory"
+tabs.Inventory.Label.Text = formatPanelTitle("Inventory", "sidebar")
 tabs.Booth = createSidebarItem("Booth", 11, "B")
-tabs.Booth.Label.Text = "Booth"
+tabs.Booth.Label.Text = formatPanelTitle("Booth", "sidebar")
 tabs.System = createSidebarItem("System", 12, "S")
-tabs.System.Label.Text = "System"
+tabs.System.Label.Text = formatPanelTitle("System", "sidebar")
 tabs.Settings = createSidebarItem("Settings", 13, "⚙")
-tabs.Settings.Label.Text = "Settings"
+tabs.Settings.Label.Text = formatPanelTitle("Settings", "sidebar")
 selectedMenuItem = tabs.Home
 for _, item in ipairs(
 	menuItems
@@ -4484,7 +5083,10 @@ for _, item in ipairs(
 		true
 	)
 end
-selectedTabTitle.Text = TRACKED_TAB_NAME[selectedMenuItem.Name] or selectedMenuItem.Name
+selectedTabTitle.Text = formatPanelTitle(TRACKED_TAB_NAME[selectedMenuItem.Name] or selectedMenuItem.Name, "selected")
+if type(autoServerHopState.RefreshSidebarMinimumWidth) == "function" then
+	autoServerHopState.RefreshSidebarMinimumWidth()
+end
 syncPixelSnappedGeometry()
 local rightContent = New("ScrollingFrame")
 rightContent.Name = "UnsupportedGameContent"
@@ -4533,6 +5135,13 @@ local function tweenChevronColor(
 end
 local panelChevronAsset=getEmbeddedIconAsset("Chevron")
 local activePanelDropdown
+local dropdownWindowBaseHeight
+local function restoreDropdownWindowHeight()
+	if dropdownWindowBaseHeight and window and window.Parent then
+		window.Size = U2O(window.Size.X.Offset, dropdownWindowBaseHeight)
+	end
+	dropdownWindowBaseHeight = nil
+end
 local function pointInsideGui(gui, point)
 	if not gui or not gui.Parent or not gui.Visible then return false end
 	local pos, size = gui.AbsolutePosition, gui.AbsoluteSize
@@ -4556,6 +5165,7 @@ local function closeActivePanelDropdown()
 			if blocker then blocker:Destroy() end
 		end
 		activePanelDropdown = nil
+		restoreDropdownWindowHeight()
 		if type(onClose) == "function" then task.defer(onClose) end
 	end
 end
@@ -4619,19 +5229,17 @@ local function createEmptyCollapsiblePanel(
 	headerTitle.Name = "Title"
 	headerTitle.AnchorPoint = V2(
 			0,
-			0.5
+			0
 		)
-	headerTitle.Position = U2(
-			0,
+	headerTitle.Position = U2O(
 			px(14),
-			0,
-			PANEL_HEADER_HEIGHT * 0.5
+			px(10)
 		)
 	headerTitle.Size = U2(
 			1,
-			px(-48),
+			px(-62),
 			1,
-			0
+			px(-20)
 		)
 	headerTitle.BackgroundTransparency = 1
 	headerTitle.BorderSizePixel = 0
@@ -4645,7 +5253,10 @@ local function createEmptyCollapsiblePanel(
 	headerTitle.TextXAlignment = Enum.TextXAlignment.Left
 	headerTitle.TextYAlignment = Enum.TextYAlignment.Center
 	headerTitle.ZIndex = 45013
-	headerTitle.Parent = panel
+	-- The title must be sized relative to the header, not the whole expanding
+	-- panel. Parenting it to the panel made TextYAlignment.Center move the title
+	-- down into the body as the panel grew, and could hide it during collapse.
+	headerTitle.Parent = header
 	local chevron
 	if panelChevronAsset then
 		chevron = New("ImageLabel")
@@ -4874,19 +5485,19 @@ local function createEmptyCollapsiblePanel(
 	local function syncPanelHeaderHeight()
 		local panelWidth = panelData and tonumber(panelData.LayoutWidth) or panel.AbsoluteSize.X
 		if not panelWidth or panelWidth <= 1 then return end
-		local available = math.max(px(80), panelWidth - px(58))
+		local available = math.max(px(80), panelWidth - px(62))
 		local measured = TextService:GetTextSize(
 			headerTitle.Text,
 			headerTitle.TextSize,
 			MENU_FONT,
 			Vector2.new(available, 10000)
 		)
-		local desired = math.max(PANEL_HEADER_HEIGHT, math.ceil(measured.Y) + px(16))
+		local desired = math.max(PANEL_HEADER_HEIGHT, math.ceil(measured.Y) + px(20))
 		if desired == currentHeaderHeight then return end
 		currentHeaderHeight = desired
 		header.Size = U2(1, 0, 0, currentHeaderHeight)
-		headerTitle.Position = U2(0, px(14), 0, currentHeaderHeight * 0.5)
-		headerTitle.Size = U2(1, px(-48), 1, 0)
+		headerTitle.Position = U2O(px(14), px(10))
+		headerTitle.Size = U2(1, px(-62), 1, px(-20))
 		chevron.Position = U2(1, px(-18), 0, currentHeaderHeight * 0.5)
 		headerDivider.Position = U2O(0, currentHeaderHeight)
 		body.Position = U2O(0, currentHeaderHeight + LINE_THICKNESS)
@@ -5034,6 +5645,12 @@ local function createEmptyCollapsiblePanel(
 					and type(autoCancelState.Targets) == "table"
 					and autoCancelState.Targets[rowData.VisibilityAutoCancelTarget] == true
 			end
+			if rowData.VisibilityAutoCancelInventoryCriteria == true then
+				rowData.Row.Visible = rowData.Row.Visible and (
+					autoServerHopState.Utility.AutoCancelCheckOpponentsBrainrots == true
+					or autoServerHopState.Utility.AutoCancelBasedOnSpecificItems == true
+				)
+			end
 			if rowData.VisibilitySitKey ~= nil then
 				local entry = type(autoSitState) == "table" and autoSitState[rowData.VisibilitySitKey] or nil
 				rowData.Row.Visible = rowData.Row.Visible and type(entry) == "table" and entry.Enabled == true
@@ -5061,9 +5678,31 @@ local function createEmptyCollapsiblePanel(
 	end
 	local function ensureDropdownRoomBelow(button, desiredHeight)
 		if not button or not button.Parent or not button:IsDescendantOf(rightContent) then return end
+		desiredHeight = math.max(px(25), tonumber(desiredHeight) or px(180))
 		local buttonBottom = button.AbsolutePosition.Y + button.AbsoluteSize.Y
 		local windowBottom = window.AbsolutePosition.Y + window.AbsoluteSize.Y
-		local roomBelow = math.max(0, windowBottom - buttonBottom - px(6))
+		local roomBelow = math.max(0, windowBottom - buttonBottom)
+		if roomBelow < desiredHeight then
+			if dropdownWindowBaseHeight == nil then
+				dropdownWindowBaseHeight = window.Size.Y.Offset
+			end
+			local currentCamera = workspace.CurrentCamera or camera
+			local viewport = currentCamera and currentCamera.ViewportSize or viewportSize
+			local renderScale = currentWindowRenderScale()
+			local maxLogicalHeight = math.max(
+				window.Size.Y.Offset,
+				math.floor((math.max(240, viewport.Y) * 0.92) / renderScale)
+			)
+			local deficit = desiredHeight - roomBelow
+			local growBy = math.ceil((deficit * 2) / renderScale)
+			window.Size = U2O(
+				window.Size.X.Offset,
+				math.min(maxLogicalHeight, window.Size.Y.Offset + growBy)
+			)
+			buttonBottom = button.AbsolutePosition.Y + button.AbsoluteSize.Y
+			windowBottom = window.AbsolutePosition.Y + window.AbsoluteSize.Y
+			roomBelow = math.max(0, windowBottom - buttonBottom)
+		end
 		if roomBelow >= desiredHeight then return end
 		local maxCanvasY = math.max(0, rightContent.AbsoluteCanvasSize.Y - rightContent.AbsoluteSize.Y)
 		local needed = desiredHeight - roomBelow
@@ -5103,7 +5742,7 @@ local function createEmptyCollapsiblePanel(
 		labelProvider = type(labelProvider) == "function" and labelProvider or tostring
 		local searchHeight = px(29)
 		local contentHeight = searchHeight + px(6) + #options * px(25)
-		local desiredHeight = math.min(contentHeight, math.max(px(25), window.AbsoluteSize.Y - button.AbsoluteSize.Y - px(12)))
+		local desiredHeight = math.min(contentHeight, px(220))
 		ensureDropdownRoomBelow(button, desiredHeight)
 		local overlay = New("Frame")
 		overlay.Name = "DropdownOverlay"
@@ -5120,7 +5759,7 @@ local function createEmptyCollapsiblePanel(
 		popup.BorderSizePixel = 0
 		popup.ClipsDescendants = true
 		popup.Active = true
-		popup.ScrollBarThickness = px(3)
+		popup.ScrollBarThickness = 0
 		popup.ScrollingDirection = Enum.ScrollingDirection.Y
 		popup.AutomaticCanvasSize = Enum.AutomaticSize.None
 		popup.CanvasSize = U2O(0, contentHeight)
@@ -5140,7 +5779,7 @@ local function createEmptyCollapsiblePanel(
 			local edge = px(6)
 			local width = math.max(1, math.floor(size.X + 0.5))
 			local x = math.clamp(pos.X, rootPos.X + edge, math.max(rootPos.X + edge, rootPos.X + rootSize.X - width - edge))
-			local y = pos.Y + size.Y
+			local y = math.floor(pos.Y + size.Y + 0.5)
 			local available = math.max(0, rootPos.Y + rootSize.Y - edge - y)
 			popup.Position = U2O(x - overlayPos.X, y - overlayPos.Y)
 			popup.Size = U2O(width, math.min(contentHeight, available))
@@ -5412,8 +6051,10 @@ local function createEmptyCollapsiblePanel(
 		featureLabel.BackgroundTransparency = 1
 		featureLabel.BorderSizePixel = 0
 		featureLabel.Text = (isDropdownOnly or isAutoCancelFilterOnly)
-			and "" or (definition and definition.Label or "Feature")
-		featureLabel.FontFace = MENU_FONT_FACE
+			and "" or capitalizeUiWords(definition and definition.Label or "Feature")
+		featureLabel.FontFace = childIndentLevel <= 0
+			and MENU_FONT_SEMIBOLD_FACE
+			or (childIndentLevel == 1 and MENU_FONT_FACE or MENU_FONT_REGULAR_FACE)
 		setResponsiveTextSize(featureLabel, (utilityExclusiveGroup or isDependentText) and 14 or 15)
 		featureLabel.TextXAlignment = Enum.TextXAlignment.Left
 		featureLabel.TextYAlignment = Enum.TextYAlignment.Center
@@ -5424,7 +6065,7 @@ local function createEmptyCollapsiblePanel(
 		local actionButton
 		if isSimpleAutofarmWarning then
 			featureLabel.Size = U2(1, 0, 1, 0)
-			featureLabel.Text = "must own atleast 1 brainrot"
+			featureLabel.Text = "Must Own At Least 1 Brainrot"
 			featureLabel.TextColor3 = RGB(255, 74, 74)
 			featureLabel.TextXAlignment = Enum.TextXAlignment.Left
 			featureRow.Visible = false
@@ -5453,7 +6094,7 @@ local function createEmptyCollapsiblePanel(
 			actionButton.BackgroundColor3 = FEATURE_OFF_COLOR
 			actionButton.BorderSizePixel = 0
 			actionButton.AutoButtonColor = false
-			actionButton.Text = tostring(definition.Label or "Action")
+			actionButton.Text = capitalizeUiWords(definition.Label or "Action")
 			actionButton.TextColor3 = MENU_TEXT_SELECTED
 			actionButton.FontFace = MENU_FONT_FACE
 			setResponsiveTextSize(actionButton, 14)
@@ -5463,6 +6104,11 @@ local function createEmptyCollapsiblePanel(
 			ensureCorner(actionButton, px(6))
 			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(actionButton)
 			actionButton.MouseButton1Click:Connect(function()
+				if (definition.Action == "ManualServerHop" or definition.Action == "ManualKickMinigame")
+					and autoServerHopState.Utility.PauseScript == true
+				then
+					return
+				end
 				if definition.Action == "ResetSimpleAutofarm" then
 					local reset = rawget(_G, "__TUFFHUB_RESET_SIMPLE_AUTOFARM")
 					if type(reset) == "function" then pcall(reset) end
@@ -5894,6 +6540,13 @@ local function createEmptyCollapsiblePanel(
 			stateEntry.SpecificTargets = type(stateEntry.SpecificTargets) == "table" and stateEntry.SpecificTargets or {}
 			stateEntry.SpecificMutations = type(stateEntry.SpecificMutations) == "table" and stateEntry.SpecificMutations or {}
 			stateEntry.SpecificTraits = type(stateEntry.SpecificTraits) == "table" and stateEntry.SpecificTraits or {}
+			stateEntry.SpecificSignatures = type(stateEntry.SpecificSignatures) == "table" and stateEntry.SpecificSignatures or {}
+			stateEntry.SpecificSizes = type(stateEntry.SpecificSizes) == "table" and stateEntry.SpecificSizes or {}
+			stateEntry.SpecificLevels = type(stateEntry.SpecificLevels) == "table" and stateEntry.SpecificLevels or {}
+			stateEntry.SpecificRarities = type(stateEntry.SpecificRarities) == "table" and stateEntry.SpecificRarities or {}
+			stateEntry.SpecificMultiplier = tonumber(stateEntry.SpecificMultiplier)
+			stateEntry.SpecificCooldown = tonumber(stateEntry.SpecificCooldown)
+			stateEntry.SpecificPower = tonumber(stateEntry.SpecificPower)
 			stateEntry.Tokens = math.clamp(math.floor(tonumber(stateEntry.Tokens) or 0), 0, 1000000)
 			stateEntry.OfferAllTokens = stateEntry.OfferAllTokens == true
 			local managerHeight = px(1)
@@ -5929,9 +6582,9 @@ local function createEmptyCollapsiblePanel(
 				label.Position = U2(0, 0, 0.5, 0)
 				label.Size = U2(1, -(toggleWidth + componentLabelGap), 1, 0)
 				label.BackgroundTransparency = 1
-				label.Text = text
+				label.Text = capitalizeUiWords(text)
 				label.TextColor3 = getter() and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR
-				label.FontFace = MENU_FONT_FACE
+				label.FontFace = MENU_FONT_REGULAR_FACE
 				setResponsiveTextSize(label, 14)
 				label.TextXAlignment = Enum.TextXAlignment.Left
 				label.TextTruncate = Enum.TextTruncate.AtEnd
@@ -5975,9 +6628,9 @@ local function createEmptyCollapsiblePanel(
 				label.Position = U2(0, 0, 0.5, 0)
 				label.Size = U2(1, -(dropdownWidth + componentLabelGap), 1, 0)
 				label.BackgroundTransparency = 1
-				label.Text = labelText
+				label.Text = capitalizeUiWords(labelText)
 				label.TextColor3 = MENU_TEXT_SELECTED
-				label.FontFace = MENU_FONT_FACE
+				label.FontFace = MENU_FONT_REGULAR_FACE
 				setResponsiveTextSize(label, 14)
 				label.TextXAlignment = Enum.TextXAlignment.Left
 				label.TextTruncate = Enum.TextTruncate.AtEnd
@@ -5992,7 +6645,7 @@ local function createEmptyCollapsiblePanel(
 				button.AutoButtonColor = false
 				button.Text = buttonText or "Select"
 				button.TextColor3 = MENU_TEXT_SELECTED
-				button.FontFace = MENU_FONT_FACE
+				button.FontFace = MENU_FONT_REGULAR_FACE
 				setResponsiveTextSize(button, 13)
 				button.TextTruncate = Enum.TextTruncate.AtEnd
 				button.ClipsDescendants = true
@@ -6001,6 +6654,52 @@ local function createEmptyCollapsiblePanel(
 				ensureCorner(button, px(6))
 				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(button)
 				return button
+			end
+			local function makeNumberRow(labelText, y, currentValue, commit)
+				local row = New("Frame")
+				row.Position = U2O(0, y)
+				row.Size = U2(1, 0, 0, featureRowHeight)
+				row.BackgroundTransparency = 1
+				row.ZIndex = 45014
+				row.Parent = secondaryContainer
+				local label = New("TextLabel")
+				label.AnchorPoint = V2(0, 0.5)
+				label.Position = U2(0, 0, 0.5, 0)
+				label.Size = U2(1, -(dropdownWidth + componentLabelGap), 1, 0)
+				label.BackgroundTransparency = 1
+				label.Text = capitalizeUiWords(labelText)
+				label.TextColor3 = MENU_TEXT_SELECTED
+				label.FontFace = MENU_FONT_REGULAR_FACE
+				setResponsiveTextSize(label, 14)
+				label.TextXAlignment = Enum.TextXAlignment.Left
+				label.TextTruncate = Enum.TextTruncate.AtEnd
+				label.Parent = row
+				local box = New("TextBox")
+				box.AnchorPoint = V2(1, 0.5)
+				box.Position = U2(1, 0, 0.5, 0)
+				box.Size = U2O(dropdownWidth, px(24))
+				box.BackgroundColor3 = FEATURE_OFF_COLOR
+				box.BorderSizePixel = 0
+				box.ClearTextOnFocus = false
+				box.Text = currentValue ~= nil and tostring(currentValue) or ""
+				box.PlaceholderText = "Any"
+				box.PlaceholderColor3 = MUTED_TEXT_COLOR
+				box.TextColor3 = MENU_TEXT_SELECTED
+				box.FontFace = MENU_FONT_REGULAR_FACE
+				setResponsiveTextSize(box, 13)
+				box.TextTruncate = Enum.TextTruncate.AtEnd
+				box.Parent = row
+				ensureCorner(box, px(6))
+				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(box)
+				box.FocusLost:Connect(function()
+					local value = tonumber(box.Text)
+					if value ~= nil then value = math.max(0, value) end
+					commit(value)
+					box.Text = value ~= nil and tostring(value) or ""
+					saveAutoOfferSource()
+					task.defer(rebuildAutoOfferSource)
+				end)
+				return box
 			end
 			local function makeSlider(labelText, y, initial, minValue, maxValue, commit)
 				local frame = New("Frame")
@@ -6012,9 +6711,9 @@ local function createEmptyCollapsiblePanel(
 				local label = New("TextLabel")
 				label.Size = U2(1, -amountValueWidth - componentLabelGap, 0, px(15))
 				label.BackgroundTransparency = 1
-				label.Text = labelText
+				label.Text = capitalizeUiWords(labelText)
 				label.TextColor3 = MENU_TEXT_SELECTED
-				label.FontFace = MENU_FONT_FACE
+				label.FontFace = MENU_FONT_REGULAR_FACE
 				setResponsiveTextSize(label, 14)
 				label.TextXAlignment = Enum.TextXAlignment.Left
 				label.TextTruncate = Enum.TextTruncate.AtEnd
@@ -6026,7 +6725,7 @@ local function createEmptyCollapsiblePanel(
 				value.BackgroundColor3 = FEATURE_OFF_COLOR
 				value.BorderSizePixel = 0
 				value.ClearTextOnFocus = false
-				value.FontFace = MENU_FONT_FACE
+				value.FontFace = MENU_FONT_REGULAR_FACE
 				value.TextColor3 = MENU_TEXT_SELECTED
 				setResponsiveTextSize(value, 13)
 				value.TextTruncate = Enum.TextTruncate.AtEnd
@@ -6080,7 +6779,7 @@ local function createEmptyCollapsiblePanel(
 				closeActivePanelDropdown()
 				for _, child in ipairs(secondaryContainer:GetChildren()) do child:Destroy() end
 				local y = px(2)
-				makeToggleRow("Offer Based On Rarity", y, function() return stateEntry.OfferModeRarity == true end, function(v) stateEntry.OfferModeRarity = v end)
+				makeToggleRow("Offer Brainrots / Items By Rarity", y, function() return stateEntry.OfferModeRarity == true end, function(v) stateEntry.OfferModeRarity = v end)
 				y += featureRowHeight
 				if stateEntry.OfferModeRarity == true then
 					local rarityButton = makeDropdownRow("Offer", y, "Select")
@@ -6109,46 +6808,31 @@ local function createEmptyCollapsiblePanel(
 					makeToggleRow("Offer All Tokens", y, function() return stateEntry.OfferAllTokens == true end, function(v) stateEntry.OfferAllTokens = v end)
 					y += featureRowHeight
 				end
-				makeToggleRow("Offer Specific Brainrot", y, function() return stateEntry.OfferModeSpecific == true end, function(v) stateEntry.OfferModeSpecific = v end)
+				makeToggleRow("Offer Specific Brainrot / Item", y, function() return stateEntry.OfferModeSpecific == true end, function(v) stateEntry.OfferModeSpecific = v end)
 				y += featureRowHeight
 				if stateEntry.OfferModeSpecific == true then
-					local mutationOptions = autoServerHopState.BoothMutationOptions()
-					local mutationButton = makeDropdownRow("Mutations", y, "Select")
-					local mutationNames = {}
-					for _, option in ipairs(mutationOptions) do if stateEntry.SpecificMutations[option] == true then mutationNames[#mutationNames + 1] = option end end
-					fitWholeDropdownNames(mutationButton, mutationNames, "Any")
-					mutationButton.MouseButton1Click:Connect(function()
-						openManagedMultiDropdown(mutationButton, mutationOptions, stateEntry.SpecificMutations, tostring, "Any", function()
-							for id, selected in pairs(stateEntry.SpecificTargets) do
-								if selected == true and not autoServerHopState.OwnedTradeableItemMatchesFilters(id, stateEntry.SpecificMutations, stateEntry.SpecificTraits) then stateEntry.SpecificTargets[id] = nil end
-							end
-							saveAutoOfferSource()
-						end, nil, rebuildAutoOfferSource)
-					end)
-					y += featureRowHeight
-					local traitOptions = autoServerHopState.BoothTraitOptions()
-					local traitButton = makeDropdownRow("Traits", y, "Select")
-					local traitNames = {}
-					for _, option in ipairs(traitOptions) do if stateEntry.SpecificTraits[option] == true then traitNames[#traitNames + 1] = option end end
-					fitWholeDropdownNames(traitButton, traitNames, "Any")
-					traitButton.MouseButton1Click:Connect(function()
-						openManagedMultiDropdown(traitButton, traitOptions, stateEntry.SpecificTraits, tostring, "Any", function()
-							for id, selected in pairs(stateEntry.SpecificTargets) do
-								if selected == true and not autoServerHopState.OwnedTradeableItemMatchesFilters(id, stateEntry.SpecificMutations, stateEntry.SpecificTraits) then stateEntry.SpecificTargets[id] = nil end
-							end
-							saveAutoOfferSource()
-						end, nil, rebuildAutoOfferSource)
-					end)
-					y += featureRowHeight
+					-- Exact inventory selections already carry their mutation, traits, signature,
+					-- size, level, rarity, and gear attributes. Do not ask for them again.
+					local specificOptions = autoServerHopState.RefreshOwnedTradeableItemOptions()
 					local specificButton = makeDropdownRow("Offer", y, "Select")
-					local options = autoServerHopState.FilterOwnedOfferableBrainrotOptions(stateEntry.SpecificMutations, stateEntry.SpecificTraits)
-					local names = {}
-					for _, id in ipairs(options) do if stateEntry.SpecificTargets[id] == true then names[#names + 1] = autoServerHopState.OwnedBrainrotOptionLabel(id) end end
-					fitWholeDropdownNames(specificButton, names, "Select")
+					local specificNames = {}
+					for _, id in ipairs(specificOptions) do
+						if stateEntry.SpecificTargets[id] == true then
+							specificNames[#specificNames + 1] = autoServerHopState.OwnedTradeableItemOptionLabel(id)
+						end
+					end
+					fitWholeDropdownNames(specificButton, specificNames, "Select")
 					specificButton.MouseButton1Click:Connect(function()
-						openManagedMultiDropdown(specificButton, options, stateEntry.SpecificTargets, autoServerHopState.OwnedBrainrotOptionLabel, "Select", function() saveAutoOfferSource() end, function()
-							return selectedRarityUnits(nil) + selectedSpecificCount() < 6
-						end, rebuildAutoOfferSource)
+						openManagedMultiDropdown(
+							specificButton,
+							specificOptions,
+							stateEntry.SpecificTargets,
+							autoServerHopState.OwnedTradeableItemOptionLabel,
+							"Select",
+							function() saveAutoOfferSource() end,
+							function() return selectedRarityUnits(nil) + selectedSpecificCount() < 6 end,
+							rebuildAutoOfferSource
+						)
 					end)
 					y += featureRowHeight
 				end
@@ -6170,7 +6854,7 @@ local function createEmptyCollapsiblePanel(
 			secondaryContainer.Parent = featureRow
 			local entriesKey = definition.TradeChatOffersKey or "AutoOfferTradeChatOffers"
 			local function blankTradeChatOffer()
-				return {LookFor="", Targets={}, Amounts={}, SpecificItems={}, SpecificMutations={}, SpecificTraits={}, TokenAmount=0, OfferAllTokens=false}
+				return {LookFor="", Targets={}, Amounts={}, SpecificItems={}, SpecificMutations={}, SpecificTraits={}, SpecificSignatures={}, SpecificSizes={}, SpecificLevels={}, SpecificRarities={}, SpecificMultiplier=nil, SpecificCooldown=nil, SpecificPower=nil, TokenAmount=0, OfferAllTokens=false}
 			end
 			if type(stateEntry[entriesKey]) ~= "table" or #stateEntry[entriesKey] == 0 then
 				stateEntry[entriesKey] = {blankTradeChatOffer()}
@@ -6186,6 +6870,13 @@ local function createEmptyCollapsiblePanel(
 				entry.SpecificItems = type(entry.SpecificItems) == "table" and entry.SpecificItems or {}
 				entry.SpecificMutations = type(entry.SpecificMutations) == "table" and entry.SpecificMutations or {}
 				entry.SpecificTraits = type(entry.SpecificTraits) == "table" and entry.SpecificTraits or {}
+				entry.SpecificSignatures = type(entry.SpecificSignatures) == "table" and entry.SpecificSignatures or {}
+				entry.SpecificSizes = type(entry.SpecificSizes) == "table" and entry.SpecificSizes or {}
+				entry.SpecificLevels = type(entry.SpecificLevels) == "table" and entry.SpecificLevels or {}
+				entry.SpecificRarities = type(entry.SpecificRarities) == "table" and entry.SpecificRarities or {}
+				entry.SpecificMultiplier = tonumber(entry.SpecificMultiplier)
+				entry.SpecificCooldown = tonumber(entry.SpecificCooldown)
+				entry.SpecificPower = tonumber(entry.SpecificPower)
 				if entry.BrainrotId ~= nil then entry.SpecificItems[tostring(entry.BrainrotId)] = true entry.BrainrotId = nil end
 				entry.TokenAmount = math.clamp(math.floor(tonumber(entry.TokenAmount) or 0), 0, 1000000)
 				entry.OfferAllTokens = entry.OfferAllTokens == true
@@ -6209,30 +6900,37 @@ local function createEmptyCollapsiblePanel(
 				if type(entries) ~= "table" or #entries == 0 then entries={blankTradeChatOffer()} stateEntry[entriesKey]=entries end
 				local y = px(5)
 				local function buttonBase(text, yPos)
-					local b=New("TextButton") b.Position=U2O(0,yPos) b.Size=U2(1,0,0,px(25)) b.BackgroundColor3=FEATURE_OFF_COLOR b.BorderSizePixel=0 b.AutoButtonColor=false b.Text=text b.TextColor3=MENU_TEXT_SELECTED b.FontFace=MENU_FONT_FACE setResponsiveTextSize(b,13) b.TextTruncate=Enum.TextTruncate.AtEnd b.ClipsDescendants=true b.ZIndex=45015 b.Parent=secondaryContainer ensureCorner(b,px(5)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(b) return b
+					local b=New("TextButton") b.Position=U2O(0,yPos) b.Size=U2(1,0,0,px(25)) b.BackgroundColor3=FEATURE_OFF_COLOR b.BorderSizePixel=0 b.AutoButtonColor=false b.Text=capitalizeUiWords(text) b.TextColor3=MENU_TEXT_SELECTED b.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(b,13) b.TextTruncate=Enum.TextTruncate.AtEnd b.ClipsDescendants=true b.ZIndex=45015 b.Parent=secondaryContainer ensureCorner(b,px(5)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(b) return b
 				end
 				local function textBoxBase(text, placeholder, yPos)
-					local box=New("TextBox") box.Position=U2O(0,yPos) box.Size=U2(1,0,0,px(26)) box.BackgroundColor3=FEATURE_OFF_COLOR box.BorderSizePixel=0 box.ClearTextOnFocus=false box.Text=tostring(text or "") box.PlaceholderText=placeholder or "" box.PlaceholderColor3=MUTED_TEXT_COLOR box.TextColor3=MENU_TEXT_SELECTED box.FontFace=MENU_FONT_FACE setResponsiveTextSize(box,13) box.TextXAlignment=Enum.TextXAlignment.Left box.TextTruncate=Enum.TextTruncate.AtEnd box.ClipsDescendants=true box.ZIndex=45015 box.Parent=secondaryContainer ensureCorner(box,px(5)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(box)
+					local box=New("TextBox") box.Position=U2O(0,yPos) box.Size=U2(1,0,0,px(26)) box.BackgroundColor3=FEATURE_OFF_COLOR box.BorderSizePixel=0 box.ClearTextOnFocus=false box.Text=tostring(text or "") box.PlaceholderText=capitalizeUiWords(placeholder or "") box.PlaceholderColor3=MUTED_TEXT_COLOR box.TextColor3=MENU_TEXT_SELECTED box.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(box,13) box.TextXAlignment=Enum.TextXAlignment.Left box.TextTruncate=Enum.TextTruncate.AtEnd box.ClipsDescendants=true box.ZIndex=45015 box.Parent=secondaryContainer ensureCorner(box,px(5)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(box)
 					local pad=New("UIPadding") pad.PaddingLeft=UDim.new(0,px(8)) pad.PaddingRight=UDim.new(0,px(8)) pad.Parent=box
 					return box
 				end
 				local function labeledDropdown(labelText, yPos)
 					local row=New("Frame") row.Position=U2O(0,yPos) row.Size=U2(1,0,0,featureRowHeight) row.BackgroundTransparency=1 row.ZIndex=45014 row.Parent=secondaryContainer
-					local label=New("TextLabel") label.AnchorPoint=V2(0,0.5) label.Position=U2(0,0,0.5,0) label.Size=U2(1,-(dropdownWidth+componentLabelGap),1,0) label.BackgroundTransparency=1 label.Text=labelText label.TextColor3=MENU_TEXT_SELECTED label.FontFace=MENU_FONT_FACE setResponsiveTextSize(label,14) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.AtEnd label.ClipsDescendants=true label.ZIndex=45015 label.Parent=row
-					local b=New("TextButton") b.AnchorPoint=V2(1,0.5) b.Position=U2(1,0,0.5,0) b.Size=U2O(dropdownWidth,px(24)) b.BackgroundColor3=FEATURE_OFF_COLOR b.BorderSizePixel=0 b.AutoButtonColor=false b.Text="Select" b.TextColor3=MUTED_TEXT_COLOR b.FontFace=MENU_FONT_FACE setResponsiveTextSize(b,13) b.TextTruncate=Enum.TextTruncate.AtEnd b.ClipsDescendants=true b.ZIndex=45015 b.Parent=row ensureCorner(b,px(6)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(b)
+					local label=New("TextLabel") label.AnchorPoint=V2(0,0.5) label.Position=U2(0,0,0.5,0) label.Size=U2(1,-(dropdownWidth+componentLabelGap),1,0) label.BackgroundTransparency=1 label.Text=capitalizeUiWords(labelText) label.TextColor3=MENU_TEXT_SELECTED label.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(label,14) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.AtEnd label.ClipsDescendants=true label.ZIndex=45015 label.Parent=row
+					local b=New("TextButton") b.AnchorPoint=V2(1,0.5) b.Position=U2(1,0,0.5,0) b.Size=U2O(dropdownWidth,px(24)) b.BackgroundColor3=FEATURE_OFF_COLOR b.BorderSizePixel=0 b.AutoButtonColor=false b.Text="Select" b.TextColor3=MUTED_TEXT_COLOR b.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(b,13) b.TextTruncate=Enum.TextTruncate.AtEnd b.ClipsDescendants=true b.ZIndex=45015 b.Parent=row ensureCorner(b,px(6)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(b)
 					return b
+				end
+				local function numberRow(labelText, currentValue, yPos, onCommit)
+					local row=New("Frame") row.Position=U2O(0,yPos) row.Size=U2(1,0,0,featureRowHeight) row.BackgroundTransparency=1 row.ZIndex=45014 row.Parent=secondaryContainer
+					local label=New("TextLabel") label.AnchorPoint=V2(0,0.5) label.Position=U2(0,0,0.5,0) label.Size=U2(1,-(dropdownWidth+componentLabelGap),1,0) label.BackgroundTransparency=1 label.Text=capitalizeUiWords(labelText) label.TextColor3=MENU_TEXT_SELECTED label.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(label,14) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.AtEnd label.Parent=row
+					local box=New("TextBox") box.AnchorPoint=V2(1,0.5) box.Position=U2(1,0,0.5,0) box.Size=U2O(dropdownWidth,px(24)) box.BackgroundColor3=FEATURE_OFF_COLOR box.BorderSizePixel=0 box.ClearTextOnFocus=false box.Text=currentValue~=nil and tostring(currentValue) or "" box.PlaceholderText="Any" box.PlaceholderColor3=MUTED_TEXT_COLOR box.TextColor3=MENU_TEXT_SELECTED box.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(box,13) box.TextTruncate=Enum.TextTruncate.AtEnd box.Parent=row ensureCorner(box,px(6)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(box)
+					box.FocusLost:Connect(function() local value=tonumber(box.Text) if value~=nil then value=math.max(0,value) end onCommit(value) box.Text=value~=nil and tostring(value) or "" saveTradeChatOffers() task.defer(rebuildTradeChatOffers) end)
+					return box
 				end
 				local function checkboxRow(text,yPos,getter,setter)
 					local row=New("Frame") row.Position=U2O(0,yPos) row.Size=U2(1,0,0,featureRowHeight) row.BackgroundTransparency=1 row.ZIndex=45014 row.Parent=secondaryContainer
-					local label=New("TextLabel") label.AnchorPoint=V2(0,0.5) label.Position=U2(0,0,0.5,0) label.Size=U2(1,-(toggleWidth+componentLabelGap),1,0) label.BackgroundTransparency=1 label.Text=text label.TextColor3=getter() and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR label.FontFace=MENU_FONT_FACE setResponsiveTextSize(label,14) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.AtEnd label.Parent=row
+					local label=New("TextLabel") label.AnchorPoint=V2(0,0.5) label.Position=U2(0,0,0.5,0) label.Size=U2(1,-(toggleWidth+componentLabelGap),1,0) label.BackgroundTransparency=1 label.Text=capitalizeUiWords(text) label.TextColor3=getter() and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR label.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(label,14) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.AtEnd label.Parent=row
 					local track=New("TextButton") track.AnchorPoint=V2(1,0.5) track.Position=U2(1,0,0.5,0) track.Size=U2O(toggleWidth,toggleHeight) track.BackgroundColor3=getter() and PINK or FEATURE_OFF_COLOR track.BorderSizePixel=0 track.AutoButtonColor=false track.Text="" track.ZIndex=45015 track.Parent=row ensureCorner(track,toggleHeight*0.5) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(track)
 					local knob=New("Frame") knob.Size=U2O(toggleHeight-knobInset*2,toggleHeight-knobInset*2) knob.Position=getter() and U2(0,toggleWidth-toggleHeight+knobInset,0,knobInset) or U2O(knobInset,knobInset) knob.BackgroundColor3=MENU_TEXT_SELECTED knob.BorderSizePixel=0 knob.Parent=track ensureCorner(knob,(toggleHeight-knobInset*2)*0.5)
 					track.MouseButton1Click:Connect(function() setter(not getter()) saveTradeChatOffers() task.defer(rebuildTradeChatOffers) end)
 				end
 				local function makeOfferSlider(labelText, initialValue, minValue, maxValue, yPos, onCommit)
 					local frame=New("Frame") frame.Position=U2O(0,yPos) frame.Size=U2(1,0,0,amountControlsHeight) frame.BackgroundTransparency=1 frame.ZIndex=45015 frame.Parent=secondaryContainer
-					local label=New("TextLabel") label.Size=U2(1,-amountValueWidth-componentLabelGap,0,px(15)) label.BackgroundTransparency=1 label.Text=labelText label.TextColor3=MENU_TEXT_SELECTED label.FontFace=MENU_FONT_FACE setResponsiveTextSize(label,13) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.AtEnd label.Parent=frame
-					local value=New("TextBox") value.AnchorPoint=V2(1,0) value.Position=U2(1,0,0,0) value.Size=U2O(amountValueWidth,px(20)) value.BackgroundColor3=FEATURE_OFF_COLOR value.BorderSizePixel=0 value.ClearTextOnFocus=false value.TextColor3=MENU_TEXT_SELECTED value.FontFace=MENU_FONT_FACE setResponsiveTextSize(value,13) value.TextTruncate=Enum.TextTruncate.AtEnd value.ClipsDescendants=true value.Parent=frame ensureCorner(value,px(5)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(value)
+					local label=New("TextLabel") label.Size=U2(1,-amountValueWidth-componentLabelGap,0,px(15)) label.BackgroundTransparency=1 label.Text=capitalizeUiWords(labelText) label.TextColor3=MENU_TEXT_SELECTED label.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(label,13) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.AtEnd label.Parent=frame
+					local value=New("TextBox") value.AnchorPoint=V2(1,0) value.Position=U2(1,0,0,0) value.Size=U2O(amountValueWidth,px(20)) value.BackgroundColor3=FEATURE_OFF_COLOR value.BorderSizePixel=0 value.ClearTextOnFocus=false value.TextColor3=MENU_TEXT_SELECTED value.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(value,13) value.TextTruncate=Enum.TextTruncate.AtEnd value.ClipsDescendants=true value.Parent=frame ensureCorner(value,px(5)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(value)
 					local track=New("Frame") track.Position=U2O(0,px(27)) track.Size=U2(1,0,0,px(5)) track.BackgroundColor3=FEATURE_OFF_COLOR track.BorderSizePixel=0 track.Active=true track.Parent=frame ensureCorner(track,px(3)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(track)
 					local fill=New("Frame") fill.BackgroundColor3=PINK fill.BorderSizePixel=0 fill.Parent=track ensureCorner(fill,px(3))
 					local knob=New("Frame") knob.AnchorPoint=V2(0.5,0.5) knob.Size=U2O(px(11),px(11)) knob.BackgroundColor3=MENU_TEXT_SELECTED knob.BorderSizePixel=0 knob.Parent=track ensureCorner(knob,px(6))
@@ -6252,7 +6950,7 @@ local function createEmptyCollapsiblePanel(
 					local function specificCount() local c=0 for _,v in pairs(entry.SpecificItems) do if v==true then c+=1 end end return c end
 					local function rarityUnits(except) local c=0 for _,r in ipairs(OUTGOING_BRAINROT_RARITY_OPTIONS) do if r~=except and entry.Targets[r]==true then c+=math.clamp(math.floor(tonumber(entry.Amounts[r]) or 1),1,6) end end return c end
 					local input=textBoxBase(entry.LookFor,"Trade Chat To Look For",y) input.FocusLost:Connect(function() entry.LookFor=input.Text refreshClearStyle() saveTradeChatOffers() end) y+=px(31)
-					local rarityButton=labeledDropdown("Rarity Based Offer",y)
+					local rarityButton=labeledDropdown("Offer Brainrots / Items By Rarity",y)
 					fitWholeDropdownNames(rarityButton,selectedTargetList(entry,OUTGOING_BRAINROT_RARITY_OPTIONS),"Select")
 					rarityButton.MouseButton1Click:Connect(function()
 						openManagedMultiDropdown(rarityButton,OUTGOING_BRAINROT_RARITY_OPTIONS,entry.Targets,tostring,"Select",function(option,selected) if selected then entry.Amounts[option]=math.clamp(math.floor(tonumber(entry.Amounts[option]) or 1),1,6) else entry.Amounts[option]=nil end saveTradeChatOffers() end,function() return rarityUnits(nil)+specificCount()<6 end,rebuildTradeChatOffers)
@@ -6264,30 +6962,10 @@ local function createEmptyCollapsiblePanel(
 							y+=amountControlsHeight+px(3)
 						end
 					end
-					local mutationOptions=autoServerHopState.BoothMutationOptions()
-					local mutationButton=labeledDropdown("Specific Offer Mutations",y)
-					local mutationNames={} for _,option in ipairs(mutationOptions) do if entry.SpecificMutations[option]==true then mutationNames[#mutationNames+1]=option end end
-					fitWholeDropdownNames(mutationButton,mutationNames,"Any")
-					mutationButton.MouseButton1Click:Connect(function()
-						openManagedMultiDropdown(mutationButton,mutationOptions,entry.SpecificMutations,tostring,"Any",function()
-							for id,on in pairs(entry.SpecificItems) do if on==true and not autoServerHopState.OwnedTradeableItemMatchesFilters(id,entry.SpecificMutations,entry.SpecificTraits) then entry.SpecificItems[id]=nil end end
-							saveTradeChatOffers()
-						end,nil,rebuildTradeChatOffers)
-					end)
-					y+=featureRowHeight
-					local traitOptions=autoServerHopState.BoothTraitOptions()
-					local traitButton=labeledDropdown("Specific Offer Traits",y)
-					local traitNames={} for _,option in ipairs(traitOptions) do if entry.SpecificTraits[option]==true then traitNames[#traitNames+1]=option end end
-					fitWholeDropdownNames(traitButton,traitNames,"Any")
-					traitButton.MouseButton1Click:Connect(function()
-						openManagedMultiDropdown(traitButton,traitOptions,entry.SpecificTraits,tostring,"Any",function()
-							for id,on in pairs(entry.SpecificItems) do if on==true and not autoServerHopState.OwnedTradeableItemMatchesFilters(id,entry.SpecificMutations,entry.SpecificTraits) then entry.SpecificItems[id]=nil end end
-							saveTradeChatOffers()
-						end,nil,rebuildTradeChatOffers)
-					end)
-					y+=featureRowHeight
-					local specificButton=labeledDropdown("Specific Brainrot/Item Offer",y)
-					local specificOptions=autoServerHopState.FilterOwnedTradeableItemOptions(entry.SpecificMutations,entry.SpecificTraits)
+					-- Trade-chat specific offers also select exact owned inventory instances.
+					-- Their attributes are already known from the selected item ID.
+					local specificButton=labeledDropdown("Offer Specific Brainrots / Items",y)
+					local specificOptions=autoServerHopState.RefreshOwnedTradeableItemOptions()
 					local specificNames={} for _,id in ipairs(specificOptions) do if entry.SpecificItems[id]==true then specificNames[#specificNames+1]=autoServerHopState.OwnedTradeableItemOptionLabel(id) end end
 					fitWholeDropdownNames(specificButton,specificNames,"Select")
 					specificButton.MouseButton1Click:Connect(function()
@@ -6331,12 +7009,8 @@ local function createEmptyCollapsiblePanel(
 				local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
 				if type(saver) == "function" then task.defer(saver, true) end
 			end
-			local function isBrainrotName(name)
-				if name == nil then return false end
-				for _, brainrotName in ipairs(autoServerHopState.BoothBrainrotOptions()) do
-					if tostring(brainrotName) == tostring(name) then return true end
-				end
-				return false
+			local function specificItemKind(name)
+				return autoServerHopState.SpecificItemKindFromName(name)
 			end
 			local function selectedNames(selection, options)
 				local names = {}
@@ -6370,7 +7044,7 @@ local function createEmptyCollapsiblePanel(
 				options = type(options) == "table" and options or {}
 				local searchHeight = px(29)
 				local contentHeight = searchHeight + px(6) + (#options + 1) * px(25)
-				local desiredHeight = math.min(contentHeight, math.max(px(25), window.AbsoluteSize.Y - button.AbsoluteSize.Y - px(12)))
+				local desiredHeight = math.min(contentHeight, px(220))
 				ensureDropdownRoomBelow(button, desiredHeight)
 				local overlay = New("Frame")
 				overlay.Name = "DropdownOverlay"
@@ -6387,7 +7061,7 @@ local function createEmptyCollapsiblePanel(
 				popup.BorderSizePixel = 0
 				popup.ClipsDescendants = true
 				popup.Active = true
-				popup.ScrollBarThickness = px(3)
+				popup.ScrollBarThickness = 0
 				popup.ScrollingDirection = Enum.ScrollingDirection.Y
 				popup.AutomaticCanvasSize = Enum.AutomaticSize.None
 				popup.CanvasSize = U2O(0, contentHeight)
@@ -6407,7 +7081,7 @@ local function createEmptyCollapsiblePanel(
 					local edge = px(6)
 					local width = math.max(1, math.floor(size.X + 0.5))
 					local x = math.clamp(pos.X, rootPos.X + edge, math.max(rootPos.X + edge, rootPos.X + rootSize.X - width - edge))
-					local y = pos.Y + size.Y
+					local y = math.floor(pos.Y + size.Y + 0.5)
 					local available = math.max(0, rootPos.Y + rootSize.Y - edge - y)
 					popup.Position = U2O(x - overlayPos.X, y - overlayPos.Y)
 					popup.Size = U2O(width, math.min(contentHeight, available))
@@ -6423,7 +7097,7 @@ local function createEmptyCollapsiblePanel(
 				search.PlaceholderColor3 = MUTED_TEXT_COLOR
 				search.Text = ""
 				search.TextColor3 = MENU_TEXT_SELECTED
-				search.FontFace = MENU_FONT_FACE
+				search.FontFace = MENU_FONT_REGULAR_FACE
 				setResponsiveTextSize(search, 13)
 				search.TextXAlignment = Enum.TextXAlignment.Left
 				search.TextTruncate = Enum.TextTruncate.AtEnd
@@ -6442,7 +7116,7 @@ local function createEmptyCollapsiblePanel(
 					row.AutoButtonColor = false
 					row.Text = tostring(label)
 					row.TextColor3 = MUTED_TEXT_COLOR
-					row.FontFace = MENU_FONT_FACE
+					row.FontFace = MENU_FONT_REGULAR_FACE
 					setResponsiveTextSize(row, 13)
 					row.TextTruncate = Enum.TextTruncate.AtEnd
 					row.ClipsDescendants = true
@@ -6504,13 +7178,57 @@ local function createEmptyCollapsiblePanel(
 					b.TextTruncate = Enum.TextTruncate.AtEnd
 					b.ClipsDescendants = true
 					b.TextColor3 = MENU_TEXT_SELECTED
-					b.FontFace = MENU_FONT_FACE
+					b.FontFace = MENU_FONT_REGULAR_FACE
 					setResponsiveTextSize(b, 13)
 					b.ZIndex = 45015
 					b.Parent = secondaryContainer
 					ensureCorner(b, px(5))
 					rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(b)
 					return b
+				end
+				local function makeNumericField(labelText, currentValue, yPos, onCommit)
+					local row = New("Frame")
+					row.Position = U2O(0, yPos)
+					row.Size = U2(1, 0, 0, px(26))
+					row.BackgroundTransparency = 1
+					row.ZIndex = 45015
+					row.Parent = secondaryContainer
+					local label = New("TextLabel")
+					label.Size = U2(1, -amountValueWidth - componentLabelGap, 1, 0)
+					label.BackgroundTransparency = 1
+					label.Text = capitalizeUiWords(labelText)
+					label.TextColor3 = MENU_TEXT_SELECTED
+					label.FontFace = MENU_FONT_REGULAR_FACE
+					setResponsiveTextSize(label, 13)
+					label.TextXAlignment = Enum.TextXAlignment.Left
+					label.Parent = row
+					local box = New("TextBox")
+					box.AnchorPoint = V2(1, 0.5)
+					box.Position = U2(1, 0, 0.5, 0)
+					box.Size = U2O(amountValueWidth, px(22))
+					box.BackgroundColor3 = FEATURE_OFF_COLOR
+					box.BorderSizePixel = 0
+					box.ClearTextOnFocus = false
+					box.Text = currentValue ~= nil and tostring(currentValue) or ""
+					box.PlaceholderText = "Any"
+					box.PlaceholderColor3 = MUTED_TEXT_COLOR
+					box.TextColor3 = MENU_TEXT_SELECTED
+					box.FontFace = MENU_FONT_REGULAR_FACE
+					setResponsiveTextSize(box, 13)
+					box.Parent = row
+					ensureCorner(box, px(5))
+					rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(box)
+					box.FocusLost:Connect(function()
+						local value = tonumber(box.Text)
+						if value ~= nil then
+							value = math.max(0, value)
+						else
+							box.Text = ""
+						end
+						onCommit(value)
+						saveSpecificCriteria()
+					end)
+					return row
 				end
 				local y = px(5)
 				local allItems
@@ -6524,28 +7242,79 @@ local function createEmptyCollapsiblePanel(
 					if type(entry) ~= "table" then entry = {Item = nil, Mutations = {}, Traits = {}, Amount = 1} entries[entryIndex] = entry end
 					entry.Mutations = type(entry.Mutations) == "table" and entry.Mutations or {}
 					entry.Traits = type(entry.Traits) == "table" and entry.Traits or {}
+					entry.Sizes = type(entry.Sizes) == "table" and entry.Sizes or {}
+					entry.Rarities = type(entry.Rarities) == "table" and entry.Rarities or {}
 					entry.Amount = math.clamp(math.floor(tonumber(entry.Amount) or 1), 1, tonumber(definition.SpecificCriteriaMaxAmount) or 6)
 					local emptyChoiceText = (entryIndex > 1 and entry.Item == nil) and "Select Another" or "Select"
 					local itemButton = makeButton(entry.Item and tostring(entry.Item) or emptyChoiceText, y)
 					itemButton.MouseButton1Click:Connect(function()
 						openCriteriaDropdown(itemButton, allItems, nil, function(option)
-							entry.Item = option
-							if option == nil or not isBrainrotName(option) then
-								entry.Mutations = {}
-								entry.Traits = {}
+							if entry.Item ~= option then
+								entry.Mutations, entry.Traits, entry.Sizes, entry.Rarities = {}, {}, {}, {}
+								entry.Signature, entry.Level = nil, nil
+								entry.Multiplier, entry.Cooldown, entry.Power = nil, nil, nil
 							end
+							entry.Item = option
 						end)
 					end)
 					y += px(31)
-					if entry.Item ~= nil and isBrainrotName(entry.Item) and definition.SpecificCriteriaSimple ~= true then
-						local mutationNames = selectedNames(entry.Mutations, autoServerHopState.BoothMutationOptions())
-						local mutationButton = makeButton(#mutationNames > 0 and ("Mutations: " .. table.concat(mutationNames, ", ")) or "Mutations: Select", y)
-						mutationButton.MouseButton1Click:Connect(function() openCriteriaDropdown(mutationButton, autoServerHopState.BoothMutationOptions(), entry.Mutations, nil) end)
-						y += px(31)
-						local traitNames = selectedNames(entry.Traits, autoServerHopState.BoothTraitOptions())
-						local traitButton = makeButton(#traitNames > 0 and ("Traits: " .. table.concat(traitNames, ", ")) or "Traits: Select", y)
-						traitButton.MouseButton1Click:Connect(function() openCriteriaDropdown(traitButton, autoServerHopState.BoothTraitOptions(), entry.Traits, nil) end)
-						y += px(31)
+					local itemKind = entry.Item ~= nil and specificItemKind(entry.Item) or nil
+					if entry.Item ~= nil and definition.SpecificCriteriaSimple ~= true and (itemKind == "Brainrot" or itemKind == "LuckyBlock" or itemKind == "Gear") then
+						local function addMutation()
+							local names = selectedNames(entry.Mutations, autoServerHopState.BoothMutationOptions())
+							local button = makeButton(#names > 0 and ("Mutation: " .. table.concat(names, ", ")) or "Mutation: Select", y)
+							button.MouseButton1Click:Connect(function() openCriteriaDropdown(button, autoServerHopState.BoothMutationOptions(), entry.Mutations, nil) end)
+							y += px(31)
+						end
+						local function addTraits()
+							local names = selectedNames(entry.Traits, autoServerHopState.BoothTraitOptions())
+							local button = makeButton(#names > 0 and ("Traits: " .. table.concat(names, ", ")) or "Traits: Select", y)
+							button.MouseButton1Click:Connect(function() openCriteriaDropdown(button, autoServerHopState.BoothTraitOptions(), entry.Traits, nil) end)
+							y += px(31)
+						end
+						local function addSize()
+							local names = selectedNames(entry.Sizes, autoServerHopState.SpecificSizeOptions())
+							local button = makeButton(#names > 0 and ("Size: " .. table.concat(names, ", ")) or "Size: Select", y)
+							button.MouseButton1Click:Connect(function() openCriteriaDropdown(button, autoServerHopState.SpecificSizeOptions(), entry.Sizes, nil) end)
+							y += px(31)
+						end
+						local function addLevel()
+							local button = makeButton("This Level Or Higher: " .. tostring(entry.Level or "Select"), y)
+							button.MouseButton1Click:Connect(function()
+								openCriteriaDropdown(button, autoServerHopState.SpecificLevelOptions(), nil, function(option)
+									entry.Level = option and math.clamp(math.floor(tonumber(option) or 1), 1, 125) or nil
+								end)
+							end)
+							y += px(31)
+						end
+
+						if itemKind == "Brainrot" then
+							addMutation()
+							addTraits()
+							local signatureButton = makeButton("Signature: " .. tostring(entry.Signature or "Any"), y)
+							signatureButton.MouseButton1Click:Connect(function()
+								openCriteriaDropdown(signatureButton, {"Any", "Signed", "Unsigned"}, nil, function(option)
+									entry.Signature = option == "Any" and nil or option
+								end)
+							end)
+							y += px(31)
+							addSize()
+							addLevel()
+						elseif itemKind == "LuckyBlock" then
+							local rarityNames = selectedNames(entry.Rarities, BRAINROT_RARITY_OPTIONS)
+							local rarityButton = makeButton(#rarityNames > 0 and ("Rarity: " .. table.concat(rarityNames, ", ")) or "Rarity: Select", y)
+							rarityButton.MouseButton1Click:Connect(function() openCriteriaDropdown(rarityButton, BRAINROT_RARITY_OPTIONS, entry.Rarities, nil) end)
+							y += px(31)
+							addSize()
+							addLevel()
+							addTraits()
+							addMutation()
+						elseif itemKind == "Gear" then
+							addMutation()
+							makeNumericField("Multiplier", entry.Multiplier, y, function(value) entry.Multiplier = value end) y += px(31)
+							makeNumericField("Cooldown", entry.Cooldown, y, function(value) entry.Cooldown = value end) y += px(31)
+							makeNumericField("Power", entry.Power, y, function(value) entry.Power = value end) y += px(31)
+						end
 					end
 					if entry.Item ~= nil and definition.SpecificCriteriaWithAmount == true then
 						local maxAmount = tonumber(definition.SpecificCriteriaMaxAmount) or 6
@@ -6560,7 +7329,7 @@ local function createEmptyCollapsiblePanel(
 						amountLabel.BackgroundTransparency = 1
 						amountLabel.Text = "Amount"
 						amountLabel.TextColor3 = MENU_TEXT_SELECTED
-						amountLabel.FontFace = MENU_FONT_FACE
+						amountLabel.FontFace = MENU_FONT_REGULAR_FACE
 						setResponsiveTextSize(amountLabel, 14)
 						amountLabel.TextXAlignment = Enum.TextXAlignment.Left
 						amountLabel.Parent = amountFrame
@@ -6573,7 +7342,7 @@ local function createEmptyCollapsiblePanel(
 						valueBox.ClearTextOnFocus = false
 						valueBox.Text = tostring(entry.Amount)
 						valueBox.TextColor3 = MENU_TEXT_SELECTED
-						valueBox.FontFace = MENU_FONT_FACE
+						valueBox.FontFace = MENU_FONT_REGULAR_FACE
 						setResponsiveTextSize(valueBox,14)
 						valueBox.Parent = amountFrame
 						ensureCorner(valueBox,px(5))
@@ -6613,8 +7382,9 @@ local function createEmptyCollapsiblePanel(
 						clearChoice.TextColor3 = MENU_TEXT_SELECTED
 						clearChoice.MouseButton1Click:Connect(function()
 							entry.Item = nil
-							entry.Mutations = {}
-							entry.Traits = {}
+							entry.Mutations, entry.Traits, entry.Sizes, entry.Rarities = {}, {}, {}, {}
+							entry.Signature, entry.Level = nil, nil
+							entry.Multiplier, entry.Cooldown, entry.Power = nil, nil, nil
 							entry.Amount = 1
 							saveSpecificCriteria()
 							task.defer(rebuildSpecificCriteria)
@@ -6667,12 +7437,12 @@ local function createEmptyCollapsiblePanel(
 			inputBox.MultiLine = false
 			inputBox.TextEditable = true
 			inputBox.Text = tostring(stateEntry[definition.UtilityTextKey] or "")
-			inputBox.PlaceholderText = definition.Placeholder or "Type a message..."
+			inputBox.PlaceholderText = capitalizeUiWords(definition.Placeholder or "Type A Message...")
 			inputBox.PlaceholderColor3 = MUTED_TEXT_COLOR
 			inputBox.TextColor3 = inputBox.Text ~= ""
 				and MENU_TEXT_SELECTED
 				or MUTED_TEXT_COLOR
-			inputBox.FontFace = MENU_FONT_FACE
+			inputBox.FontFace = MENU_FONT_REGULAR_FACE
 			setResponsiveTextSize(inputBox, 14)
 			inputBox.TextXAlignment = Enum.TextXAlignment.Left
 			inputBox.ZIndex = 45015
@@ -6863,40 +7633,15 @@ local function createEmptyCollapsiblePanel(
 				blocker.Parent = overlay
 				local dropdownSearchHeight = px(29)
 				local popupContentHeight = dropdownSearchHeight + px(6) + (#popupOptions * px(25))
-				local desiredVisibleHeight = math.min(
-					popupContentHeight,
-					math.max(px(25), window.AbsoluteSize.Y - dropdownButton.AbsoluteSize.Y - px(12))
-				)
-				if dropdownButton:IsDescendantOf(rightContent) then
-					local buttonBottom = dropdownButton.AbsolutePosition.Y
-						+ dropdownButton.AbsoluteSize.Y
-					local windowBottom = window.AbsolutePosition.Y
-						+ window.AbsoluteSize.Y
-					local roomBelow = windowBottom - buttonBottom - px(6)
-					if roomBelow < desiredVisibleHeight then
-						local needed = desiredVisibleHeight - roomBelow
-						local maxCanvasY = math.max(
-							0,
-							rightContent.AbsoluteCanvasSize.Y
-								- rightContent.AbsoluteSize.Y
-						)
-						rightContent.CanvasPosition = V2(
-							rightContent.CanvasPosition.X,
-							math.clamp(
-								rightContent.CanvasPosition.Y + needed,
-								0,
-								maxCanvasY
-							)
-						)
-					end
-				end
+				local desiredVisibleHeight = math.min(popupContentHeight, px(220))
+				ensureDropdownRoomBelow(dropdownButton, desiredVisibleHeight)
 				local popup = New("ScrollingFrame")
 				popup.Name = "PanelDropdown"
 				popup.BackgroundColor3 = PANEL_BACKGROUND
 				popup.BorderSizePixel = 0
 				popup.ClipsDescendants = true
 				popup.Active = true
-				popup.ScrollBarThickness = px(3)
+				popup.ScrollBarThickness = 0
 				popup.ScrollingDirection = Enum.ScrollingDirection.Y
 				popup.CanvasSize = U2O(0, popupContentHeight)
 				popup.AutomaticCanvasSize = Enum.AutomaticSize.None
@@ -7362,7 +8107,7 @@ local function createEmptyCollapsiblePanel(
 						filterLabel.BorderSizePixel = 0
 						filterLabel.Text = labelText
 						filterLabel.TextColor3 = MUTED_TEXT_COLOR
-						filterLabel.FontFace = MENU_FONT_FACE
+						filterLabel.FontFace = MENU_FONT_REGULAR_FACE
 						setResponsiveTextSize(filterLabel, 14)
 						filterLabel.TextXAlignment = Enum.TextXAlignment.Left
 						filterLabel.TextYAlignment = Enum.TextYAlignment.Center
@@ -7377,7 +8122,7 @@ local function createEmptyCollapsiblePanel(
 						filterButton.AutoButtonColor = false
 						filterButton.TextTruncate = Enum.TextTruncate.AtEnd
 						filterButton.ClipsDescendants = true
-						filterButton.FontFace = MENU_FONT_FACE
+						filterButton.FontFace = MENU_FONT_REGULAR_FACE
 						setResponsiveTextSize(filterButton, 14)
 						filterButton.ZIndex = 45015
 						filterButton.Parent = frame
@@ -7408,7 +8153,10 @@ local function createEmptyCollapsiblePanel(
 					end
 					makeInlineFilter("Mutations", "AutoSit" .. option .. "Mutations", amountControlsHeight + px(4), function() return autoServerHopState.BoothMutationOptions() end)
 					makeInlineFilter("Traits", "AutoSit" .. option .. "Traits", amountControlsHeight + secondaryControlHeight + px(4), function() return autoServerHopState.BoothTraitOptions() end)
-					controlHeight = amountControlsHeight + (secondaryControlHeight * 2) + px(4)
+					makeInlineFilter("Signature", "AutoSit" .. option .. "Signatures", amountControlsHeight + (secondaryControlHeight * 2) + px(4), function() return {"Signed", "Unsigned"} end)
+					makeInlineFilter("Size", "AutoSit" .. option .. "Sizes", amountControlsHeight + (secondaryControlHeight * 3) + px(4), function() return autoServerHopState.SpecificSizeOptions() end)
+					makeInlineFilter("Level", "AutoSit" .. option .. "Levels", amountControlsHeight + (secondaryControlHeight * 4) + px(4), function() return autoServerHopState.SpecificLevelOptions() end)
+					controlHeight = amountControlsHeight + (secondaryControlHeight * 5) + px(4)
 				end
 				local control = {Frame = frame, Option = option, SetAmount = setAmount, ValueBox = valueBox, Height = controlHeight}
 				amountControls[#amountControls + 1] = control
@@ -7458,32 +8206,8 @@ local function createEmptyCollapsiblePanel(
 				end
 				local dropdownSearchHeight = px(29)
 				local popupContentHeight = dropdownSearchHeight + px(6) + (#popupOptions * px(25))
-				local desiredVisibleHeight = math.min(
-					popupContentHeight,
-					math.max(px(25), window.AbsoluteSize.Y - dropdownButton.AbsoluteSize.Y - px(12))
-				)
-				if dropdownButton:IsDescendantOf(rightContent) then
-					local buttonBottom = dropdownButton.AbsolutePosition.Y
-						+ dropdownButton.AbsoluteSize.Y
-					local windowBottom = window.AbsolutePosition.Y
-						+ window.AbsoluteSize.Y
-					local roomBelow = windowBottom - buttonBottom - px(6)
-					if roomBelow < desiredVisibleHeight then
-						local needed = desiredVisibleHeight - roomBelow
-						local maxCanvasY = math.max(
-							0,
-							rightContent.AbsoluteCanvasSize.Y - rightContent.AbsoluteSize.Y
-						)
-						rightContent.CanvasPosition = V2(
-							rightContent.CanvasPosition.X,
-							math.clamp(
-								rightContent.CanvasPosition.Y + needed,
-								0,
-								maxCanvasY
-							)
-						)
-					end
-				end
+				local desiredVisibleHeight = math.min(popupContentHeight, px(220))
+				ensureDropdownRoomBelow(dropdownButton, desiredVisibleHeight)
 				local popup = New("ScrollingFrame")
 				popup.Name = "PanelDropdown"
 				popup.AnchorPoint = V2(0, 0)
@@ -7491,7 +8215,7 @@ local function createEmptyCollapsiblePanel(
 				popup.BorderSizePixel = 0
 				popup.ClipsDescendants = true
 				popup.Active = true
-				popup.ScrollBarThickness = px(3)
+				popup.ScrollBarThickness = 0
 				popup.ScrollingDirection = Enum.ScrollingDirection.Y
 				popup.CanvasPosition = V2(0, 0)
 				popup.CanvasSize = U2O(0, popupContentHeight)
@@ -8090,7 +8814,7 @@ local function createEmptyCollapsiblePanel(
 					filterLabel.BorderSizePixel = 0
 					filterLabel.Text = labelText
 					filterLabel.TextColor3 = MUTED_TEXT_COLOR
-					filterLabel.FontFace = MENU_FONT_FACE
+					filterLabel.FontFace = MENU_FONT_REGULAR_FACE
 					setResponsiveTextSize(filterLabel, 14)
 					filterLabel.TextXAlignment = Enum.TextXAlignment.Left
 					filterLabel.TextYAlignment = Enum.TextYAlignment.Center
@@ -8104,7 +8828,7 @@ local function createEmptyCollapsiblePanel(
 					filterButton.AutoButtonColor = false
 					filterButton.TextTruncate = Enum.TextTruncate.AtEnd
 					filterButton.ClipsDescendants = true
-					filterButton.FontFace = MENU_FONT_FACE
+					filterButton.FontFace = MENU_FONT_REGULAR_FACE
 					setResponsiveTextSize(filterButton, 14)
 					filterButton.Parent = frame
 					ensureCorner(filterButton, px(6))
@@ -8131,7 +8855,10 @@ local function createEmptyCollapsiblePanel(
 				end
 				makeInlineFilter("Mutations", "AutoCancel" .. criterionKey .. "Mutations", amountControlsHeight + px(4), function() return autoServerHopState.BoothMutationOptions() end)
 				makeInlineFilter("Traits", "AutoCancel" .. criterionKey .. "Traits", amountControlsHeight + secondaryControlHeight + px(4), function() return autoServerHopState.BoothTraitOptions() end)
-				controlHeight = amountControlsHeight + (secondaryControlHeight * 2) + px(4)
+				makeInlineFilter("Signature", "AutoCancel" .. criterionKey .. "Signatures", amountControlsHeight + (secondaryControlHeight * 2) + px(4), function() return {"Signed", "Unsigned"} end)
+				makeInlineFilter("Size", "AutoCancel" .. criterionKey .. "Sizes", amountControlsHeight + (secondaryControlHeight * 3) + px(4), function() return autoServerHopState.SpecificSizeOptions() end)
+				makeInlineFilter("Level", "AutoCancel" .. criterionKey .. "Levels", amountControlsHeight + (secondaryControlHeight * 4) + px(4), function() return autoServerHopState.SpecificLevelOptions() end)
+				controlHeight = amountControlsHeight + (secondaryControlHeight * 5) + px(4)
 			end
 			amountControls[#amountControls+1] = {Frame=frame, Option=criterionKey, SetAmount=setAmount, ValueBox=value, Height=controlHeight}
 		end
@@ -8146,6 +8873,9 @@ local function createEmptyCollapsiblePanel(
 				return
 			end
 			if definition and definition.MomentaryAction then
+				if autoServerHopState.Utility.PauseScript == true then
+					return
+				end
 				if definition.MomentaryAction == "ManualServerHop" then
 					autoServerHopState.RuntimeManualServerHopRequested = true
 					autoServerHopState.RuntimeServerHopPending = true
@@ -8218,6 +8948,10 @@ local function createEmptyCollapsiblePanel(
 						stateEntry[definition.UtilityToggleKey] = featureEnabled
 					end
 					local toggledUtilityKey = definition.UtilityToggleKey
+					if toggledUtilityKey == "PauseScript" then
+						local applyPause = autoServerHopState.ApplyPauseState
+						if type(applyPause) == "function" then pcall(applyPause, featureEnabled) end
+					end
 					if toggledUtilityKey == "FallbackOffers" then
 						stateEntry.FallbackToNextLowerRarityBrainrot = featureEnabled
 					end
@@ -8364,7 +9098,8 @@ local function createEmptyCollapsiblePanel(
 				featureLabel.TextColor3 = RGB(255, 74, 74)
 				return
 			elseif isActionButton then
-				featureRow.Visible = true
+				featureRow.Visible = type(visibilityUtilityParents) ~= "table"
+					or utilityParentsEnabled(autoServerHopState.Utility, visibilityUtilityParents)
 				return
 			end
 			if isDropdownOnly then
@@ -8419,6 +9154,11 @@ local function createEmptyCollapsiblePanel(
 				and (
 					visibilityAutoCancelTarget == nil
 					or (type(autoCancelState) == "table" and type(autoCancelState.Targets) == "table" and autoCancelState.Targets[visibilityAutoCancelTarget] == true)
+				)
+				and (
+					not (definition and definition.VisibilityAutoCancelInventoryCriteria == true)
+					or autoServerHopState.Utility.AutoCancelCheckOpponentsBrainrots == true
+					or autoServerHopState.Utility.AutoCancelBasedOnSpecificItems == true
 				)
 				and (
 					visibilitySitKey == nil
@@ -8543,6 +9283,7 @@ local function createEmptyCollapsiblePanel(
 			VisibilityAcceptKey = visibilityAcceptKey,
 			AcceptStateTable = acceptStateTable,
 			VisibilityAutoCancelTarget = visibilityAutoCancelTarget,
+			VisibilityAutoCancelInventoryCriteria = definition and definition.VisibilityAutoCancelInventoryCriteria == true,
 			VisibilitySitKey = visibilitySitKey,
 			VisibilityAutoSitTarget = visibilityAutoSitTarget,
 			MinigameParentId = definition and definition.MinigameParentId or nil,
@@ -8675,7 +9416,7 @@ end
 		{
 			{Label = "Autofarm Tokens And Brainrots", UtilityToggleKey = "SimpleAutofarmEnabled"},
 			{SimpleAutofarmWarning = true},
-			{Label = "Reset Autofarm Settings To Default", ActionButton = true, Action = "ResetSimpleAutofarm"},
+			{Label = "Reset Autofarm Settings To Default", ActionButton = true, Action = "ResetSimpleAutofarm", VisibilityUtilityParentKey = "SimpleAutofarmEnabled"},
 		}
 	)
 	createEmptyCollapsiblePanel(
@@ -8711,7 +9452,7 @@ end
 				VisibilityUtilityParentKey = "AutoOfferMaster",
 			}
 		end
-		createEmptyCollapsiblePanel(tabs.Offers, 2, 1, 1, "Rarity-Based Offers", rarityOfferFeatures)
+		createEmptyCollapsiblePanel(tabs.Offers, 2, 1, 1, "BRAINROT/ITEM OFFERS", rarityOfferFeatures)
 		createEmptyCollapsiblePanel(tabs.Offers, 24, 2, 1, "Token Matching", {
 			{Label = "Token Matching", UtilityToggleKey = "AutoOfferTokensEnabled"},
 			{Label = "Match Tokens With Tokens", UtilityToggleKey = "AutoOfferMatchTokensWithTokens", UtilityParentKey = "AutoOfferTokensEnabled"},
@@ -8737,7 +9478,7 @@ end
 				DropdownLabel = "Brainrots To Check For",
 			},
 		}
-		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "AutoSitSpecificItems", VisibilitySitKey = "OneOfTwo", SpecificCriteriaOptionsProvider = function() return autoServerHopState.BoothBrainrotOptions() end}
+		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "AutoSitSpecificItems", VisibilitySitKey = "OneOfTwo"}
 		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Opponent Must Own All Selected Brainrots", UtilityToggleKey = "AutoSitMustOwnAllSelected", VisibilitySitKey = "OneOfTwo"}
 		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Opponent Must Own One Of Selected Brainrots", UtilityToggleKey = "AutoSitMustOwnOneSelected", VisibilitySitKey = "OneOfTwo"}
 		createEmptyCollapsiblePanel(tabs.Matchmaking, 3, 1, 1, "Auto Sit", autoSitFeatures)
@@ -8748,8 +9489,11 @@ end
 				Label = rarity, AcceptKey = rarity, VisibilityUtilityParentKey = parentKey,
 				AcceptStateProvider = acceptStateProvider,
 			}
-			features[#features + 1] = {Label = "Mutations", UtilityMultiDropdownKey = mutationPrefix .. rarity .. "Mutations", UtilityParentKey = parentKey, VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end}
-			features[#features + 1] = {Label = "Traits", UtilityMultiDropdownKey = mutationPrefix .. rarity .. "Traits", UtilityParentKey = parentKey, VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end}
+			features[#features + 1] = {Label = "Mutations", UtilityMultiDropdownKey = mutationPrefix .. rarity .. "Mutations", UtilityParentKey = parentKey, VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end}
+			features[#features + 1] = {Label = "Traits", UtilityMultiDropdownKey = mutationPrefix .. rarity .. "Traits", UtilityParentKey = parentKey, VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end}
+			features[#features + 1] = {Label = "Signature", UtilityMultiDropdownKey = mutationPrefix .. rarity .. "Signatures", UtilityParentKey = parentKey, VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, Placeholder = "Any", Options = {"Signed", "Unsigned"}}
+			features[#features + 1] = {Label = "Size", UtilityMultiDropdownKey = mutationPrefix .. rarity .. "Sizes", UtilityParentKey = parentKey, VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end}
+			features[#features + 1] = {Label = "Level", UtilityMultiDropdownKey = mutationPrefix .. rarity .. "Levels", UtilityParentKey = parentKey, VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end}
 		end
 		features[#features + 1] = {Label = "Tokens", AcceptKey = "Tokens", VisibilityUtilityParentKey = parentKey, AcceptStateProvider = acceptStateProvider}
 		features[#features + 1] = {Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = specificStateKey, UtilityParentKey = parentKey}
@@ -8760,14 +9504,14 @@ end
 	local function sharedAcceptStateProvider() return autoAcceptState end
 	local function tradeRequestStateProvider() return tradeRequestCriteriaState end
 	do
-		local features = {{Label = "Accept Offer", UtilityToggleKey = "AutoAcceptMaster"}}
+		local features = {{Label = "Accept Offers", UtilityToggleKey = "AutoAcceptMaster"}}
 		appendAcceptCriteria(features, "AutoAcceptMaster", sharedAcceptStateProvider, "AutoAccept", "AutoAcceptSpecificItems", "AutoAcceptMustHaveAll", "AutoAcceptMustHaveOne")
-		createEmptyCollapsiblePanel(tabs.Offers, 4, 2, 2, "Accept Offer", features)
+		createEmptyCollapsiblePanel(tabs.Offers, 4, 2, 2, "Accept Criteria", features)
 	end
 	do
-		local acceptOfferFeatures = {{Label = "Accept Offer", UtilityToggleKey = "AutoAcceptTradesAcceptOffers"}}
+		local acceptOfferFeatures = {{Label = "Accept Offers", UtilityToggleKey = "AutoAcceptTradesAcceptOffers"}}
 		appendAcceptCriteria(acceptOfferFeatures, "AutoAcceptTradesAcceptOffers", sharedAcceptStateProvider, "AutoAccept", "AutoAcceptSpecificItems", "AutoAcceptMustHaveAll", "AutoAcceptMustHaveOne")
-		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 32, 1, 1, "Accept Offer", acceptOfferFeatures)
+		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 32, 1, 1, "Accept Criteria", acceptOfferFeatures)
 
 		local requestFeatures = {{Label = "Accept Trade Request", UtilityToggleKey = "AutoAcceptTradesAcceptRequests"}}
 		appendAcceptCriteria(requestFeatures, "AutoAcceptTradesAcceptRequests", tradeRequestStateProvider, "AutoAcceptTradesRequest", "AutoAcceptTradesRequestSpecificItems", "AutoAcceptTradesRequestMustHaveAll", "AutoAcceptTradesRequestMustHaveOne")
@@ -8787,7 +9531,7 @@ end
 				VisibilityUtilityParentKey = "RegularAutoOfferMaster",
 			}
 		end
-		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 37, 1, 2, "Rarity-Based Offers", regularRarityOfferFeatures)
+		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 37, 1, 2, "BRAINROT/ITEM OFFERS", regularRarityOfferFeatures)
 		createEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 38, 2, 2, "Token Matching", {
 			{Label = "Token Matching", UtilityToggleKey = "RegularAutoOfferTokensEnabled"},
 			{Label = "Match Tokens With Tokens", UtilityToggleKey = "RegularAutoOfferMatchTokensWithTokens", UtilityParentKey = "RegularAutoOfferTokensEnabled"},
@@ -8804,8 +9548,6 @@ end
 		local regularOpeningFeatures = {
 			{Label = "Autoshow Best Brainrots", UtilityToggleKey = "RegularOpeningAutoshowBestBrainrots", UtilityExclusiveGroup = "RegularOpeningBrainrotMode"},
 			{Label = "Custom Opening Brainrots", UtilityToggleKey = "RegularOpeningCustomBrainrots", UtilityExclusiveGroup = "RegularOpeningBrainrotMode"},
-			{Label = "Opening Brainrot Mutations", UtilityMultiDropdownKey = "RegularOpeningSpecificMutations", UtilityParentKey = "RegularOpeningCustomBrainrots", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Opening Brainrot Traits", UtilityMultiDropdownKey = "RegularOpeningSpecificTraits", UtilityParentKey = "RegularOpeningCustomBrainrots", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
 		}
 		for slotIndex = 1, 6 do
 			regularOpeningFeatures[#regularOpeningFeatures + 1] = {
@@ -8813,7 +9555,7 @@ end
 				UtilityDropdownKey = "RegularOpeningBrainrot" .. tostring(slotIndex),
 				UtilityParentKey = "RegularOpeningCustomBrainrots",
 				Placeholder = "None",
-				OptionsProvider = function() local u = autoServerHopState.Utility return autoServerHopState.FilterOwnedOfferableBrainrotOptions(u.RegularOpeningSpecificMutations, u.RegularOpeningSpecificTraits) end,
+				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			}
@@ -8836,25 +9578,24 @@ end
 	end
 	do
 		createEmptyCollapsiblePanel(tabs.Cancel, 5, 1, 1, "Cancel After Time", {
-			{Label = "Auto Cancel", UtilityToggleKey = "AutoCancelMaster"},
-			{Label = "Cancel Trade After", UtilityToggleKey = "AutoCancelTradeTimeoutEnabled", UtilityParentKey = "AutoCancelMaster"},
-			{Label = "Trade Time Limit", UtilitySliderKey = "AutoCancelTradeTimeout", UtilityParentKeys = {"AutoCancelMaster", "AutoCancelTradeTimeoutEnabled"}, MinValue = 1, MaxValue = 60, UnitLabel = "Seconds"},
-			{Label = "Cancel If No Value Is Offered", UtilityToggleKey = "AutoCancelNoValueTimeoutEnabled", UtilityParentKey = "AutoCancelMaster"},
-			{Label = "No Value Time Limit", UtilitySliderKey = "AutoCancelNoValueTimeout", UtilityParentKeys = {"AutoCancelMaster", "AutoCancelNoValueTimeoutEnabled"}, MinValue = 1, MaxValue = 30, UnitLabel = "Seconds"},
+			{Label = "Cancel Trade After", UtilityToggleKey = "AutoCancelTradeTimeoutEnabled"},
+			{Label = "Trade Time Limit", UtilitySliderKey = "AutoCancelTradeTimeout", UtilityParentKey = "AutoCancelTradeTimeoutEnabled", MinValue = 1, MaxValue = 60, UnitLabel = "Seconds"},
+			{Label = "Cancel If No Value Is Offered After", UtilityToggleKey = "AutoCancelNoValueTimeoutEnabled"},
+			{Label = "No Value Time Limit", UtilitySliderKey = "AutoCancelNoValueTimeout", UtilityParentKey = "AutoCancelNoValueTimeoutEnabled", MinValue = 1, MaxValue = 30, UnitLabel = "Seconds"},
 		})
 		local inventory = {
-			{Label = "Cancel Based On Rarities Owned", UtilityToggleKey = "AutoCancelCheckOpponentsBrainrots", UtilityParentKey = "AutoCancelMaster"},
+			{Label = "Cancel Based On Rarities Owned", UtilityToggleKey = "AutoCancelCheckOpponentsBrainrots"},
 		}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
-			inventory[#inventory + 1] = {Label = rarity, AutoCancelRarityKey = rarity, VisibilityUtilityParentKeys = {"AutoCancelMaster", "AutoCancelCheckOpponentsBrainrots"}}
+			inventory[#inventory + 1] = {Label = rarity, AutoCancelRarityKey = rarity, VisibilityUtilityParentKey = "AutoCancelCheckOpponentsBrainrots"}
 		end
-		inventory[#inventory + 1] = {Label = "Cancel Based On Specific Brainrots / Items", UtilityToggleKey = "AutoCancelBasedOnSpecificItems", UtilityParentKey = "AutoCancelMaster"}
-		inventory[#inventory + 1] = {Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "AutoCancelSpecificItems", UtilityParentKeys = {"AutoCancelMaster", "AutoCancelBasedOnSpecificItems"}}
-		inventory[#inventory + 1] = {Label = "Cancel If Player Does Not Own All Selected", UtilityToggleKey = "AutoCancelPlayerMustOwnAllSelected", UtilityParentKey = "AutoCancelMaster", UtilityExclusiveGroup = "AutoCancelOwnershipMode", UtilityExclusiveRequired = true}
-		inventory[#inventory + 1] = {Label = "Cancel If Player Does Not Own At Least One Selected", UtilityToggleKey = "AutoCancelPlayerMustOwnAtLeastOneSelected", UtilityParentKey = "AutoCancelMaster", UtilityExclusiveGroup = "AutoCancelOwnershipMode", UtilityExclusiveRequired = true}
+		inventory[#inventory + 1] = {Label = "Cancel Based On Specific Brainrots / Items", UtilityToggleKey = "AutoCancelBasedOnSpecificItems"}
+		inventory[#inventory + 1] = {Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "AutoCancelSpecificItems", UtilityParentKey = "AutoCancelBasedOnSpecificItems"}
+		inventory[#inventory + 1] = {Label = "Cancel If Player Does Not Own All Selected", UtilityToggleKey = "AutoCancelPlayerMustOwnAllSelected", VisibilityAutoCancelInventoryCriteria = true, UtilityExclusiveGroup = "AutoCancelOwnershipMode", UtilityExclusiveRequired = true}
+		inventory[#inventory + 1] = {Label = "Cancel If Player Does Not Own At Least One Selected", UtilityToggleKey = "AutoCancelPlayerMustOwnAtLeastOneSelected", VisibilityAutoCancelInventoryCriteria = true, UtilityExclusiveGroup = "AutoCancelOwnershipMode", UtilityExclusiveRequired = true}
 		createEmptyCollapsiblePanel(tabs.Cancel, 28, 2, 1, "Cancel Based On Inventory", inventory)
 		createEmptyCollapsiblePanel(tabs.Cancel, 29, 1, 2, "Cancel Based On Tokens", {
-			{Label = "Tokens", AutoCancelRarityKey = "Tokens", VisibilityUtilityParentKey = "AutoCancelMaster"},
+			{Label = "Player Must Own This Many Tokens", AutoCancelRarityKey = "Tokens"},
 		})
 	end
 	createEmptyCollapsiblePanel(
@@ -8890,7 +9631,7 @@ end
 		2,
 		"Blacklist Servers",
 		{
-			{Label = "How long to blacklist joined servers", ServerHopSliderKey = "ServerBlacklistMinutes", ServerHopSliderAlwaysVisible = true, MinValue = 1, MaxValue = 60, UnitLabel = "Minutes"},
+			{Label = "How Long To Blacklist Joined Servers", ServerHopSliderKey = "ServerBlacklistMinutes", ServerHopSliderAlwaysVisible = true, MinValue = 1, MaxValue = 60, UnitLabel = "Minutes"},
 		}
 	)
 	createEmptyCollapsiblePanel(
@@ -8907,6 +9648,9 @@ end
 			{Label = "Rarities To Check For", UtilityMultiDropdownKey = "CheckServerBrainrotRarities", Placeholder = "None", Options = BRAINROT_RARITY_OPTIONS},
 			{Label = "Required Mutations", UtilityMultiDropdownKey = "CheckServerMutations", Placeholder = "None", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
 			{Label = "Required Traits", UtilityMultiDropdownKey = "CheckServerTraits", Placeholder = "None", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Required Signature", UtilityMultiDropdownKey = "CheckServerSignatures", Placeholder = "Any", Options = {"Signed", "Unsigned"}},
+			{Label = "Required Size", UtilityMultiDropdownKey = "CheckServerSizes", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+			{Label = "Required Level", UtilityMultiDropdownKey = "CheckServerLevels", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
 			{Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "CheckServerSpecificItems"},
 			{Label = "Player Must Own All Selected Criteria", UtilityToggleKey = "CheckServerMustOwnAll", UtilityExclusiveGroup = "CheckServerOwnershipMode"},
 			{Label = "Player Must Own At Least One Selected Criterion", UtilityToggleKey = "CheckServerMustOwnOne", UtilityExclusiveGroup = "CheckServerOwnershipMode"},
@@ -9060,16 +9804,11 @@ end
 				UtilityToggleKey = "NeverDeleteEnabled",
 				UtilityParentKey = "AutoDeleteWorstInventory",
 			},
-			{Label = "Specific Brainrot Mutations", UtilityMultiDropdownKey = "NeverDeleteSpecificMutations", UtilityParentKeys = {"AutoDeleteWorstInventory", "NeverDeleteEnabled"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Specific Brainrot Traits", UtilityMultiDropdownKey = "NeverDeleteSpecificTraits", UtilityParentKeys = {"AutoDeleteWorstInventory", "NeverDeleteEnabled"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
 			{
-				Label = "Brainrots / Items",
-				UtilityMultiDropdownKey = "NeverDeleteItems",
+				Label = "Specific Brainrots / Items",
+				SpecificCriteriaManager = true,
+				SpecificCriteriaStateKey = "NeverDeleteSpecificItems",
 				UtilityParentKeys = {"AutoDeleteWorstInventory", "NeverDeleteEnabled"},
-				Placeholder = "Select",
-				OptionsProvider = function()
-					return autoServerHopState.OwnedInventoryItemNameOptions()
-				end,
 			},
 		}
 	)
@@ -9081,22 +9820,34 @@ end
 			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
 			{Label = "Hold Mutations", UtilityMultiDropdownKey = "HoldSpecificBrainrotMutations", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
 			{Label = "Hold Traits", UtilityMultiDropdownKey = "HoldSpecificBrainrotTraits", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Brainrot To Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() local u=autoServerHopState.Utility return autoServerHopState.FilterOwnedBrainrotOptions(u.HoldSpecificBrainrotMutations,u.HoldSpecificBrainrotTraits) end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Hold Signature", UtilityMultiDropdownKey = "HoldSpecificBrainrotSignatures", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", Options = {"Signed", "Unsigned"}},
+			{Label = "Hold Size", UtilityMultiDropdownKey = "HoldSpecificBrainrotSizes", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+			{Label = "Hold Level", UtilityMultiDropdownKey = "HoldSpecificBrainrotLevels", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
+			{Label = "Brainrot To Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() local u=autoServerHopState.Utility return autoServerHopState.FilterOwnedBrainrotOptions(u.HoldSpecificBrainrotMutations,u.HoldSpecificBrainrotTraits,{SpecificSignatures=u.HoldSpecificBrainrotSignatures,SpecificSizes=u.HoldSpecificBrainrotSizes,SpecificLevels=u.HoldSpecificBrainrotLevels}) end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
 			{Label = "Auto Equip (Mount)", UtilityToggleKey = "AutoEquipModeMount", UtilityExclusiveGroup = "AutoEquipMode"},
 			{Label = "Equip Best Mountable Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
 			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
 			{Label = "Mount Mutations", UtilityMultiDropdownKey = "MountSpecificBrainrotMutations", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
 			{Label = "Mount Traits", UtilityMultiDropdownKey = "MountSpecificBrainrotTraits", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() local u=autoServerHopState.Utility return autoServerHopState.FilterOwnedMountableBrainrotOptions(u.MountSpecificBrainrotMutations,u.MountSpecificBrainrotTraits) end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Mount Signature", UtilityMultiDropdownKey = "MountSpecificBrainrotSignatures", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", Options = {"Signed", "Unsigned"}},
+			{Label = "Mount Size", UtilityMultiDropdownKey = "MountSpecificBrainrotSizes", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+			{Label = "Mount Level", UtilityMultiDropdownKey = "MountSpecificBrainrotLevels", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
+			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() local u=autoServerHopState.Utility return autoServerHopState.FilterOwnedMountableBrainrotOptions(u.MountSpecificBrainrotMutations,u.MountSpecificBrainrotTraits,{SpecificSignatures=u.MountSpecificBrainrotSignatures,SpecificSizes=u.MountSpecificBrainrotSizes,SpecificLevels=u.MountSpecificBrainrotLevels}) end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
 			{Label = "Auto Equip (Hold + Mount)", UtilityToggleKey = "AutoEquipModeHoldMount", UtilityExclusiveGroup = "AutoEquipMode"},
 			{Label = "Equip Best Brainrot + Mountable Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
 			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true},
 			{Label = "Hold Mutations", UtilityMultiDropdownKey = "HoldSpecificBrainrotMutations", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
 			{Label = "Hold Traits", UtilityMultiDropdownKey = "HoldSpecificBrainrotTraits", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Brainrot To Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() local u=autoServerHopState.Utility return autoServerHopState.FilterOwnedBrainrotOptions(u.HoldSpecificBrainrotMutations,u.HoldSpecificBrainrotTraits) end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Hold Signature", UtilityMultiDropdownKey = "HoldSpecificBrainrotSignatures", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", Options = {"Signed", "Unsigned"}},
+			{Label = "Hold Size", UtilityMultiDropdownKey = "HoldSpecificBrainrotSizes", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+			{Label = "Hold Level", UtilityMultiDropdownKey = "HoldSpecificBrainrotLevels", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
+			{Label = "Brainrot To Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() local u=autoServerHopState.Utility return autoServerHopState.FilterOwnedBrainrotOptions(u.HoldSpecificBrainrotMutations,u.HoldSpecificBrainrotTraits,{SpecificSignatures=u.HoldSpecificBrainrotSignatures,SpecificSizes=u.HoldSpecificBrainrotSizes,SpecificLevels=u.HoldSpecificBrainrotLevels}) end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
 			{Label = "Mount Mutations", UtilityMultiDropdownKey = "MountSpecificBrainrotMutations", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
 			{Label = "Mount Traits", UtilityMultiDropdownKey = "MountSpecificBrainrotTraits", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() local u=autoServerHopState.Utility return autoServerHopState.FilterOwnedMountableBrainrotOptions(u.MountSpecificBrainrotMutations,u.MountSpecificBrainrotTraits) end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Mount Signature", UtilityMultiDropdownKey = "MountSpecificBrainrotSignatures", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", Options = {"Signed", "Unsigned"}},
+			{Label = "Mount Size", UtilityMultiDropdownKey = "MountSpecificBrainrotSizes", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+			{Label = "Mount Level", UtilityMultiDropdownKey = "MountSpecificBrainrotLevels", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
+			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, Placeholder = "None", OptionsProvider = function() local u=autoServerHopState.Utility return autoServerHopState.FilterOwnedMountableBrainrotOptions(u.MountSpecificBrainrotMutations,u.MountSpecificBrainrotTraits,{SpecificSignatures=u.MountSpecificBrainrotSignatures,SpecificSizes=u.MountSpecificBrainrotSizes,SpecificLevels=u.MountSpecificBrainrotLevels}) end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
 		}
 	)
 	createEmptyCollapsiblePanel(
@@ -9108,14 +9859,12 @@ end
 		{
 			{Label = "Autoshow Best Brainrots", UtilityToggleKey = "AutoshowBestBrainrots", UtilityExclusiveGroup = "OpeningOfferBrainrotMode"},
 			{Label = "Custom Opening Brainrots", UtilityToggleKey = "CustomOpeningOffer", UtilityExclusiveGroup = "OpeningOfferBrainrotMode"},
-			{Label = "Opening Brainrot Mutations", UtilityMultiDropdownKey = "OpeningOfferSpecificMutations", UtilityParentKey = "CustomOpeningOffer", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Opening Brainrot Traits", UtilityMultiDropdownKey = "OpeningOfferSpecificTraits", UtilityParentKey = "CustomOpeningOffer", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
 			{
 				Label = "Brainrot 1",
 				UtilityDropdownKey = "OpeningOfferBrainrot1",
 				UtilityParentKey = "CustomOpeningOffer",
 				Placeholder = "None",
-				OptionsProvider = function() local u = autoServerHopState.Utility return autoServerHopState.FilterOwnedOfferableBrainrotOptions(u.OpeningOfferSpecificMutations, u.OpeningOfferSpecificTraits) end,
+				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			},
@@ -9124,7 +9873,7 @@ end
 				UtilityDropdownKey = "OpeningOfferBrainrot2",
 				UtilityParentKey = "CustomOpeningOffer",
 				Placeholder = "None",
-				OptionsProvider = function() local u = autoServerHopState.Utility return autoServerHopState.FilterOwnedOfferableBrainrotOptions(u.OpeningOfferSpecificMutations, u.OpeningOfferSpecificTraits) end,
+				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			},
@@ -9133,7 +9882,7 @@ end
 				UtilityDropdownKey = "OpeningOfferBrainrot3",
 				UtilityParentKey = "CustomOpeningOffer",
 				Placeholder = "None",
-				OptionsProvider = function() local u = autoServerHopState.Utility return autoServerHopState.FilterOwnedOfferableBrainrotOptions(u.OpeningOfferSpecificMutations, u.OpeningOfferSpecificTraits) end,
+				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			},
@@ -9142,7 +9891,7 @@ end
 				UtilityDropdownKey = "OpeningOfferBrainrot4",
 				UtilityParentKey = "CustomOpeningOffer",
 				Placeholder = "None",
-				OptionsProvider = function() local u = autoServerHopState.Utility return autoServerHopState.FilterOwnedOfferableBrainrotOptions(u.OpeningOfferSpecificMutations, u.OpeningOfferSpecificTraits) end,
+				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			},
@@ -9151,7 +9900,7 @@ end
 				UtilityDropdownKey = "OpeningOfferBrainrot5",
 				UtilityParentKey = "CustomOpeningOffer",
 				Placeholder = "None",
-				OptionsProvider = function() local u = autoServerHopState.Utility return autoServerHopState.FilterOwnedOfferableBrainrotOptions(u.OpeningOfferSpecificMutations, u.OpeningOfferSpecificTraits) end,
+				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			},
@@ -9160,7 +9909,7 @@ end
 				UtilityDropdownKey = "OpeningOfferBrainrot6",
 				UtilityParentKey = "CustomOpeningOffer",
 				Placeholder = "None",
-				OptionsProvider = function() local u = autoServerHopState.Utility return autoServerHopState.FilterOwnedOfferableBrainrotOptions(u.OpeningOfferSpecificMutations, u.OpeningOfferSpecificTraits) end,
+				OptionsProvider = function() return autoServerHopState.RefreshOwnedOfferableBrainrotOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			},
@@ -9281,14 +10030,12 @@ end
 	do
 		local boothSettings = {
 			{Label = "Auto Booth", UtilityToggleKey = "AutoBooth"},
-			{Label = "Booth Name", UtilityTextKey = "AutoBoothName", UtilityParentKey = "AutoBooth", Placeholder = "Booth name..."},
+			{Label = "Booth Name", UtilityTextKey = "AutoBoothName", UtilityParentKey = "AutoBooth", Placeholder = "Booth Name..."},
 			{Label = "List Best Brainrot First", UtilityToggleKey = "AutoBoothListBestFirst", UtilityParentKey = "AutoBooth", UtilityExclusiveGroup = "AutoBoothSortOrder"},
 			{Label = "List Worst Brainrot First", UtilityToggleKey = "AutoBoothListWorstFirst", UtilityParentKey = "AutoBooth", UtilityExclusiveGroup = "AutoBoothSortOrder"},
-			{Label = "Avoid Brainrots With Traits", UtilityMultiDropdownKey = "AutoBoothAvoidTraits", UtilityParentKey = "AutoBooth", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Avoid Brainrots With Mutations", UtilityMultiDropdownKey = "AutoBoothAvoidMutations", UtilityParentKey = "AutoBooth", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Avoid Specific Brainrots", UtilityMultiDropdownKey = "AutoBoothAvoidBrainrots", UtilityParentKey = "AutoBooth", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothBrainrotOptions() end},
-			{Label = "Specific Brainrot Mutations", UtilityMultiDropdownKey = "AutoBoothAvoidSpecificMutations", UtilityParentKey = "AutoBooth", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Specific Brainrot Traits", UtilityMultiDropdownKey = "AutoBoothAvoidSpecificTraits", UtilityParentKey = "AutoBooth", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Avoid Brainrots With These Traits", UtilityMultiDropdownKey = "AutoBoothAvoidTraits", UtilityParentKey = "AutoBooth", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Avoid Brainrots With These Mutations", UtilityMultiDropdownKey = "AutoBoothAvoidMutations", UtilityParentKey = "AutoBooth", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Avoid These Specific Brainrots", UtilityMultiDropdownKey = "AutoBoothAvoidBrainrots", UtilityParentKey = "AutoBooth", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothBrainrotOptions() end},
 		}
 		local boothMessages = {
 			{Label = "Send Message When All Listings Are Listed", UtilityToggleKey = "AutoBoothMessageAllListingsCompleted", UtilityParentKey = "AutoBooth"},
@@ -9306,10 +10053,10 @@ end
 			add({Label = "Listing " .. tostring(index), UtilityToggleKey = prefix .. "Enabled", UtilityParentKey = "AutoBooth"})
 			add({Label = "List By Rarity", UtilityToggleKey = prefix .. "ListByRarity", UtilityParentKeys = parents, UtilityExclusiveGroup = prefix .. "SelectionMode", UtilityExclusiveRequired = true})
 			add({Label = "Rarity", UtilityDropdownKey = prefix .. "Rarity", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByRarity"}, Placeholder = "Select", Options = BRAINROT_RARITY_OPTIONS})
-			add({Label = "List Specific Brainrot", UtilityToggleKey = prefix .. "ListByBrainrot", UtilityParentKeys = parents, UtilityExclusiveGroup = prefix .. "SelectionMode", UtilityExclusiveRequired = true})
-			add({Label = "Brainrot", UtilityDropdownKey = prefix .. "Brainrot", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByBrainrot"}, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothBrainrotOptions() end})
-			add({Label = "Mutations", UtilityMultiDropdownKey = prefix .. "BrainrotMutations", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end})
-			add({Label = "Traits", UtilityMultiDropdownKey = prefix .. "BrainrotTraits", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByBrainrot"}, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end})
+			add({Label = "List Brainrot By Name", UtilityToggleKey = prefix .. "ListByBrainrot", UtilityParentKeys = parents, UtilityExclusiveGroup = prefix .. "SelectionMode", UtilityExclusiveRequired = true})
+			add({Label = "Brainrot Name", UtilityDropdownKey = prefix .. "Brainrot", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByBrainrot"}, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothBrainrotOptions() end})
+			add({Label = "List Specific Brainrot", UtilityToggleKey = prefix .. "ListSpecificBrainrot", UtilityParentKeys = parents, UtilityExclusiveGroup = prefix .. "SelectionMode", UtilityExclusiveRequired = true})
+			add({Label = "Owned Brainrot", UtilityDropdownKey = prefix .. "SpecificBrainrotId", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListSpecificBrainrot"}, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true})
 			add({Label = "List When You Have At Least", UtilitySliderKey = prefix .. "MinimumCopies", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByRarity"}, MinValue = 1, MaxValue = 100, UnitLabel = "Owned"})
 			add({Label = "List Above This Inventory Or Higher", UtilitySliderKey = prefix .. "InventoryThreshold", UtilityParentKeys = parents, MinValue = 1, MaxValue = 100, UnitLabel = "Inventory"})
 			add({Label = "Listing " .. tostring(index) .. " Tokens", UtilitySliderKey = prefix .. "Tokens", UtilityParentKeys = parents, MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"})
@@ -9322,15 +10069,13 @@ end
 		createEmptyCollapsiblePanel(tabs.Booth, 31, 1, 2, "Listings", listings)
 	end
 	do
-		-- Each fallback type is independent. Its detailed controls are nested directly
-		-- beneath that toggle so users never have to enable an unrelated fallback first.
+		-- All three fallback types stay visible and independent. Each enabled type
+		-- reveals only its own controls immediately beneath it.
 		local features = {
 			{Label = "Next Lower Rarity Fallback Offers", UtilityToggleKey = "FallbackToNextLowerRarityBrainrot"},
 			{Label = "Amount Of Brainrots To Offer", UtilitySliderKey = "FallbackNextLowerRarityAmount", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
-			{Label = "Avoid Brainrots With These Mutations", UtilityToggleKey = "FallbackAvoidMutationsEnabled", UtilityParentKey = "FallbackToNextLowerRarityBrainrot"},
-			{Label = "Mutations To Avoid", UtilityMultiDropdownKey = "FallbackAvoidMutations", UtilityParentKeys = {"FallbackToNextLowerRarityBrainrot", "FallbackAvoidMutationsEnabled"}, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Avoid Brainrots With These Traits", UtilityToggleKey = "FallbackAvoidTraitsEnabled", UtilityParentKey = "FallbackToNextLowerRarityBrainrot"},
-			{Label = "Traits To Avoid", UtilityMultiDropdownKey = "FallbackAvoidTraits", UtilityParentKeys = {"FallbackToNextLowerRarityBrainrot", "FallbackAvoidTraitsEnabled"}, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Avoid Brainrots With These Mutations", UtilityMultiDropdownKey = "FallbackAvoidMutations", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Avoid Brainrots With These Traits", UtilityMultiDropdownKey = "FallbackAvoidTraits", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
 			{Label = "Specific Brainrots / Items Fallback", UtilityToggleKey = "FallbackToSpecificBrainrotItem"},
 		}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
@@ -9340,14 +10085,9 @@ end
 				UtilityMultiDropdownKey = "FallbackSpecific" .. sourceRarity .. "Items",
 				UtilityParentKey = "FallbackToSpecificBrainrotItem",
 				Placeholder = "Select",
-				OptionsProvider = function()
-					local u = autoServerHopState.Utility
-					return autoServerHopState.FilterOwnedTradeableItemOptions(u["FallbackSpecific" .. sourceRarity .. "Mutations"], u["FallbackSpecific" .. sourceRarity .. "Traits"])
-				end,
+				OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end,
 			}
-			features[#features + 1] = {Label = sourceRarity .. " Specific Mutations", UtilityMultiDropdownKey = "FallbackSpecific" .. sourceRarity .. "Mutations", UtilityParentKey = "FallbackToSpecificBrainrotItem", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end}
-			features[#features + 1] = {Label = sourceRarity .. " Specific Traits", UtilityMultiDropdownKey = "FallbackSpecific" .. sourceRarity .. "Traits", UtilityParentKey = "FallbackToSpecificBrainrotItem", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end}
 		end
 		features[#features + 1] = {Label = "Token Fallback Offers", UtilityToggleKey = "FallbackToTokens"}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
@@ -9359,10 +10099,8 @@ end
 		local regularFeatures = {
 			{Label = "Next Lower Rarity Fallback Offers", UtilityToggleKey = "RegularFallbackOffers"},
 			{Label = "Amount Of Brainrots To Offer", UtilitySliderKey = "RegularFallbackNextLowerRarityAmount", UtilityParentKey = "RegularFallbackOffers", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
-			{Label = "Avoid Brainrots With These Mutations", UtilityToggleKey = "RegularFallbackAvoidMutationsEnabled", UtilityParentKey = "RegularFallbackOffers"},
-			{Label = "Mutations To Avoid", UtilityMultiDropdownKey = "RegularFallbackAvoidMutations", UtilityParentKeys = {"RegularFallbackOffers", "RegularFallbackAvoidMutationsEnabled"}, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Avoid Brainrots With These Traits", UtilityToggleKey = "RegularFallbackAvoidTraitsEnabled", UtilityParentKey = "RegularFallbackOffers"},
-			{Label = "Traits To Avoid", UtilityMultiDropdownKey = "RegularFallbackAvoidTraits", UtilityParentKeys = {"RegularFallbackOffers", "RegularFallbackAvoidTraitsEnabled"}, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Avoid Brainrots With These Mutations", UtilityMultiDropdownKey = "RegularFallbackAvoidMutations", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Avoid Brainrots With These Traits", UtilityMultiDropdownKey = "RegularFallbackAvoidTraits", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
 			{Label = "Specific Brainrots / Items Fallback", UtilityToggleKey = "RegularFallbackToSpecificItems"},
 		}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
@@ -9372,14 +10110,9 @@ end
 				UtilityMultiDropdownKey = "RegularFallbackSpecific" .. sourceRarity .. "Items",
 				UtilityParentKey = "RegularFallbackToSpecificItems",
 				Placeholder = "Select",
-				OptionsProvider = function()
-					local u = autoServerHopState.Utility
-					return autoServerHopState.FilterOwnedTradeableItemOptions(u["RegularFallbackSpecific" .. sourceRarity .. "Mutations"], u["RegularFallbackSpecific" .. sourceRarity .. "Traits"])
-				end,
+				OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end,
 			}
-			regularFeatures[#regularFeatures + 1] = {Label = sourceRarity .. " Specific Mutations", UtilityMultiDropdownKey = "RegularFallbackSpecific" .. sourceRarity .. "Mutations", UtilityParentKey = "RegularFallbackToSpecificItems", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end}
-			regularFeatures[#regularFeatures + 1] = {Label = sourceRarity .. " Specific Traits", UtilityMultiDropdownKey = "RegularFallbackSpecific" .. sourceRarity .. "Traits", UtilityParentKey = "RegularFallbackToSpecificItems", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end}
 		end
 		regularFeatures[#regularFeatures + 1] = {Label = "Token Fallback Offers", UtilityToggleKey = "RegularFallbackToTokens"}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
@@ -9453,6 +10186,12 @@ end
 		}
 	)
 end)()
+
+-- Isolate late window-geometry/control state from the already register-heavy
+-- top-level UI chunk. Luau caps a function/chunk at 200 local registers;
+-- keeping these locals in their own function scope preserves the exact UI
+-- behavior while preventing the compiler from allocating them in the main chunk.
+;(function()
 local controlHolder
 local function syncRightPanelGeometry(
 	instant
@@ -9498,7 +10237,10 @@ local function syncRightPanelGeometry(
 				- CONTROL_RIGHT_MARGIN
 				- px(14)
 			),
-		CONTROL_BUTTON_SIZE
+		math.max(
+			CONTROL_BUTTON_SIZE,
+			CONTENT_TOP_PADDING - CONTROL_TOP_MARGIN - px(2)
+		)
 		)
 	if controlHolder then
 		controlHolder.Position = U2(
@@ -9557,6 +10299,17 @@ local function syncRightPanelGeometry(
 	local renderedPanelScale = responsiveWindowScale and responsiveWindowScale.Scale or 1
 	local singleColumn = isPhonePanelLayout()
 		or (usablePanelWidth * renderedPanelScale) < 460
+	-- If the content has reached the one-column breakpoint, reclaim the sidebar
+	-- space automatically. Re-run geometry once with the collapsed sidebar so
+	-- every dependent width/position is calculated from the final layout.
+	if singleColumn and not sidebarCollapsed then
+		sidebarCollapsed = true
+		if searchBox:IsFocused() then
+			searchBox:ReleaseFocus()
+		end
+		syncPixelSnappedGeometry()
+		return syncRightPanelGeometry(true)
+	end
 	local cardWidth = singleColumn
 		and usablePanelWidth
 		or math.max(
@@ -9754,8 +10507,16 @@ if MINIGAME_MODE then
 			rarityIndex[rarity] = index
 		end
 		while screenGui.Parent do
+			if autoServerHopState.Utility.PauseScript == true then
+				task.wait(0.50)
+				continue
+			end
 			if autoServerHopState.Utility.SimpleAutofarmEnabled == true then
-				local total, highest = autoServerHopState.SimpleAutofarmInventorySummary()
+				local total, highest, _, inventoryReady = autoServerHopState.SimpleAutofarmInventorySummary()
+				if inventoryReady ~= true then
+					task.wait(0.50)
+					continue
+				end
 				if (tonumber(total) or 0) <= 0 or not rarityIndex[highest] then
 					local toggle = rawget(_G, "__TUFFHUB_SET_SIMPLE_AUTOFARM")
 					if type(toggle) == "function" then pcall(toggle, false) end
@@ -9857,6 +10618,8 @@ window:GetPropertyChangedSignal(
 	task.defer(function()
 		autoServerHopState.RuntimeResponsiveRelayoutQueued = false
 		if not screenGui.Parent then return end
+		local refreshSidebarWidth = autoServerHopState.RefreshSidebarMinimumWidth
+		if type(refreshSidebarWidth) == "function" then pcall(refreshSidebarWidth, true) end
 		syncPixelSnappedGeometry()
 		syncRightPanelGeometry(true)
 		for _, data in ipairs(allUnsupportedPanels) do
@@ -9873,6 +10636,8 @@ camera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
 	task.defer(function()
 		autoServerHopState.RuntimeResponsiveRelayoutQueued = false
 		if not screenGui.Parent then return end
+		local refreshSidebarWidth = autoServerHopState.RefreshSidebarMinimumWidth
+		if type(refreshSidebarWidth) == "function" then pcall(refreshSidebarWidth, true) end
 		syncPixelSnappedGeometry()
 		syncRightPanelGeometry(true)
 		for _, data in ipairs(allUnsupportedPanels) do
@@ -10293,6 +11058,7 @@ closeButton.MouseButton1Click:Connect(function()
 	screenGui:Destroy()
 end)
 end)()
+end)()
 UserInputService.InputBegan:Connect(
 	function(input, gameProcessedEvent)
 		if guiDestroyed then
@@ -10411,11 +11177,15 @@ UserInputService.InputBegan:Connect(
 		end
 		return true
 	end
-	local function touchStartsInScrollableContent(point)
+	local function startsInScrollableContent(point, inputType)
+		-- Native scrollbar input is not exposed as a child GuiObject. Reserve the
+		-- entire sidebar scrolling region so dragging its thumb never drags the window.
 		if pointInsideGui(menuHolder, point) then
 			return true
 		end
-		if pointInsideGui(rightContent, point) then
+		if inputType == Enum.UserInputType.Touch
+			and pointInsideGui(rightContent, point)
+		then
 			local canvasY = point.Y
 				- rightContent.AbsolutePosition.Y
 				+ rightContent.CanvasPosition.Y
@@ -10427,11 +11197,8 @@ UserInputService.InputBegan:Connect(
 	end
 	local function beginDrag(input)
 		if not window.Visible
+			or startsInScrollableContent(input.Position, input.UserInputType)
 			or not pointIsEmptyBlackBackground(input.Position)
-			or (
-				input.UserInputType == Enum.UserInputType.Touch
-				and touchStartsInScrollableContent(input.Position)
-			)
 		then
 			return
 		end
@@ -10605,7 +11372,7 @@ if MINIGAME_MODE then
 			then
 				break
 			end
-			task.wait(0.10)
+			task.wait(0.50)
 		end
 		if not screenGui.Parent then return end
 		local PlayersAS = Players
@@ -10696,7 +11463,7 @@ if MINIGAME_MODE then
 			end
 			local now = os.clock()
 			if now < nextTablesFallbackScanAS then return nil end
-			nextTablesFallbackScanAS = now + 0.50
+			nextTablesFallbackScanAS = now + 5.00
 			for _, descendant in ipairs(workspace:GetDescendants()) do
 				if descendant.Name == "MinigameTables"
 					and descendant:FindFirstChildWhichIsA("Seat", true)
@@ -10892,21 +11659,14 @@ if MINIGAME_MODE then
 		end
 		local function toolPassesSitFiltersAS(tool, rarity)
 			local utility = autoServerHopState.Utility
-			local mutations = utility["AutoSit" .. tostring(rarity) .. "Mutations"]
-			local traits = utility["AutoSit" .. tostring(rarity) .. "Traits"]
-			if type(mutations) == "table" and next(mutations) ~= nil then
-				local mutation = toolMutationAS(tool)
-				if not mutation or mutations[mutation] ~= true then return false end
-			end
-			if type(traits) == "table" and next(traits) ~= nil then
-				local present = toolTraitsAS(tool)
-				local matched = false
-				for trait in pairs(traits) do
-					if present[tostring(trait)] == true then matched = true break end
-				end
-				if not matched then return false end
-			end
-			return true
+			local prefix = "AutoSit" .. tostring(rarity)
+			return autoServerHopState.ToolMatchesSpecificRule(tool, {
+				Mutations = utility[prefix .. "Mutations"],
+				Traits = utility[prefix .. "Traits"],
+				Signatures = utility[prefix .. "Signatures"],
+				Sizes = utility[prefix .. "Sizes"],
+				Levels = utility[prefix .. "Levels"],
+			})
 		end
 		local function toolSpecificNameAS(tool)
 			if not tool or not tool:IsA("Tool") then return "" end
@@ -10924,21 +11684,7 @@ if MINIGAME_MODE then
 			if toolSpecificNameAS(tool) ~= wanted and tostring(tool.Name or "") ~= wanted then
 				return false
 			end
-			local mutations = type(rule.Mutations) == "table" and rule.Mutations or {}
-			if next(mutations) ~= nil then
-				local mutation = toolMutationAS(tool)
-				if not mutation or mutations[mutation] ~= true then return false end
-			end
-			local traits = type(rule.Traits) == "table" and rule.Traits or {}
-			if next(traits) ~= nil then
-				local present = toolTraitsAS(tool)
-				local matched = false
-				for trait in pairs(traits) do
-					if present[tostring(trait)] == true then matched = true break end
-				end
-				if not matched then return false end
-			end
-			return true
+			return autoServerHopState.ToolMatchesSpecificRule(tool, rule)
 		end
 		local function mustOwnMatchesAS(player)
 			local config = autoSitState and autoSitState.OneOfTwo
@@ -11153,6 +11899,9 @@ if MINIGAME_MODE then
 			end
 		end
 		local function firePromptAS(prompt)
+			if autoServerHopState.Utility.PauseScript == true
+				or autoServerHopState.Utility.PauseMinigameFeatures == true
+			then return false end
 			if not prompt or not prompt.Parent or not prompt.Enabled then return false end
 			if firePromptExecutorAS and pcall(firePromptExecutorAS, prompt, 1, true) then return true end
 			return pcall(function()
@@ -11162,12 +11911,18 @@ if MINIGAME_MODE then
 			end)
 		end
 		local function releaseCurrentSeatAS(expectedTable)
+			if autoServerHopState.Utility.PauseScript == true
+				or autoServerHopState.Utility.PauseMinigameFeatures == true
+			then return false end
 			local _, humanoid, root = characterPartsAS()
 			local folder = tablesFolderAS()
 			if not humanoid or not root or not folder then return false end
 			if not minigameQueuedAS() then
 				return false
 			end
+			if autoServerHopState.Utility.PauseScript == true
+				or autoServerHopState.Utility.PauseMinigameFeatures == true
+			then return false end
 			local fired = pcall(function()
 				MinigameLeaveQueueAS:FireServer()
 			end)
@@ -11231,9 +11986,15 @@ if MINIGAME_MODE then
 			return false
 		end
 		local function clearOrphanedQueueAS()
+			if autoServerHopState.Utility.PauseScript == true
+				or autoServerHopState.Utility.PauseMinigameFeatures == true
+			then return false end
 			if physicalCurrentTableAS() ~= nil or not minigameQueuedAS() then
 				return not minigameQueuedAS()
 			end
+			if autoServerHopState.Utility.PauseScript == true
+				or autoServerHopState.Utility.PauseMinigameFeatures == true
+			then return false end
 			local fired = pcall(function()
 				MinigameLeaveQueueAS:FireServer()
 			end)
@@ -12031,7 +12792,6 @@ if MINIGAME_MODE then
 			end
 		end
 		while screenGui.Parent do
-			task.wait(0.05)
 			local utility = autoServerHopState.Utility
 			local emptyEnabled = autoSitState
 				and autoSitState.EmptyTables
@@ -12039,17 +12799,14 @@ if MINIGAME_MODE then
 			local partnerEnabled = autoSitState
 				and autoSitState.OneOfTwo
 				and autoSitState.OneOfTwo.Enabled == true
-			if utility.PauseScript == true
-				or utility.PauseMinigameFeatures == true
-				or autoServerHopState.RuntimeServerHopPending == true
-				or (not emptyEnabled and not partnerEnabled)
-			then
-				continue
-			end
+			local active = utility.PauseScript ~= true
+				and utility.PauseMinigameFeatures ~= true
+				and autoServerHopState.RuntimeServerHopPending ~= true
+				and (emptyEnabled or partnerEnabled)
+			task.wait(active and 0.05 or 0.25)
+			if not active then continue end
 			local okStep = pcall(schedulerStepAS)
-			if not okStep then
-				task.wait(0.05)
-			end
+			if not okStep then task.wait(0.05) end
 		end
 	end)
 end
@@ -12059,10 +12816,15 @@ if MINIGAME_MODE then
 			and not (
 				autoServerHopState.Utility.PauseScript ~= true
 				and autoServerHopState.Utility.PauseMinigameFeatures ~= true
-				and autoServerHopState.Utility.AutoCancelMaster == true
+				and (
+					autoServerHopState.Utility.AutoCancelTradeTimeoutEnabled == true
+					or autoServerHopState.Utility.AutoCancelNoValueTimeoutEnabled == true
+					or autoServerHopState.Utility.AutoCancelCheckOpponentsBrainrots == true
+					or autoServerHopState.Utility.AutoCancelBasedOnSpecificItems == true
+				)
 			)
 		do
-			task.wait(0.10)
+			task.wait(0.50)
 		end
 		if not screenGui.Parent then return end
 		local PlayersAC = Players
@@ -12221,21 +12983,14 @@ if MINIGAME_MODE then
 		end
 		local function toolPassesCancelFiltersAC(tool, rarity)
 			local utility = autoServerHopState.Utility
-			local mutations = utility["AutoCancel" .. tostring(rarity) .. "Mutations"]
-			local traits = utility["AutoCancel" .. tostring(rarity) .. "Traits"]
-			if type(mutations) == "table" and next(mutations) ~= nil then
-				local mutation = toolMutationAC(tool)
-				if not mutation or mutations[mutation] ~= true then return false end
-			end
-			if type(traits) == "table" and next(traits) ~= nil then
-				local present = toolTraitsAC(tool)
-				local matched = false
-				for trait in pairs(traits) do
-					if present[tostring(trait)] == true then matched = true break end
-				end
-				if not matched then return false end
-			end
-			return true
+			local prefix = "AutoCancel" .. tostring(rarity)
+			return autoServerHopState.ToolMatchesSpecificRule(tool, {
+				Mutations = utility[prefix .. "Mutations"],
+				Traits = utility[prefix .. "Traits"],
+				Signatures = utility[prefix .. "Signatures"],
+				Sizes = utility[prefix .. "Sizes"],
+				Levels = utility[prefix .. "Levels"],
+			})
 		end
 		local function toolSpecificNameAC(tool)
 			if not tool or not tool:IsA("Tool") then return "" end
@@ -12253,21 +13008,7 @@ if MINIGAME_MODE then
 			if toolSpecificNameAC(tool) ~= wanted and tostring(tool.Name or "") ~= wanted then
 				return false
 			end
-			local mutations = type(rule.Mutations) == "table" and rule.Mutations or {}
-			if next(mutations) ~= nil then
-				local mutation = toolMutationAC(tool)
-				if not mutation or mutations[mutation] ~= true then return false end
-			end
-			local traits = type(rule.Traits) == "table" and rule.Traits or {}
-			if next(traits) ~= nil then
-				local present = toolTraitsAC(tool)
-				local matched = false
-				for trait in pairs(traits) do
-					if present[tostring(trait)] == true then matched = true break end
-				end
-				if not matched then return false end
-			end
-			return true
+			return autoServerHopState.ToolMatchesSpecificRule(tool, rule)
 		end
 		local function selectedCriteriaAC()
 			local criteria = {}
@@ -12358,6 +13099,7 @@ if MINIGAME_MODE then
 			return false
 		end
 		local function declineAC(expectedGuid, opponentUserId)
+			if autoServerHopState.Utility.PauseScript == true then return false end
 			if not DeclineAC or guidAC() ~= expectedGuid then return false end
 			local ok = pcall(function() DeclineAC:FireServer() end)
 			if not ok then return false end
@@ -12370,6 +13112,7 @@ if MINIGAME_MODE then
 			return canceled
 		end
 		local function leaveQueueAC(opponentUserId)
+			if autoServerHopState.Utility.PauseScript == true then return false end
 			if not LeaveQueueAC or not queuedAC() or os.clock() - lastQueueLeaveAtAC < 0.50 then
 				return false
 			end
@@ -12392,8 +13135,24 @@ if MINIGAME_MODE then
 			end
 		end
 		while screenGui.Parent do
-			task.wait(0.05)
 			local utilityAC = autoServerHopState.Utility
+			local cancelConfiguredAC = utilityAC.AutoCancelTradeTimeoutEnabled == true
+				or utilityAC.AutoCancelNoValueTimeoutEnabled == true
+				or utilityAC.AutoCancelCheckOpponentsBrainrots == true
+				or utilityAC.AutoCancelBasedOnSpecificItems == true
+			local cancelAwakeAC = cancelConfiguredAC and utilityAC.PauseScript ~= true
+			task.wait(cancelAwakeAC and 0.05 or 0.30)
+			if not cancelConfiguredAC then
+				if autoCancelWasActiveAC then
+					trackedGuidAC = nil
+					tradeStartedAtAC = 0
+					noValueSinceAC = nil
+					brainrotMismatchSinceAC = nil
+					lastDeclineGuidAC = nil
+					autoCancelWasActiveAC = false
+				end
+				continue
+			end
 			refreshAC()
 			local hasNegotiationAC = tryAC(ActiveNegotiationAC, {"guid"}) ~= nil
 			local minigameLifecycleAC = queuedAC()
@@ -12402,7 +13161,7 @@ if MINIGAME_MODE then
 			local regularTradeAC = hasNegotiationAC and not minigameLifecycleAC
 			local autoCancelActive =
 				utilityAC.PauseScript ~= true
-				and utilityAC.AutoCancelMaster == true
+				and cancelConfiguredAC
 				and (regularTradeAC or utilityAC.PauseMinigameFeatures ~= true)
 			if not autoCancelActive then
 				if autoCancelWasActiveAC then
@@ -12559,14 +13318,13 @@ if MINIGAME_MODE then
 				or type(tryBL(active, {"voting"})) == "table"
 		end
 		while screenGui.Parent do
-			task.wait(0.05)
-			if autoServerHopState.Utility.PauseScript == true
-			or autoServerHopState.Utility.PauseMinigameFeatures == true
-				or (
-					autoServerHopState.Utility.TempBlacklistPlayersAfterCanceledTrade ~= true
-					and autoServerHopState.Utility.PermanentBlacklistPlayersAfterCanceledTrade ~= true
-				)
-			then
+			local utilityBL = autoServerHopState.Utility
+			local trackingEnabledBL = utilityBL.PauseScript ~= true
+				and utilityBL.PauseMinigameFeatures ~= true
+				and (utilityBL.TempBlacklistPlayersAfterCanceledTrade == true
+					or utilityBL.PermanentBlacklistPlayersAfterCanceledTrade == true)
+			task.wait(trackingEnabledBL and 0.05 or 0.30)
+			if not trackingEnabledBL then
 				if blacklistTrackingActiveBL then
 					trackedGuidBL = nil
 					negotiationOpponentUserIdBL = nil
@@ -12708,10 +13466,9 @@ if MINIGAME_MODE then
 		identitySP.startedMs = startedMsSP
 		identitySP.instanceId = instanceIdSP
 		local function enabledSP()
-			-- Presence is published for every running TuffHub client, even when
-			-- this local user's leave toggle is off. Otherwise an enabled user
-			-- could not detect a script user who had their own toggle disabled.
+			-- Global Pause Script pauses presence publishing/reconnect work as well.
 			return screenGui.Parent ~= nil
+				and autoServerHopState.Utility.PauseScript ~= true
 		end
 		local function leaveEnabledSP()
 			return enabledSP()
@@ -13314,21 +14071,13 @@ if MINIGAME_MODE then
 		end
 		local function brainrotPassesGlobalFiltersCS(tool)
 			local utility = autoServerHopState.Utility
-			local mutations = utility.CheckServerMutations
-			local traits = utility.CheckServerTraits
-			if type(mutations) == "table" and next(mutations) ~= nil then
-				local mutation = toolMutationCS(tool)
-				if not mutation or mutations[mutation] ~= true then return false end
-			end
-			if type(traits) == "table" and next(traits) ~= nil then
-				local present = toolTraitsCS(tool)
-				local matched = false
-				for trait in pairs(traits) do
-					if present[tostring(trait)] == true then matched = true break end
-				end
-				if not matched then return false end
-			end
-			return true
+			return autoServerHopState.ToolMatchesSpecificRule(tool, {
+				Mutations = utility.CheckServerMutations,
+				Traits = utility.CheckServerTraits,
+				Signatures = utility.CheckServerSignatures,
+				Sizes = utility.CheckServerSizes,
+				Levels = utility.CheckServerLevels,
+			})
 		end
 		local function toolSpecificNameCS(tool)
 			if not tool or not tool:IsA("Tool") then return "" end
@@ -13431,7 +14180,7 @@ if MINIGAME_MODE then
 		local function minigameBoundsCS()
 			local now = os.clock()
 			if minigameBoundsCacheCS
-				and now - minigameBoundsBuiltAtCS < 5
+				and now - minigameBoundsBuiltAtCS < 30
 			then
 				return minigameBoundsCacheCS
 			end
@@ -14350,8 +15099,8 @@ if MINIGAME_MODE then
 	end)()
 end
 if MINIGAME_MODE then
-	local autoChatExecutedAtAC = os.clock()
 	task.spawn(function()
+		local autoChatExecutedAtAC = os.clock()
 		while screenGui.Parent
 			and not (
 				autoServerHopState
@@ -14380,6 +15129,7 @@ if MINIGAME_MODE then
 		local lastIntervalAC
 		local pausedAtAC
 		local function sendPublicChatMessageAC(message)
+			if autoServerHopState.Utility.PauseScript == true then return false end
 			local value = tostring(message or "")
 			if value == "" then return false end
 			if TextChatServiceAC.ChatVersion == Enum.ChatVersion.LegacyChatService then
@@ -14690,12 +15440,12 @@ if MINIGAME_MODE then
 			processedMessageCountATM = 0
 		end
 		while screenGui.Parent do
-			task.wait(0.08)
 			local state = autoServerHopState and autoServerHopState.Utility
 			local enabled = state
 				and state.PauseScript ~= true
 				and state.PauseMinigameFeatures ~= true
 				and state.AutoTradeChat == true
+			task.wait(enabled and 0.08 or 0.30)
 			if not enabled then
 				wasTradeChatEnabledATM = false
 				continue
@@ -15022,12 +15772,16 @@ if MINIGAME_MODE then
 			-- Eternal is a terminal progression reward; never discard it automatically.
 			if getItemRarityADI(item) == "Eternal" then return true end
 			if state.NeverDeleteEnabled == true then
-				local selected = state.NeverDeleteItems
 				local name = neverDeleteNameADI(item)
-				if type(selected) == "table" and name ~= nil and name ~= "" and selected[name] == true
-					and autoServerHopState.ItemMatchesSpecificFilters(item, state.NeverDeleteSpecificMutations, state.NeverDeleteSpecificTraits)
-				then
-					return true
+				local directName = tostring(item.name or (item.sub and item.sub.name) or "")
+				local rules = type(state.NeverDeleteSpecificItems) == "table" and state.NeverDeleteSpecificItems or {}
+				for _, rule in ipairs(rules) do
+					if type(rule) == "table" and rule.Item ~= nil and tostring(rule.Item) ~= "" then
+						local wanted = string.lower(tostring(rule.Item))
+						if (string.lower(tostring(name or "")) == wanted or string.lower(directName) == wanted)
+							and autoServerHopState.ItemMatchesSpecificRule(item, rule)
+						then return true end
+					end
 				end
 			end
 			local mutation = item.mutation or item.Mutation
@@ -15170,6 +15924,7 @@ if MINIGAME_MODE then
 			return exactWorst[math.random(1, #exactWorst)]
 		end
 		local function unlockInventoryEntryIfNeededADI(id)
+			if autoServerHopState.Utility.PauseScript == true then return false end
 			local inventory = inventoryDataADI()
 			local item = inventory and (
 				inventory[id]
@@ -15182,7 +15937,9 @@ if MINIGAME_MODE then
 			if not LockInventoryItemADI then
 				return false
 			end
+			if autoServerHopState.Utility.PauseScript == true then return false end
 			local fired = pcall(function()
+				if autoServerHopState.Utility.PauseScript == true then return end
 				LockInventoryItemADI:FireServer(tostring(id), false)
 			end)
 			if not fired then return false end
@@ -15279,7 +16036,9 @@ if MINIGAME_MODE then
 			if not DeleteInventoryItemADI then
 				return false
 			end
+			if autoServerHopState.Utility.PauseScript == true then return false end
 			local ok, success = pcall(function()
+				if autoServerHopState.Utility.PauseScript == true then return false end
 				return DeleteInventoryItemADI:InvokeServer(tostring(id), 1)
 			end)
 			if not ok or success ~= true then
@@ -15401,7 +16160,9 @@ if MINIGAME_MODE then
 			if not DeleteInventoryItemADI then
 				return false
 			end
+			if autoServerHopState.Utility.PauseScript == true then return false end
 			local ok, success = pcall(function()
+				if autoServerHopState.Utility.PauseScript == true then return false end
 				return DeleteInventoryItemADI:InvokeServer(tostring(id), 1)
 			end)
 			if not ok or success ~= true then
@@ -15429,6 +16190,10 @@ if MINIGAME_MODE then
 		while screenGui.Parent do
 			task.wait(0.25)
 			local state = autoServerHopState and autoServerHopState.Utility
+			if state and state.PauseScript == true then
+				task.wait(0.50)
+				continue
+			end
 			if deleteBusyADI
 				or not state
 				or state.AutoDeleteWorstInventory ~= true
@@ -15582,16 +16347,14 @@ if MINIGAME_MODE then
 			end
 			return out
 		end
-		local function selectedFilterMatches(item, mutations, traits)
-			if type(mutations)=="table" and next(mutations)~=nil then local m=itemMutation(item); if not m or mutations[m]~=true then return false end end
-			if type(traits)=="table" and next(traits)~=nil then local present=itemTraits(item); local hit=false; for t in pairs(traits) do if present[tostring(t)] then hit=true break end end; if not hit then return false end end
-			return true
+		local function selectedFilterMatches(item, mutations, traits, extra)
+			return autoServerHopState.ItemMatchesSpecificFilters(item, mutations, traits, extra)
 		end
 		local function specificRuleMatches(item, rule)
 			if type(item)~="table" or type(rule)~="table" or rule.Item==nil then return false end
 			local wanted=string.lower(tostring(rule.Item)); local n=string.lower(itemName(item) or "")
 			local direct=string.lower(tostring(item.name or (item.sub and item.sub.name) or ""))
-			return (n==wanted or direct==wanted) and selectedFilterMatches(item,rule.Mutations,rule.Traits)
+			return (n==wanted or direct==wanted) and autoServerHopState.ItemMatchesSpecificRule(item, rule)
 		end
 		local function offeredItems(side)
 			local slots=try(Negotiation,{side,"slots"}); local items={}
@@ -15614,32 +16377,25 @@ if MINIGAME_MODE then
 			end
 			return items
 		end
-		local function publicRecordMatchesFilters(record, mutations, traits)
+		local function publicRecordMatchesFilters(record, mutations, traits, extra)
 			local tool = type(record) == "table" and record.Tool or nil
+			local rule = {
+				Mutations = type(mutations) == "table" and mutations or {},
+				Traits = type(traits) == "table" and traits or {},
+			}
+			if type(extra) == "table" then
+				rule.Signatures = extra.Signatures
+				rule.Sizes = extra.Sizes
+				rule.Levels = extra.Levels
+			end
 			if typeof(tool) ~= "Instance" or not tool:IsA("Tool") then
-				return (type(mutations) ~= "table" or next(mutations) == nil)
-					and (type(traits) ~= "table" or next(traits) == nil)
+				return next(rule.Mutations) == nil
+					and next(rule.Traits) == nil
+					and (type(rule.Signatures) ~= "table" or next(rule.Signatures) == nil)
+					and (type(rule.Sizes) ~= "table" or next(rule.Sizes) == nil)
+					and (type(rule.Levels) ~= "table" or next(rule.Levels) == nil)
 			end
-			if type(mutations) == "table" and next(mutations) ~= nil then
-				local mutation = tool:GetAttribute("Mutation") or tool:GetAttribute("BrainrotMutation")
-				if type(mutation) ~= "string" or mutations[mutation] ~= true then return false end
-			end
-			if type(traits) == "table" and next(traits) ~= nil then
-				local present = {}
-				for _, attributeName in ipairs({"Traits", "BrainrotTraits", "Trait"}) do
-					local value = tool:GetAttribute(attributeName)
-					if type(value) == "string" then
-						for trait in string.gmatch(value, "[^,|;]+") do
-							trait = string.gsub(trait, "^%s*(.-)%s*$", "%1")
-							if trait ~= "" then present[trait] = true end
-						end
-					end
-				end
-				local matched = false
-				for trait in pairs(traits) do if present[tostring(trait)] == true then matched = true break end end
-				if not matched then return false end
-			end
-			return true
+			return autoServerHopState.ToolMatchesSpecificRule(tool, rule)
 		end
 		local function publicSpecificRuleMatches(record, rule)
 			if type(record)~="table" or type(rule)~="table" or rule.Item==nil then return false end
@@ -15656,7 +16412,28 @@ if MINIGAME_MODE then
 			for _,name in ipairs(names) do
 				if string.lower(name)==wanted then nameMatched=true break end
 			end
-			return nameMatched and publicRecordMatchesFilters(record,rule.Mutations,rule.Traits)
+			if not nameMatched then return false end
+			if typeof(tool)=="Instance" and tool:IsA("Tool") then
+				return autoServerHopState.ToolMatchesSpecificRule(tool, rule)
+			end
+			-- Public snapshots can briefly know the item name before the Tool instance
+			-- is replicated. Name-only criteria should still work; attribute-specific
+			-- criteria wait for the Tool so they never produce a false positive.
+			local function selectedMap(map) return type(map)=="table" and next(map)~=nil end
+			return not selectedMap(rule.Mutations)
+				and not selectedMap(rule.Traits)
+				and not selectedMap(rule.Signatures)
+				and not selectedMap(rule.SpecificSignatures)
+				and not selectedMap(rule.Sizes)
+				and not selectedMap(rule.SpecificSizes)
+				and not selectedMap(rule.Levels)
+				and not selectedMap(rule.SpecificLevels)
+				and not selectedMap(rule.Rarities)
+				and (rule.Signature==nil or rule.Signature=="" or rule.Signature=="Any")
+				and (rule.Level==nil or tostring(rule.Level)=="")
+				and (rule.Multiplier==nil or tostring(rule.Multiplier)=="")
+				and (rule.Cooldown==nil or tostring(rule.Cooldown)=="")
+				and (rule.Power==nil or tostring(rule.Power)=="")
 		end
 		local function tradeRequestRequirements(u, player)
 			local snapshotter=rawget(_G,"__TUFFHUB_PUBLIC_OWNERSHIP_SNAPSHOT")
@@ -15669,7 +16446,7 @@ if MINIGAME_MODE then
 					enabled+=1
 					local count=0
 					for _,record in ipairs(records) do
-						if record.Rarity==r and publicRecordMatchesFilters(record,u["AutoAcceptTradesRequest"..r.."Mutations"],u["AutoAcceptTradesRequest"..r.."Traits"]) then count+=1 end
+						if record.Rarity==r and publicRecordMatchesFilters(record,u["AutoAcceptTradesRequest"..r.."Mutations"],u["AutoAcceptTradesRequest"..r.."Traits"],{Signatures=u["AutoAcceptTradesRequest"..r.."Signatures"],Sizes=u["AutoAcceptTradesRequest"..r.."Sizes"],Levels=u["AutoAcceptTradesRequest"..r.."Levels"]}) then count+=1 end
 					end
 					if count>=math.clamp(math.floor(tonumber(cfg.Amount) or 1),1,6) then matched+=1 end
 				end
@@ -15692,16 +16469,20 @@ if MINIGAME_MODE then
 			return ok,true
 		end
 		local function syncOwnOffer(u, desired, tokens)
+			if u.PauseScript == true then return false end
 			for slot=1,6 do
+				if u.PauseScript == true then return false end
 				local current=try(Negotiation,{"player1","slots",tostring(slot)}); local currentId=type(current)=="table" and current.id or current
 				local wanted=desired[slot]
 				if tostring(currentId or "")~=tostring(wanted or "") then
+					if u.PauseScript == true then return false end
 					pcall(SetSlot.InvokeServer,SetSlot,tostring(slot),wanted)
 					task.wait(wanted and tradeDelay(u,"AutoAcceptTradesAddBrainrotDelay",0.03) or tradeDelay(u,"AutoAcceptTradesRemoveBrainrotDelay",0.03))
 				end
 			end
 			local currentTokens=tonumber(try(Negotiation,{"player1","currency"})) or 0
 			if currentTokens~=tokens then
+				if u.PauseScript == true then return false end
 				pcall(OfferCurrency.InvokeServer,OfferCurrency,tokens)
 				task.wait(tokens>currentTokens and tradeDelay(u,"AutoAcceptTradesAddTokenDelay",0) or tradeDelay(u,"AutoAcceptTradesRemoveTokenDelay",0))
 			end
@@ -15723,14 +16504,14 @@ if MINIGAME_MODE then
 			local showAll=u.RegularOpeningAutoshowAllTokens==true; local customTokens=u.RegularOpeningCustomTokens==true
 			if not (custom or best or showAll or customTokens) then return false end
 			local inv,sorted,balance=inventoryContext(); local desired,used={},{}
-			local function add(id, mutations, traits)
+			local function add(id, mutations, traits, extra)
 				id=tostring(id or ""); if id=="" or used[id] or #desired>=6 then return false end
 				local item=validOutgoing(inv,id)
-				if not item or not selectedFilterMatches(item,mutations,traits) then return false end
+				if not item or not selectedFilterMatches(item,mutations,traits,extra) then return false end
 				used[id]=true; desired[#desired+1]=id; return true
 			end
 			if custom then
-				for i=1,6 do add(u["RegularOpeningBrainrot"..tostring(i)],u.RegularOpeningSpecificMutations,u.RegularOpeningSpecificTraits) end
+				for i=1,6 do add(u["RegularOpeningBrainrot"..tostring(i)]) end
 			elseif best then
 				for _,id in ipairs(sorted) do add(id); if #desired>=6 then break end end
 			end
@@ -15797,20 +16578,20 @@ if MINIGAME_MODE then
 		local function applyOwnOffer(u)
 			if not regularReactiveOfferConfigured(u) then return false end
 			local inv,sorted,balance=inventoryContext(); local desired,used={},{}; local tokens=0; local forceAllTokens=false
-			local function add(id,mutations,traits)
+			local function add(id,mutations,traits,extra)
 				id=tostring(id or ""); if id=="" or used[id] or #desired>=6 then return false end
-				local item=validOutgoing(inv,id); if not item or not selectedFilterMatches(item,mutations,traits) then return false end
+				local item=validOutgoing(inv,id); if not item or not selectedFilterMatches(item,mutations,traits,extra) then return false end
 				used[id]=true; desired[#desired+1]=id; return true
 			end
-			local function addSelectedInInventoryOrder(selected,maximum,mutations,traits)
+			local function addSelectedInInventoryOrder(selected,maximum,mutations,traits,extra)
 				if type(selected)~="table" then return 0 end
 				local added,seen=0,{}
 				for _,id in ipairs(sorted) do
 					id=tostring(id)
-					if selected[id]==true then seen[id]=true; if add(id,mutations,traits) then added+=1 end; if (maximum and added>=maximum) or #desired>=6 then return added end end
+					if selected[id]==true then seen[id]=true; if add(id,mutations,traits,extra) then added+=1 end; if (maximum and added>=maximum) or #desired>=6 then return added end end
 				end
 				local remaining={}; for id,on in pairs(selected) do if on==true and not seen[tostring(id)] then remaining[#remaining+1]=tostring(id) end end; table.sort(remaining)
-				for _,id in ipairs(remaining) do if add(id,mutations,traits) then added+=1 end; if (maximum and added>=maximum) or #desired>=6 then break end end
+				for _,id in ipairs(remaining) do if add(id,mutations,traits,extra) then added+=1 end; if (maximum and added>=maximum) or #desired>=6 then break end end
 				return added
 			end
 			local function addRarity(target,amount,useFallbackFilters)
@@ -15819,7 +16600,7 @@ if MINIGAME_MODE then
 					if added>=wanted or #desired>=6 then break end; id=tostring(id)
 					if not used[id] then
 						local item=validOutgoing(inv,id)
-						local passes=not useFallbackFilters or selectedFilterMatches(item,u.RegularFallbackAvoidMutationsEnabled==true and u.RegularFallbackAvoidMutations or nil,u.RegularFallbackAvoidTraitsEnabled==true and u.RegularFallbackAvoidTraits or nil)
+						local passes=not useFallbackFilters or selectedFilterMatches(item,u.RegularFallbackAvoidMutations,u.RegularFallbackAvoidTraits)
 						if item and rarity(item)==target and passes and add(id) then added+=1 end
 					end
 				end
@@ -15831,7 +16612,7 @@ if MINIGAME_MODE then
 			local function applyFallback(sourceRarity,missingTargetRarity)
 				if u.RegularFallbackToSpecificItems==true then
 					local selected=type(u["RegularFallbackSpecific"..sourceRarity.."Items"])=="table" and u["RegularFallbackSpecific"..sourceRarity.."Items"] or {}
-					addSelectedInInventoryOrder(selected,nil,u["RegularFallbackSpecific"..sourceRarity.."Mutations"],u["RegularFallbackSpecific"..sourceRarity.."Traits"])
+					addSelectedInInventoryOrder(selected,nil,nil,nil)
 				end
 				if u.RegularFallbackOffers==true then
 					local lower=lowerRarity(missingTargetRarity)
@@ -15846,7 +16627,7 @@ if MINIGAME_MODE then
 			if chatRule then
 				reactiveMatched=true
 				local targets=type(chatRule.Targets)=="table" and chatRule.Targets or {}; local amounts=type(chatRule.Amounts)=="table" and chatRule.Amounts or {}
-				addSelectedInInventoryOrder(type(chatRule.SpecificItems)=="table" and chatRule.SpecificItems or {},nil,chatRule.SpecificMutations,chatRule.SpecificTraits)
+				addSelectedInInventoryOrder(type(chatRule.SpecificItems)=="table" and chatRule.SpecificItems or {},nil,nil,nil,nil)
 				for _,target in ipairs(OUTGOING_BRAINROT_RARITY_OPTIONS) do if targets[target]==true and #desired<6 then addRarity(target,math.clamp(math.floor(tonumber(amounts[target]) or 1),1,6),false) end end
 				tokens=math.max(0,math.floor(tonumber(chatRule.TokenAmount) or 0)); forceAllTokens=chatRule.OfferAllTokens==true
 			else
@@ -15871,7 +16652,7 @@ if MINIGAME_MODE then
 								end
 							end
 							if config.OfferModeSpecific==true and type(config.SpecificTargets)=="table" then
-								local added=addSelectedInInventoryOrder(config.SpecificTargets,nil,config.SpecificMutations,config.SpecificTraits); if added>0 then sourceConfigured=true end
+								local added=addSelectedInInventoryOrder(config.SpecificTargets,nil,nil,nil,nil); if added>0 then sourceConfigured=true end
 							end
 							if sourceConfigured then reactiveMatched=true end
 						end
@@ -15910,7 +16691,7 @@ if MINIGAME_MODE then
 		end
 		local function acceptRequirements(u)
 			local items=offeredItems("player2"); local counts={}; local enabled=0; local matched=0
-			for _,it in ipairs(items) do local r=rarity(it); if r and selectedFilterMatches(it,u["AutoAccept"..r.."Mutations"],u["AutoAccept"..r.."Traits"]) then counts[r]=(counts[r] or 0)+1 end end
+			for _,it in ipairs(items) do local r=rarity(it); if r and selectedFilterMatches(it,u["AutoAccept"..r.."Mutations"],u["AutoAccept"..r.."Traits"],{Signatures=u["AutoAccept"..r.."Signatures"],Sizes=u["AutoAccept"..r.."Sizes"],Levels=u["AutoAccept"..r.."Levels"]}) then counts[r]=(counts[r] or 0)+1 end end
 			for _,r in ipairs(BRAINROT_RARITY_OPTIONS) do local cfg=autoAcceptState[r]; if cfg and cfg.Enabled==true then enabled+=1; if (counts[r] or 0)>=math.clamp(math.floor(tonumber(cfg.Amount) or 1),1,6) then matched+=1 end end end
 			local tokenCfg=autoAcceptState.Tokens; local offeredTokens=math.max(0,math.floor(tonumber(try(Negotiation,{"player2","currency"})) or 0))
 			if tokenCfg and tokenCfg.Enabled==true then enabled+=1; if offeredTokens>=math.clamp(math.floor(tonumber(tokenCfg.Amount) or 1),1,1000000) then matched+=1 end end
@@ -15926,6 +16707,17 @@ if MINIGAME_MODE then
 				rawset(_G,"__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID",nil)
 				lastGuid=nil; openingAppliedGuid=nil; table.clear(opponentItemCache)
 				task.wait(0.15); continue
+			end
+			local regularAutomationActive = u.AutoAcceptTradesAcceptRequests==true
+				or u.AutoAcceptTradesAcceptOffers==true
+				or regularOfferAutomationEnabled(u)
+			if not regularAutomationActive then
+				releaseAutomatedReady()
+				rawset(_G,"__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID",nil)
+				lastGuid=nil; openingAppliedGuid=nil; autoReadyGuid=nil
+				table.clear(opponentItemCache)
+				task.wait(0.35)
+				continue
 			end
 
 			local requests=try(TradeRequests,{})
@@ -15947,6 +16739,7 @@ if MINIGAME_MODE then
 							handledRequests[requestKey]=true
 							local delay=tradeDelay(u,"AutoAcceptTradesInitialDelay",0)
 							if delay>0 then task.wait(delay) end
+							if u.PauseScript == true then break end
 							pcall(Respond.InvokeServer,Respond,key,true)
 							break
 						end
@@ -15994,6 +16787,7 @@ if MINIGAME_MODE then
 				if configured and requirementsOK then
 					local due=(tonumber(try(Negotiation,{"timers","lastUpdate"})) or -1)+3+tradeDelay(u,"AutoAcceptTradesAcceptDelay",0)
 					if not ready and workspace:GetServerTimeNow()>=due then
+						if u.PauseScript == true then task.wait(0.10); continue end
 						local version=tonumber(try(Negotiation,{"timers","version"})) or 0
 						pcall(Ready.FireServer,Ready,true,version)
 						autoReadyGuid=tostring(guid)
@@ -16212,8 +17006,7 @@ if MINIGAME_MODE then
             local selected = utility["FallbackSpecific" .. tostring(sourceRarity) .. "Items"]
             local ids = {}
             local seen = {}
-            local mutations = utility["FallbackSpecific" .. tostring(sourceRarity) .. "Mutations"]
-            local traits = utility["FallbackSpecific" .. tostring(sourceRarity) .. "Traits"]
+            local mutations, traits = nil, nil
             if type(selected) == "table" then
                 for id, enabled in pairs(selected) do
                     if enabled == true
@@ -16341,12 +17134,12 @@ if MINIGAME_MODE then
         end
         local function passesFallbackFiltersAO(item)
             local utility = autoServerHopState.Utility
-            if utility.FallbackAvoidMutationsEnabled == true then
+            if type(utility.FallbackAvoidMutations) == "table" and next(utility.FallbackAvoidMutations) ~= nil then
                 local selected = utility.FallbackAvoidMutations
                 local mutation = itemMutationAO(item)
-                if type(selected) == "table" and mutation and selected[mutation] == true then return false end
+                if mutation and selected[mutation] == true then return false end
             end
-            if utility.FallbackAvoidTraitsEnabled == true then
+            if type(utility.FallbackAvoidTraits) == "table" and next(utility.FallbackAvoidTraits) ~= nil then
                 local selected = utility.FallbackAvoidTraits
                 if type(selected) == "table" then
                     for trait in pairs(itemTraitsAO(item)) do
@@ -16444,6 +17237,9 @@ if MINIGAME_MODE then
             return counts
         end
         local function invokeAO(remote, ...)
+            if autoServerHopState.Utility.PauseScript == true
+                or autoServerHopState.Utility.PauseMinigameFeatures == true
+            then return false end
             if not remote then return false end
             local args = table.pack(...)
             return pcall(function()
@@ -16573,7 +17369,7 @@ if MINIGAME_MODE then
                 pendingSignature = nil
                 pendingContext = nil
                 reactionDueAt = 0
-                task.wait(0.08)
+                task.wait(0.30)
                 continue
             end
             refreshAO()
@@ -16712,7 +17508,6 @@ if MINIGAME_MODE then
                     if config.OfferModeSpecific == true then
                         for id, selected in pairs(config.SpecificTargets) do
                             if selected == true
-                                and autoServerHopState.OwnedTradeableItemMatchesFilters(id, config.SpecificMutations, config.SpecificTraits)
                                 and addSpecificPrimaryAO(id)
                             then
                                 sourceHasConfiguredResponseAO = true
@@ -16793,8 +17588,7 @@ if MINIGAME_MODE then
                 end
                 for id, selected in pairs(chatSpecificAO) do
                     if selected == true
-                        and autoServerHopState.OwnedTradeableItemMatchesFilters(id, tradeChatRuleAO.SpecificMutations, tradeChatRuleAO.SpecificTraits)
-                    then
+                        then
                         addSpecificPrimaryAO(id)
                     end
                 end
@@ -17224,7 +18018,7 @@ if MINIGAME_MODE then
 				end
 			end
 			if anyEnabled then break end
-			task.wait(0.10)
+			task.wait(0.50)
 		end
 		if not screenGui.Parent then return end
 		local RSAAC = ReplicatedStorage
@@ -17343,21 +18137,17 @@ if MINIGAME_MODE then
 		end
 		local function itemPassesAcceptFiltersAAC(item, rarity)
 			local utility = autoServerHopState.Utility
-			local mutations = utility["AutoAccept" .. tostring(rarity) .. "Mutations"]
-			local traits = utility["AutoAccept" .. tostring(rarity) .. "Traits"]
-			if type(mutations) == "table" and next(mutations) ~= nil then
-				local mutation = itemMutationAAC(item)
-				if not mutation or mutations[mutation] ~= true then return false end
-			end
-			if type(traits) == "table" and next(traits) ~= nil then
-				local present = itemTraitsAAC(item)
-				local matched = false
-				for trait in pairs(traits) do
-					if present[tostring(trait)] == true then matched = true break end
-				end
-				if not matched then return false end
-			end
-			return true
+			local prefix = "AutoAccept" .. tostring(rarity)
+			return autoServerHopState.ItemMatchesSpecificFilters(
+				item,
+				utility[prefix .. "Mutations"],
+				utility[prefix .. "Traits"],
+				{
+					Signatures = utility[prefix .. "Signatures"],
+					Sizes = utility[prefix .. "Sizes"],
+					Levels = utility[prefix .. "Levels"],
+				}
+			)
 		end
 		local function itemDisplayNameAAC(item)
 			if type(item) ~= "table" then return "" end
@@ -17386,21 +18176,7 @@ if MINIGAME_MODE then
 			local directName = tostring(item.name or (item.sub and item.sub.name) or "")
 			local displayName = itemDisplayNameAAC(item)
 			if directName ~= wanted and displayName ~= wanted then return false end
-			local mutations = type(rule.Mutations) == "table" and rule.Mutations or {}
-			if next(mutations) ~= nil then
-				local mutation = itemMutationAAC(item)
-				if not mutation or mutations[mutation] ~= true then return false end
-			end
-			local traits = type(rule.Traits) == "table" and rule.Traits or {}
-			if next(traits) ~= nil then
-				local present = itemTraitsAAC(item)
-				local matched = false
-				for trait in pairs(traits) do
-					if present[tostring(trait)] == true then matched = true break end
-				end
-				if not matched then return false end
-			end
-			return true
+			return autoServerHopState.ItemMatchesSpecificRule(item, rule)
 		end
 		local function opponentOfferAAC()
 			local counts = {}
@@ -17521,7 +18297,7 @@ if MINIGAME_MODE then
 				pendingReadySignatureAAC = nil
 				readyDueAtAAC = 0
 				table.clear(opponentItemCacheAAC)
-				task.wait(0.08)
+				task.wait(0.25)
 				continue
 			end
 			refreshAAC()
@@ -17591,6 +18367,9 @@ if MINIGAME_MODE then
 					lastReadySignatureAAC = readySignature
 					pendingReadySignatureAAC = nil
 					task.spawn(function()
+						if autoServerHopState.Utility.PauseScript == true
+							or autoServerHopState.Utility.PauseMinigameFeatures == true
+						then return end
 						local fired = pcall(function()
 							ReadyAAC:FireServer(true, version)
 						end)
@@ -17696,7 +18475,7 @@ if MINIGAME_MODE then
 			if canonical then tablesFolderCacheAE = canonical; return canonical end
 			local now = os.clock()
 			if now < nextTablesScanAE then return nil end
-			nextTablesScanAE = now + 2
+			nextTablesScanAE = now + 5
 			for _, descendant in ipairs(workspace:GetDescendants()) do
 				if descendant.Name == "MinigameTables" and descendant:FindFirstChildWhichIsA("Seat", true) then
 					tablesFolderCacheAE = descendant
@@ -17735,6 +18514,9 @@ if MINIGAME_MODE then
 			end
 		end
 		local function mountAE()
+			if autoServerHopState.Utility.PauseScript == true
+				or autoServerHopState.Utility.PauseMinigameFeatures == true
+			then return false end
 			if not RideActionAE or os.clock() < nextRideAtAE then return false end
 			nextRideAtAE = os.clock() + 0.75
 			local ok, result = pcall(function()
@@ -17799,13 +18581,13 @@ if MINIGAME_MODE then
 					end
 				end
 			end
-			local function validBrainrotIdAE(id, mutations, traits)
+			local function validBrainrotIdAE(id, mutations, traits, extra)
 				if id == nil then return nil, nil end
 				local sid = tostring(id)
 				local item = inventory[id] or inventory[sid]
 					or (tonumber(id) and inventory[tonumber(id)] or nil)
 				if type(item) ~= "table" or itemTypeAE(item) ~= "Brainrot"
-					or not autoServerHopState.ItemMatchesSpecificFilters(item, mutations, traits)
+					or not autoServerHopState.ItemMatchesSpecificFilters(item, mutations, traits, extra)
 				then return nil, nil end
 				return sid, item
 			end
@@ -17815,6 +18597,9 @@ if MINIGAME_MODE then
 				if equipped and equipped:IsA("Tool") then return equipped end
 				local tool = backpack:FindFirstChild(tostring(id))
 				if tool and tool:IsA("Tool") then
+					if autoServerHopState.Utility.PauseScript == true
+						or autoServerHopState.Utility.PauseMinigameFeatures == true
+					then return nil end
 					pcall(humanoid.EquipTool, humanoid, tool)
 					return character:FindFirstChild(tostring(id))
 				end
@@ -17827,7 +18612,7 @@ if MINIGAME_MODE then
 			local holdId, holdItem
 			if modeHold or modeBoth then
 				if useSpecific then
-					holdId, holdItem = validBrainrotIdAE(state.HoldSpecificBrainrotId, state.HoldSpecificBrainrotMutations, state.HoldSpecificBrainrotTraits)
+					holdId, holdItem = validBrainrotIdAE(state.HoldSpecificBrainrotId, state.HoldSpecificBrainrotMutations, state.HoldSpecificBrainrotTraits, {SpecificSignatures=state.HoldSpecificBrainrotSignatures,SpecificSizes=state.HoldSpecificBrainrotSizes,SpecificLevels=state.HoldSpecificBrainrotLevels})
 					if not holdId then state.HoldSpecificBrainrotId = nil end
 				elseif useBest then
 					holdId, holdItem = validBrainrotIdAE(bestId)
@@ -17836,7 +18621,7 @@ if MINIGAME_MODE then
 			local mountId, mountItem, mountName
 			if modeMount or modeBoth then
 				if useSpecific then
-					mountId, mountItem = validBrainrotIdAE(state.MountSpecificBrainrotId, state.MountSpecificBrainrotMutations, state.MountSpecificBrainrotTraits)
+					mountId, mountItem = validBrainrotIdAE(state.MountSpecificBrainrotId, state.MountSpecificBrainrotMutations, state.MountSpecificBrainrotTraits, {SpecificSignatures=state.MountSpecificBrainrotSignatures,SpecificSizes=state.MountSpecificBrainrotSizes,SpecificLevels=state.MountSpecificBrainrotLevels})
 					if not mountId then state.MountSpecificBrainrotId = nil end
 				elseif useBest then
 					mountId, mountItem = validBrainrotIdAE(bestRideableId)
@@ -17903,7 +18688,7 @@ if MINIGAME_MODE then
 			then
 				break
 			end
-			task.wait(0.10)
+			task.wait(0.50)
 		end
 		if not screenGui.Parent then return end
 		local RSAO2 = ReplicatedStorage
@@ -17986,6 +18771,9 @@ if MINIGAME_MODE then
 			return not autoOfferOwnsWagerAO2(expectedGuid)
 		end
 		local function invokeAO2(remote, ...)
+			if autoServerHopState.Utility.PauseScript == true
+				or autoServerHopState.Utility.PauseMinigameFeatures == true
+			then return false, nil end
 			if not remote then return false, nil end
 			local args = table.pack(...)
 			local ok, result = pcall(function()
@@ -18029,7 +18817,7 @@ if MINIGAME_MODE then
 			pcall(function() tradeable = TradeableAO2(item) == true end)
 			return tradeable
 		end
-		local function topBrainrotsAO2(mutations, traits)
+		local function topBrainrotsAO2(mutations, traits, extra)
 			local inventory = tryAO2(PlayerDataAO2, {"Inventory"})
 			if type(inventory) ~= "table" then return {} end
 			local ok, sorted = pcall(SortItemsAO2, inventory)
@@ -18044,7 +18832,7 @@ if MINIGAME_MODE then
 				if type(item) == "table" and not item.locked then
 					local okType, itemType = pcall(GetItemTypeAO2, item)
 					if okType and itemType == "Brainrot" and displayTradeableAO2(item)
-						and autoServerHopState.ItemMatchesSpecificFilters(item, mutations, traits)
+						and autoServerHopState.ItemMatchesSpecificFilters(item, mutations, traits, extra)
 					then
 						result[#result + 1] = tostring(id)
 					end
@@ -18069,7 +18857,6 @@ if MINIGAME_MODE then
 					local okType, itemType = pcall(GetItemTypeAO2, item)
 					valid = okType and itemType == "Brainrot"
 						and displayTradeableAO2(item)
-						and autoServerHopState.ItemMatchesSpecificFilters(item, state.OpeningOfferSpecificMutations, state.OpeningOfferSpecificTraits)
 						and used[tostring(selectedId)] ~= true
 				end
 				if valid then
@@ -18083,7 +18870,7 @@ if MINIGAME_MODE then
 					end
 				end
 			end
-			local best = topBrainrotsAO2(state.OpeningOfferSpecificMutations, state.OpeningOfferSpecificTraits)
+			local best = topBrainrotsAO2()
 			local bestIndex = 1
 			for slotIndex = 1, 6 do
 				if desired[slotIndex] == nil then
@@ -18193,19 +18980,17 @@ if MINIGAME_MODE then
 			return false
 		end
 		while screenGui.Parent do
-			task.wait(0.05)
 			local state = autoServerHopState.Utility
-			if rawget(_G, "__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID") ~= nil then task.wait(0.05) continue end
-			if state.PauseScript == true or state.PauseMinigameFeatures == true then
-				scheduledSignatureAO2 = nil
-				task.wait(0.05)
-				continue
-			end
 			local customItems = state.CustomOpeningOffer == true
 			local customTokens = state.CustomOpeningTokens == true
 			local showItems = state.AutoshowBestBrainrots == true or customItems
 			local showTokens = state.AutoshowAllTokens == true or customTokens
-			if not showItems and not showTokens then
+			local openingEnabled = state.PauseScript ~= true
+				and state.PauseMinigameFeatures ~= true
+				and (showItems or showTokens)
+			task.wait(openingEnabled and 0.05 or 0.30)
+			if rawget(_G, "__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID") ~= nil then continue end
+			if not openingEnabled then
 				appliedSignatureAO2 = nil
 				scheduledSignatureAO2 = nil
 				continue
@@ -18299,7 +19084,7 @@ if MINIGAME_MODE then
 			then
 				break
 			end
-			task.wait(0.10)
+			task.wait(0.50)
 		end
 		if not screenGui.Parent then return end
 		local RSVC = ReplicatedStorage
@@ -18351,6 +19136,9 @@ if MINIGAME_MODE then
 			return tryVC(NegotiationVC, {"guid"})
 		end
 		local function fireVoteVC(gameId, bestOf)
+			if autoServerHopState.Utility.PauseScript == true
+				or autoServerHopState.Utility.PauseMinigameFeatures == true
+			then return false end
 			if not VoteRemoteVC then return false end
 			return pcall(function()
 				VoteRemoteVC:FireServer(gameId, bestOf)
@@ -18522,15 +19310,12 @@ if MINIGAME_MODE then
 			end)
 		end
 		while screenGui.Parent do
-			task.wait(0.05)
 			local state = autoServerHopState.Utility
-			if state.PauseScript == true
-				or state.PauseMinigameFeatures == true
-				or (
-					state.AutoChooseGame ~= true
-					and state.AutoChooseRounds ~= true
-				)
-			then
+			local votingEnabled = state.PauseScript ~= true
+				and state.PauseMinigameFeatures ~= true
+				and (state.AutoChooseGame == true or state.AutoChooseRounds == true)
+			task.wait(votingEnabled and 0.05 or 0.25)
+			if not votingEnabled then
 				if not voteSuspendedVC then
 					votePhaseSeenVC = nil
 					voteRoundSeenVC = nil
@@ -18585,11 +19370,12 @@ if MINIGAME_MODE then
 		while screenGui.Parent do
 			local state = autoServerHopState and autoServerHopState.Utility
 			if state
+				and state.PauseScript ~= true
 				and state.PrintWinsLossesToTerminal == true
 			then
 				break
 			end
-			task.wait(0.10)
+			task.wait(0.50)
 		end
 		if not screenGui.Parent then return end
 		local RSLG = ReplicatedStorage
@@ -18734,6 +19520,10 @@ if MINIGAME_MODE then
 		end
 		while screenGui.Parent do
 			task.wait(0.10)
+			if autoServerHopState.Utility.PauseScript == true then
+				task.wait(0.40)
+				continue
+			end
 			refreshLG()
 			bindObserverLG()
 			cacheContextLG()
@@ -18763,7 +19553,7 @@ if MINIGAME_MODE then
 		while screenGui.Parent
 			and not (autoServerHopState.Utility.AutoBooth == true)
 		do
-			task.wait(0.10)
+			task.wait(0.50)
 		end
 		if not screenGui.Parent then return end
 		local PlayersAB = Players
@@ -18918,6 +19708,7 @@ if MINIGAME_MODE then
 			return false
 		end
 		local function invokeMutationAB(remote, rejectFalse, ...)
+			if autoServerHopState.Utility.PauseScript == true then return false, nil end
 			if not remote or not waitMutationSlotAB() then return false, nil end
 			if not boothMutationAllowedAB()
 				or autoServerHopState.RuntimeBoothMutationBusy == true
@@ -19139,9 +19930,7 @@ if MINIGAME_MODE then
 			if specificOnly or hasAvoidNames then
 				name = brainrotNameAB(item)
 				if not name then return false end
-				if hasAvoidNames and avoidNames[name] == true
-					and autoServerHopState.ItemMatchesSpecificFilters(item, utility.AutoBoothAvoidSpecificMutations, utility.AutoBoothAvoidSpecificTraits)
-				then
+				if hasAvoidNames and avoidNames[name] == true then
 					return false
 				end
 				if specificOnly then
@@ -19166,9 +19955,12 @@ if MINIGAME_MODE then
 			end
 			return true
 		end
-		local function itemMatchesListingSpecAB(item, spec)
+		local function itemMatchesListingSpecAB(item, spec, itemId)
 			if type(item) ~= "table" or type(spec) ~= "table" then
 				return false
+			end
+			if spec.Mode == "SpecificBrainrot" then
+				return itemId ~= nil and tostring(itemId) == tostring(spec.ItemId)
 			end
 			if spec.Mode == "Brainrot" then
 				if brainrotNameAB(item) ~= spec.Brainrot then return false end
@@ -19222,7 +20014,7 @@ if MINIGAME_MODE then
 				local key = tostring(id)
 				if seen[key] then return end
 				seen[key] = true
-				if itemMatchesListingSpecAB(item, spec) then count += 1 end
+				if itemMatchesListingSpecAB(item, spec, id) then count += 1 end
 			end
 			for id, item in pairs(inventoryAB() or {}) do addItem(id, item) end
 			for offerId, item in pairs(state and state.items or {}) do
@@ -19278,9 +20070,11 @@ if MINIGAME_MODE then
 				local prefix = "AutoBoothListing" .. tostring(index)
 				local enabled = utility[prefix .. "Enabled"] == true
 				local listByBrainrot = utility[prefix .. "ListByBrainrot"] == true
+				local listSpecificBrainrot = utility[prefix .. "ListSpecificBrainrot"] == true
 				local listByRarity = utility[prefix .. "ListByRarity"] == true
 				local rarity = utility[prefix .. "Rarity"]
 				local brainrot = utility[prefix .. "Brainrot"]
+				local specificBrainrotId = utility[prefix .. "SpecificBrainrotId"]
 				local threshold = math.clamp(
 					math.floor(tonumber(
 						utility[prefix .. "InventoryThreshold"]
@@ -19296,13 +20090,17 @@ if MINIGAME_MODE then
 					100
 				)
 				local spec
-				if listByBrainrot and type(brainrot) == "string" and brainrot ~= "" then
+				if listSpecificBrainrot and specificBrainrotId ~= nil and tostring(specificBrainrotId) ~= "" then
+					spec = {
+						Index = index,
+						Mode = "SpecificBrainrot",
+						ItemId = tostring(specificBrainrotId),
+					}
+				elseif listByBrainrot and type(brainrot) == "string" and brainrot ~= "" then
 					spec = {
 						Index = index,
 						Mode = "Brainrot",
 						Brainrot = brainrot,
-						Mutations = type(utility[prefix .. "BrainrotMutations"]) == "table" and utility[prefix .. "BrainrotMutations"] or {},
-						Traits = type(utility[prefix .. "BrainrotTraits"]) == "table" and utility[prefix .. "BrainrotTraits"] or {},
 					}
 				elseif listByRarity and type(rarity) == "string" and rarity ~= "" then
 					spec = {
@@ -19311,13 +20109,14 @@ if MINIGAME_MODE then
 						Rarity = rarity,
 					}
 				end
-				local ownedCount = spec
-					and (
-						spec.Mode == "Brainrot"
-							and ownedSpecCountAB(state, spec)
-							or (rarityCounts[spec.Rarity] or 0)
-					)
-					or 0
+				local ownedCount = 0
+				if spec then
+					if spec.Mode == "Brainrot" or spec.Mode == "SpecificBrainrot" then
+						ownedCount = ownedSpecCountAB(state, spec)
+					elseif spec.Mode == "Rarity" then
+						ownedCount = rarityCounts[spec.Rarity] or 0
+					end
+				end
 				if enabled
 					and spec
 					and inventoryCount >= threshold
@@ -19356,7 +20155,7 @@ if MINIGAME_MODE then
 				for specIndex, spec in ipairs(specs) do
 					if not matchedSpecs[specIndex]
 						and protected[protectedId] ~= true
-						and itemMatchesListingSpecAB(item, spec)
+						and itemMatchesListingSpecAB(item, spec, id)
 						and price == spec.Price
 						and itemPassesGlobalFiltersAB(item)
 					then
@@ -19404,7 +20203,7 @@ if MINIGAME_MODE then
 					and protected[sid] ~= true
 					and type(item) == "table"
 					and item.locked ~= true
-					and itemMatchesListingSpecAB(item, spec)
+					and itemMatchesListingSpecAB(item, spec, id)
 					and itemPassesGlobalFiltersAB(item)
 					and not boothContainsItemAB(state, id)
 				then
@@ -19438,6 +20237,7 @@ if MINIGAME_MODE then
 				if delaySeconds > 0 then task.wait(delaySeconds) end
 				local utility = autoServerHopState.Utility
 				if screenGui.Parent
+					and utility.PauseScript ~= true
 					and utility.AutoBooth == true
 					and (guardKey == nil or utility[guardKey] == true)
 				then
@@ -19607,7 +20407,7 @@ while screenGui.Parent do
         end
     end
     if enabled then break end
-    task.wait(0.10)
+    task.wait(0.50)
 end
 if not screenGui.Parent then return end
 local CollectionService = game:GetService("CollectionService")
@@ -19834,6 +20634,13 @@ local function fireAction(action, ...)
                 end
             end
         end
+    end
+    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    if type(utility) ~= "table"
+        or utility.PauseScript == true
+        or utility.PauseMinigameFeatures == true
+    then
+        return false
     end
     return pcall(function()
         MinigameGameAction:FireServer(action, table.unpack(args, 1, args.n))
@@ -27689,6 +28496,11 @@ local function performDisconnectAndTeleport(destinationServerId, reason)
     end
     local saver = rawget(_G, "__TUFFHUB_SAVE_SETTINGS_NOW")
     if type(saver) == "function" then pcall(saver, true) end
+    if utility.PauseScript == true or utility.PauseMinigameFeatures == true then
+        controller.pendingLossReason = nil
+        controller.lastDepartureAttemptAt = 0
+        return false
+    end
     local kickAccepted = pcall(function()
         LocalPlayer:Kick("Lost Duel")
     end)
@@ -27701,6 +28513,10 @@ local function performDisconnectAndTeleport(destinationServerId, reason)
         rememberAutoleaveDestination(game.JobId)
         rememberAutoleaveDestination(destinationServerId)
         controller.teleportAttemptedAt = os.clock()
+        if utility.PauseScript == true or utility.PauseMinigameFeatures == true then
+            controller.lastDepartureAttemptAt = 0
+            return kickAccepted
+        end
         teleportAccepted = pcall(function()
             TeleportService:TeleportToPlaceInstance(
                 game.PlaceId,
