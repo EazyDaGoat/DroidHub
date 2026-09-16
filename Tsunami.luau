@@ -217,7 +217,7 @@ local MUTED_TEXT_COLOR = RGB(
 	)
 local SEARCH_TEXT_COLOR = RGB(226, 229, 235)
 local SEARCH_PLACEHOLDER_COLOR = RGB(119, 123, 132)
-local SEARCH_ICON_SIZE = px(15)
+local SEARCH_ICON_SIZE = px(isPhonePanelLayout() and 13.5 or 15)
 local MENU_TOP_GAP = px(10)
 local MENU_ITEM_HEIGHT = px(36)
 local MENU_ITEM_GAP = px(5)
@@ -231,7 +231,7 @@ local MENU_TEXT_SELECTED = RGB(234, 236, 241)
 local MENU_TEXT_HOVER = RGB(205, 208, 215)
 local MENU_ACTIVE_LINE_WIDTH = px(3)
 local MENU_ACTIVE_LINE_HEIGHT = px(22)
-local MENU_ICON_SIZE = px(20)
+local MENU_ICON_SIZE = px(isPhonePanelLayout() and 18 or 20)
 local MENU_ICON_X = px(10)
 local MENU_TEXT_X = px(39)
 local CONTENT_SIDE_PADDING = px(10)
@@ -703,7 +703,6 @@ if MINIGAME_MODE then
 		CheckServerLevels = {},
 		CheckServerMustOwnAll = false,
 		CheckServerMustOwnOne = true,
-		JoinPlayerName = "",
 		PauseScript = false,
 		UndoAllSettings = false,
 		GuiMinimized = false,
@@ -2356,7 +2355,6 @@ if MINIGAME_MODE then
 			"CheckServerLevels",
 			"CheckServerMustOwnAll",
 			"CheckServerMustOwnOne",
-			"JoinPlayerName",
 			"PauseScript",
 			"GuiMinimized",
 			"GuiStartMinimized",
@@ -3730,6 +3728,21 @@ screenGui.ResetOnSpawn = false
 screenGui.DisplayOrder = 1000000
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = guiParent
+autoServerHopState.RuntimePersistentConnections = {}
+autoServerHopState.ConnectPersistent = function(signal, callback)
+	local connection = signal:Connect(callback)
+	local connections = autoServerHopState.RuntimePersistentConnections
+	connections[#connections + 1] = connection
+	return connection
+end
+screenGui.Destroying:Connect(function()
+	local connections = autoServerHopState.RuntimePersistentConnections
+	for index = #connections, 1, -1 do
+		local connection = connections[index]
+		connections[index] = nil
+		if connection then pcall(function() connection:Disconnect() end) end
+	end
+end)
 -- Standard action-button feedback only. Tabs, toggles, dropdowns, search,
 -- window controls, and other navigation keep their existing visuals. Buttons
 -- such as Reset, Join, Clear, Add, and Remove use a conventional neutral-grey
@@ -3799,17 +3812,14 @@ do
 			refresh()
 		end)
 	end
-	for _, descendant in ipairs(screenGui:GetDescendants()) do
-		bindClickableFeedback(descendant)
-	end
 	screenGui.DescendantAdded:Connect(function(descendant)
 		if descendant:IsA("TextButton") or descendant:IsA("ImageButton") then
 			task.defer(bindClickableFeedback, descendant)
 		end
 	end)
 end
--- Settings are deduplicated by the periodic safety flush and explicit commit actions;
--- avoid serializing/writing the full profile on every mouse or touch release.
+-- Settings are file-backed only through explicit config actions; no background
+-- autosave work runs during mouse/touch interaction.
 if MINIGAME_MODE then
 	do
 		local oldUniversalKeys = {
@@ -3982,23 +3992,29 @@ local function applyDeviceWindowSize(
 	end
 end
 applyDeviceWindowSize(true)
-camera:GetPropertyChangedSignal(
-	"ViewportSize"
-):Connect(function()
-	applyDeviceWindowSize(
-		true
+autoServerHopState.BindViewportCamera = function(targetCamera)
+	local existing = autoServerHopState.RuntimeCameraViewportConnection
+	if existing then
+		pcall(function() existing:Disconnect() end)
+		autoServerHopState.RuntimeCameraViewportConnection = nil
+	end
+	if not targetCamera then return end
+	autoServerHopState.RuntimeCameraViewportConnection = autoServerHopState.ConnectPersistent(
+		targetCamera:GetPropertyChangedSignal("ViewportSize"),
+		function()
+			if workspace.CurrentCamera == targetCamera then
+				applyDeviceWindowSize(true)
+			end
+		end
 	)
-end)
-workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+end
+autoServerHopState.BindViewportCamera(camera)
+autoServerHopState.ConnectPersistent(workspace:GetPropertyChangedSignal("CurrentCamera"), function()
 	local newCamera = workspace.CurrentCamera
 	if newCamera then
 		camera = newCamera
 		applyDeviceWindowSize(true)
-		newCamera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
-			if workspace.CurrentCamera == newCamera then
-				applyDeviceWindowSize(true)
-			end
-		end)
+		autoServerHopState.BindViewportCamera(newCamera)
 	end
 end)
 local function ensureCorner(
@@ -4775,6 +4791,16 @@ local function formatPanelTitle(title, mode)
 	end
 	return table.concat(words, wordGap)
 end
+autoServerHopState.FormatProfileTracking = function(value)
+	value = string.upper(tostring(value or ""))
+	local tracked = table.create(math.max(0, (#value * 2) - 1))
+	local gap = utf8.char(#value <= 12 and 0x2009 or 0x200A)
+	for index = 1, #value do
+		if index > 1 then tracked[#tracked + 1] = gap end
+		tracked[#tracked + 1] = string.sub(value, index, index)
+	end
+	return table.concat(tracked)
+end
 local selectedTabTitle = New("TextLabel")
 selectedTabTitle.Name = "SelectedTabTitle"
 selectedTabTitle.BackgroundTransparency = 1
@@ -4853,11 +4879,14 @@ local function syncPixelSnappedGeometry()
 	do
 		local areaLogoScale = sidebarLogoHolder:FindFirstChild("AreaLogoScale")
 		if areaLogoScale then
+			local logoFill = isPhonePanelLayout()
+				and (sidebarCollapsed and 0.88 or 0.72)
+				or 0.60
 			areaLogoScale.Scale = math.max(
 				0.01,
 				math.min(
-					(logoAreaWidth * 0.60) / logoBaseWidth,
-					(logoAreaHeight * 0.60) / logoBaseHeight
+					(logoAreaWidth * logoFill) / logoBaseWidth,
+					(logoAreaHeight * logoFill) / logoBaseHeight
 				)
 			)
 		end
@@ -5042,10 +5071,10 @@ local function syncPixelSnappedGeometry()
 		welcome.Name = "WelcomeLabel"
 		welcome.BackgroundTransparency = 1
 		welcome.BorderSizePixel = 0
-		welcome.Text = "WELCOME,"
+		welcome.Text = autoServerHopState.FormatProfileTracking("WELCOME")
 		welcome.TextColor3 = MUTED_TEXT_COLOR
 		welcome.FontFace = MENU_FONT_REGULAR_FACE
-		setResponsiveTextSize(welcome, 12)
+		setResponsiveTextSize(welcome, 11)
 		welcome.TextScaled = false
 		welcome.TextWrapped = false
 		welcome.TextTruncate = Enum.TextTruncate.None
@@ -5059,15 +5088,15 @@ local function syncPixelSnappedGeometry()
 		playerName.Name = "PlayerName"
 		playerName.BackgroundTransparency = 1
 		playerName.BorderSizePixel = 0
-		playerName.Text = string.upper(tostring(startupPlayer.Name or "PLAYER"))
+		playerName.Text = autoServerHopState.FormatProfileTracking(startupPlayer.Name or "PLAYER")
 		playerName.TextColor3 = MENU_TEXT_SELECTED
 		playerName.FontFace = MENU_FONT_SEMIBOLD_FACE
-		setResponsiveTextSize(playerName, 16)
+		setResponsiveTextSize(playerName, 15)
 		playerName.TextScaled = false
 		playerName.TextWrapped = false
 		playerName.TextTruncate = Enum.TextTruncate.None
 		playerName.TextXAlignment = Enum.TextXAlignment.Left
-		playerName.TextYAlignment = Enum.TextYAlignment.Top
+		playerName.TextYAlignment = Enum.TextYAlignment.Bottom
 		playerName.ZIndex = 45004
 		playerName.Parent = profile
 		quick.PlayerName = playerName
@@ -5133,10 +5162,18 @@ local function syncPixelSnappedGeometry()
 			quick.PlayerName.Visible = true
 			local textLeft = avatarSize + px(8)
 			local textWidth = math.max(1, profileWidth - textLeft)
-			quick.Welcome.Position = U2O(textLeft, px(1))
-			quick.Welcome.Size = U2O(textWidth, roundPixel(footerHeight * 0.36))
-			quick.PlayerName.Position = U2O(textLeft, roundPixel(footerHeight * 0.53))
-			quick.PlayerName.Size = U2O(textWidth, roundPixel(footerHeight * 0.43))
+			local avatarBottom = roundPixel((footerHeight * 0.5) + (avatarSize * 0.5))
+			local playerNameHeight = math.max(px(17), roundPixel(footerHeight * 0.42))
+			local playerNameTop = avatarBottom - playerNameHeight
+			quick.PlayerName.AnchorPoint = V2(0, 1)
+			quick.PlayerName.Position = U2O(textLeft, avatarBottom)
+			quick.PlayerName.Size = U2O(textWidth, playerNameHeight)
+			quick.Welcome.AnchorPoint = V2(0, 1)
+			quick.Welcome.Position = U2O(textLeft, playerNameTop + px(2))
+			quick.Welcome.Size = U2O(
+				textWidth,
+				math.max(px(12), roundPixel(footerHeight * 0.30))
+			)
 			footerDividerY = roundPixel(panelHeight - SIDEBAR_PADDING - footerHeight - MENU_TOP_GAP)
 		end
 		quick.Divider.Position = U2O(sidebarVisualCenterX, footerDividerY)
@@ -5189,21 +5226,21 @@ local function syncPixelSnappedGeometry()
 		(MENU_TEXT_X - MENU_ICON_X - MENU_ICON_SIZE) / tabReferenceWidth
 	)
 	local tabIconPixelSize = math.max(
-		15,
+		isPhonePanelLayout() and 13 or 15,
 		math.min(
 			roundPixel(tabHighlightWidth * tabIconWidthScale),
 			roundPixel(MENU_ITEM_HEIGHT * tabIconHeightScale)
 		)
 	)
-	local minimumExpandedIconPixels = logicalPixelsForRenderedMinimum(17)
-	local minimumCollapsedIconPixels = logicalPixelsForRenderedMinimum(19)
+	local minimumExpandedIconPixels = logicalPixelsForRenderedMinimum(isPhonePanelLayout() and 15 or 17)
+	local minimumCollapsedIconPixels = logicalPixelsForRenderedMinimum(isPhonePanelLayout() and 17 or 19)
 	tabIconPixelSize = math.max(
 		tabIconPixelSize,
 		minimumExpandedIconPixels
 	)
 	local collapsedIconPixelSize = math.max(
-			18,
-			responsiveTextSize(18),
+			isPhonePanelLayout() and 16 or 18,
+			responsiveTextSize(isPhonePanelLayout() and 16 or 18),
 			minimumCollapsedIconPixels
 		)
 	local tabIconTextGap = math.max(
@@ -6178,6 +6215,11 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		end
 		local function rowsAreGrouped(a, b)
 			if not a or not b then return false end
+			if (a.IsActionButton or a.UtilityToggleKey ~= nil)
+				and (b.IsActionButton or b.UtilityToggleKey ~= nil)
+			then
+				return true
+			end
 			if a.SeparatorGroup ~= nil and a.SeparatorGroup == b.SeparatorGroup then return true end
 			-- A controlling toggle and the controls it directly reveals are one
 			-- feature. Keep those rows visually connected even when no panel-specific
@@ -6212,7 +6254,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					local currentBottom = currentTop + rowData.Row.Size.Y.Offset
 					local nextTop = nextRow.Row.Position.Y.Offset
 					local dividerCenter = ((currentBottom + nextTop) * 0.5) - currentTop
-					rowData.Divider.Position = U2(0, 0, 0, dividerCenter)
+					rowData.Divider.Position = U2(0.5, 0, 0, dividerCenter)
 				end
 			end
 		end
@@ -6543,15 +6585,13 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		featureRow.Parent = body
 		local featureDivider = New("Frame")
 		featureDivider.Name = "FeatureDivider"
-		featureDivider.AnchorPoint = V2(0, 0.5)
+		featureDivider.AnchorPoint = V2(0.5, 0.5)
 		-- relayoutRows() positions this from the actual bounds of both neighboring
-		-- features, so dynamic heights and wrapped labels cannot offset the divider.
-		featureDivider.Position = U2(0, 0, 1, featureRowGap * 0.5)
-		featureDivider.Size = U2(1, 0, 0, LINE_THICKNESS)
-		-- Feature separators are intentionally subtler than structural borders.
-		-- They should read as spacing guidance, not as another panel outline.
+		-- features. Keep every feature separator inset and visually identical.
+		featureDivider.Position = U2(0.5, 0, 1, featureRowGap * 0.5)
+		featureDivider.Size = U2(0.94, 0, 0, LINE_THICKNESS)
 		featureDivider.BackgroundColor3 = LINE_COLOR
-		featureDivider.BackgroundTransparency = 0.42
+		featureDivider.BackgroundTransparency = 0.52
 		featureDivider.BorderSizePixel = 0
 		featureDivider.Active = false
 		featureDivider.Visible = false
@@ -6800,110 +6840,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					if type(reset) == "function" then pcall(reset) end
 					local refresh = rawget(_G, "__TUFFHUB_REFRESH_ALL_SETTINGS_UI")
 					if type(refresh) == "function" then pcall(refresh) end
-				elseif definition.Action == "JoinPlayer" then
-					task.spawn(function()
-						local rawName = tostring(autoServerHopState.Utility.JoinPlayerName or "")
-						local playerName = string.match(rawName, "^%s*(.-)%s*$") or ""
-						if playerName == "" then return end
-						local localPlayer = Players.LocalPlayer
-						if not localPlayer then return end
-
-						local targetUserId
-						pcall(function()
-							targetUserId = Players:GetUserIdFromNameAsync(playerName)
-						end)
-
-						local function requestFunction()
-							local environments = {_G}
-							pcall(function() if getgenv then environments[#environments + 1] = getgenv() end end)
-							pcall(function() if getrenv then environments[#environments + 1] = getrenv() end end)
-							pcall(function() if getfenv then environments[#environments + 1] = getfenv(0) end end)
-							local function readEnvironment(environment, key)
-								local ok, value = pcall(function() return environment[key] end)
-								return ok and value or nil
-							end
-							for _, environment in ipairs(environments) do
-								if type(environment) == "table" then
-									for _, name in ipairs({"request", "http_request", "httprequest", "krnl_request"}) do
-										local candidate = readEnvironment(environment, name)
-										if type(candidate) == "function" then return candidate end
-									end
-									for _, namespaceName in ipairs({"syn", "http", "fluxus"}) do
-										local namespace = readEnvironment(environment, namespaceName)
-										local candidate = type(namespace) == "table" and readEnvironment(namespace, "request") or nil
-										if type(candidate) == "function" then return candidate end
-									end
-								end
-							end
-						end
-
-						local requestFn = requestFunction()
-						local function postJson(url, body)
-							if type(requestFn) ~= "function" then return nil end
-							local ok, response = pcall(requestFn, {
-								Url = url,
-								Method = "POST",
-								Headers = {
-									["Content-Type"] = "application/json",
-									["Accept"] = "application/json",
-								},
-								Body = HttpService:JSONEncode(body),
-							})
-							if not ok or response == nil then return nil end
-							local encoded = type(response) == "string" and response
-								or (type(response) == "table" and (response.Body or response.body))
-							if type(encoded) ~= "string" or encoded == "" then return nil end
-							local decoded
-							local decodeOk = pcall(function() decoded = HttpService:JSONDecode(encoded) end)
-							return decodeOk and type(decoded) == "table" and decoded or nil
-						end
-
-						if not targetUserId and requestFn then
-							local lookup = postJson(
-								"https://users.roblox.com/v1/usernames/users",
-								{usernames = {playerName}, excludeBannedUsers = false}
-							)
-							local first = lookup and type(lookup.data) == "table" and lookup.data[1] or nil
-							targetUserId = first and tonumber(first.id) or nil
-						end
-						targetUserId = tonumber(targetUserId)
-						if not targetUserId or targetUserId <= 0 or targetUserId == localPlayer.UserId then return end
-						if Players:GetPlayerByUserId(targetUserId) then return end
-
-						local targetPlaceId, targetInstanceId
-						if requestFn then
-							local presence = postJson(
-								"https://presence.roblox.com/v1/presence/users",
-								{userIds = {targetUserId}}
-							)
-							local entry = presence
-								and type(presence.userPresences) == "table"
-								and presence.userPresences[1]
-								or nil
-							if type(entry) == "table" and tonumber(entry.userPresenceType) == 2 then
-								targetPlaceId = tonumber(entry.placeId or entry.rootPlaceId)
-								targetInstanceId = tostring(entry.gameId or "")
-							end
-						end
-
-						if not targetPlaceId or not targetInstanceId or targetInstanceId == "" then
-							local ok, currentInstance, _, placeId, instanceId = pcall(
-								TeleportService.GetPlayerPlaceInstanceAsync,
-								TeleportService,
-								targetUserId
-							)
-							if ok and currentInstance == true then return end
-							if ok then
-								targetPlaceId = tonumber(placeId)
-								targetInstanceId = tostring(instanceId or "")
-							end
-						end
-						if not targetPlaceId or not targetInstanceId or targetInstanceId == "" then return end
-						if targetPlaceId == game.PlaceId and targetInstanceId == game.JobId then return end
-						pcall(function()
-							TeleportService:TeleportToPlaceInstance(targetPlaceId, targetInstanceId, localPlayer)
-						end)
-					end)
 				elseif definition.Action == "ManualServerHop" then
 					autoServerHopState.RuntimeManualServerHopRequested = true
 					autoServerHopState.RuntimeServerHopPending = true
@@ -7139,8 +7075,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				end
 				return dynamicHeightValue
 			end
-			local function saveCustomReplies()
-			end
 			local function makeReplyInput(y, placeholder, initialValue, onCommit)
 				local inputBox = New("TextBox")
 				inputBox.Position = U2O(0, y)
@@ -7179,7 +7113,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				end)
 				inputBox.FocusLost:Connect(function()
 					onCommit(inputBox.Text)
-					saveCustomReplies()
 				end)
 			end
 			local rebuildCustomReplies
@@ -7238,7 +7171,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					clearButton.MouseButton1Click:Connect(function()
 						entry.LookFor = ""
 						entry.Reply = ""
-						saveCustomReplies()
 						task.defer(rebuildCustomReplies)
 					end)
 					y += px(31)
@@ -7261,7 +7193,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 						rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(removeButton)
 						removeButton.MouseButton1Click:Connect(function()
 							table.remove(entries, entryIndex)
-							saveCustomReplies()
 							task.defer(rebuildCustomReplies)
 						end)
 						y += px(31)
@@ -7301,7 +7232,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(addButton)
 				addButton.MouseButton1Click:Connect(function()
 					entries[#entries + 1] = {LookFor = "", Reply = ""}
-					saveCustomReplies()
 					task.defer(rebuildCustomReplies)
 				end)
 				dynamicHeightValue = dynamicSecondaryHeight()
@@ -7338,8 +7268,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			local managerHeight = px(1)
 			dynamicSecondaryHeight = function() return managerHeight end
 			local rebuildAutoOfferSource
-			local function saveAutoOfferSource()
-			end
 			local function selectedSpecificCount()
 				local count = 0
 				for _, selected in pairs(stateEntry.SpecificTargets) do if selected == true then count += 1 end end
@@ -7396,7 +7324,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				ensureCorner(knob, (toggleHeight - knobInset * 2) * 0.5)
 				track.MouseButton1Click:Connect(function()
 					setter(not getter())
-					saveAutoOfferSource()
 					task.defer(rebuildAutoOfferSource)
 				end)
 			end
@@ -7438,52 +7365,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				ensureCorner(button, px(6))
 				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(button)
 				return button
-			end
-			local function makeNumberRow(labelText, y, currentValue, commit)
-				local row = New("Frame")
-				row.Position = U2O(0, y)
-				row.Size = U2(1, 0, 0, featureRowHeight)
-				row.BackgroundTransparency = 1
-				row.ZIndex = 45014
-				row.Parent = secondaryContainer
-				local label = New("TextLabel")
-				label.AnchorPoint = V2(0, 0.5)
-				label.Position = U2(0, 0, 0.5, 0)
-				label.Size = U2(1, -(dropdownWidth + componentLabelGap), 1, 0)
-				label.BackgroundTransparency = 1
-				label.Text = capitalizeUiWords(labelText)
-				label.TextColor3 = MENU_TEXT_SELECTED
-				label.FontFace = MENU_FONT_REGULAR_FACE
-				setResponsiveTextSize(label, 14)
-				label.TextXAlignment = Enum.TextXAlignment.Left
-				label.TextTruncate = Enum.TextTruncate.None
-				label.Parent = row
-				local box = New("TextBox")
-				box.AnchorPoint = V2(1, 0.5)
-				box.Position = U2(1, 0, 0.5, 0)
-				box.Size = U2O(dropdownWidth, px(24))
-				box.BackgroundColor3 = FEATURE_OFF_COLOR
-				box.BorderSizePixel = 0
-				box.ClearTextOnFocus = false
-				box.Text = currentValue ~= nil and tostring(currentValue) or ""
-				box.PlaceholderText = "Any"
-				box.PlaceholderColor3 = MUTED_TEXT_COLOR
-				box.TextColor3 = MENU_TEXT_SELECTED
-				box.FontFace = MENU_FONT_REGULAR_FACE
-				setResponsiveTextSize(box, 13)
-				box.TextTruncate = Enum.TextTruncate.None
-				box.Parent = row
-				ensureCorner(box, px(6))
-				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(box)
-				box.FocusLost:Connect(function()
-					local value = tonumber(box.Text)
-					if value ~= nil then value = math.max(0, value) end
-					commit(value)
-					box.Text = value ~= nil and tostring(value) or ""
-					saveAutoOfferSource()
-					task.defer(rebuildAutoOfferSource)
-				end)
-				return box
 			end
 			local function makeSlider(labelText, y, initial, minValue, maxValue, commit)
 				local frame = New("Frame")
@@ -7538,7 +7419,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				knob.BorderSizePixel = 0
 				knob.Parent = track
 				ensureCorner(knob, px(6))
-				local function setValue(v, save)
+				local function setValue(v)
 					v = math.clamp(math.floor(tonumber(v) or minValue), minValue, maxValue)
 					local adjusted = commit(v)
 					if adjusted ~= nil then v = math.clamp(math.floor(tonumber(adjusted) or v), minValue, maxValue) end
@@ -7546,15 +7427,14 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					local alpha = maxValue == minValue and 0 or ((v - minValue) / (maxValue - minValue))
 					fill.Size = U2S(alpha, 1)
 					knob.Position = U2(alpha, 0, 0.5, 0)
-					if save then saveAutoOfferSource() end
 				end
-				setValue(initial, false)
-				value.FocusLost:Connect(function() setValue(value.Text, true) end)
+				setValue(initial)
+				value.FocusLost:Connect(function() setValue(value.Text) end)
 				track.InputBegan:Connect(function(input)
 					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 						beginSliderDrag(input, function(x)
 							local alpha = math.clamp((x - track.AbsolutePosition.X) / math.max(1, track.AbsoluteSize.X), 0, 1)
-							setValue(minValue + math.floor(alpha * (maxValue - minValue) + 0.5), true)
+							setValue(minValue + math.floor(alpha * (maxValue - minValue) + 0.5))
 						end)
 					end
 				end)
@@ -7571,7 +7451,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					rarityButton.MouseButton1Click:Connect(function()
 						openManagedMultiDropdown(rarityButton, OUTGOING_BRAINROT_RARITY_OPTIONS, stateEntry.Targets, tostring, "Select", function(option, selected)
 							if selected then stateEntry.Amounts[option] = math.clamp(math.floor(tonumber(stateEntry.Amounts[option]) or 1), 1, 6) else stateEntry.Amounts[option] = nil end
-							saveAutoOfferSource()
 						end, function(option)
 							return selectedRarityUnits(nil) + selectedSpecificCount() < 6
 						end, rebuildAutoOfferSource)
@@ -7613,7 +7492,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 							stateEntry.SpecificTargets,
 							autoServerHopState.OwnedTradeableItemOptionLabel,
 							"Select",
-							function() saveAutoOfferSource() end,
+							nil,
 							function() return selectedRarityUnits(nil) + selectedSpecificCount() < 6 end,
 							rebuildAutoOfferSource
 						)
@@ -7673,8 +7552,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				end
 				return entry
 			end
-			local function saveTradeChatOffers()
-			end
 			rebuildTradeChatOffers = function()
 				closeActivePanelDropdown()
 				for _, child in ipairs(secondaryContainer:GetChildren()) do child:Destroy() end
@@ -7682,43 +7559,36 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				if type(entries) ~= "table" or #entries == 0 then entries={blankTradeChatOffer()} stateEntry[entriesKey]=entries end
 				local y = px(5)
 				local function buttonBase(text, yPos)
-					local b=New("TextButton") b:SetAttribute("TuffHubStandardButtonFeedback", true) b.Position=U2O(0,yPos) b.Size=U2(1,0,0,px(25)) b.BackgroundColor3=FEATURE_OFF_COLOR b.BorderSizePixel=0 b.AutoButtonColor=false b.Text=capitalizeUiWords(text) b.TextColor3=MENU_TEXT_SELECTED b.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(b,13) b.TextTruncate=Enum.TextTruncate.None b.ClipsDescendants=true b.ZIndex=45015 b.Parent=secondaryContainer ensureCorner(b,px(5)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(b) return b
+					local b=New("TextButton") b:SetAttribute("TuffHubStandardButtonFeedback", true) b.Position=U2O(0,yPos) b.Size=U2(1,0,0,px(25)) b.BackgroundColor3=FEATURE_OFF_COLOR b.BorderSizePixel=0 b.AutoButtonColor=false b.Text=capitalizeUiWords(text) b.TextColor3=MENU_TEXT_SELECTED b.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(b,13) b.TextTruncate=Enum.TextTruncate.None b.ClipsDescendants=true b.ZIndex=45015 b.Parent=secondaryContainer ensureCorner(b,px(5)) rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(b) return b
 				end
 				local function textBoxBase(text, placeholder, yPos)
-					local box=New("TextBox") box.Position=U2O(0,yPos) box.Size=U2(1,0,0,px(26)) box.BackgroundColor3=FEATURE_OFF_COLOR box.BorderSizePixel=0 box.ClearTextOnFocus=false box.Text=tostring(text or "") box.PlaceholderText=capitalizeUiWords(placeholder or "") box.PlaceholderColor3=MUTED_TEXT_COLOR box.TextColor3=MENU_TEXT_SELECTED box.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(box,13) box.TextXAlignment=Enum.TextXAlignment.Left box.TextTruncate=Enum.TextTruncate.None box.ClipsDescendants=true box.ZIndex=45015 box.Parent=secondaryContainer ensureCorner(box,px(5)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(box)
+					local box=New("TextBox") box.Position=U2O(0,yPos) box.Size=U2(1,0,0,px(26)) box.BackgroundColor3=FEATURE_OFF_COLOR box.BorderSizePixel=0 box.ClearTextOnFocus=false box.Text=tostring(text or "") box.PlaceholderText=capitalizeUiWords(placeholder or "") box.PlaceholderColor3=MUTED_TEXT_COLOR box.TextColor3=MENU_TEXT_SELECTED box.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(box,13) box.TextXAlignment=Enum.TextXAlignment.Left box.TextTruncate=Enum.TextTruncate.None box.ClipsDescendants=true box.ZIndex=45015 box.Parent=secondaryContainer ensureCorner(box,px(5)) rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(box)
 					local pad=New("UIPadding") pad.PaddingLeft=UDim.new(0,px(8)) pad.PaddingRight=UDim.new(0,px(8)) pad.Parent=box
 					return box
 				end
 				local function labeledDropdown(labelText, yPos)
 					local row=New("Frame") row.Position=U2O(0,yPos) row.Size=U2(1,0,0,featureRowHeight) row.BackgroundTransparency=1 row.ZIndex=45014 row.Parent=secondaryContainer
 					local label=New("TextLabel") label.AnchorPoint=V2(0,0.5) label.Position=U2(0,0,0.5,0) label.Size=U2(1,-(dropdownWidth+componentLabelGap),1,0) label.BackgroundTransparency=1 label.Text=capitalizeUiWords(labelText) label.TextColor3=MENU_TEXT_SELECTED label.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(label,14) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.None label.ClipsDescendants=true label.ZIndex=45015 label.Parent=row
-					local b=New("TextButton") b.AnchorPoint=V2(1,0.5) b.Position=U2(1,0,0.5,0) b.Size=U2O(dropdownWidth,px(24)) b.BackgroundColor3=FEATURE_OFF_COLOR b.BorderSizePixel=0 b.AutoButtonColor=false b.Text="Select" b.TextColor3=MUTED_TEXT_COLOR b.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(b,13) b.TextTruncate=Enum.TextTruncate.None b.ClipsDescendants=true b.ZIndex=45015 b.Parent=row ensureCorner(b,px(6)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(b)
+					local b=New("TextButton") b.AnchorPoint=V2(1,0.5) b.Position=U2(1,0,0.5,0) b.Size=U2O(dropdownWidth,px(24)) b.BackgroundColor3=FEATURE_OFF_COLOR b.BorderSizePixel=0 b.AutoButtonColor=false b.Text="Select" b.TextColor3=MUTED_TEXT_COLOR b.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(b,13) b.TextTruncate=Enum.TextTruncate.None b.ClipsDescendants=true b.ZIndex=45015 b.Parent=row ensureCorner(b,px(6)) rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(b)
 					return b
-				end
-				local function numberRow(labelText, currentValue, yPos, onCommit)
-					local row=New("Frame") row.Position=U2O(0,yPos) row.Size=U2(1,0,0,featureRowHeight) row.BackgroundTransparency=1 row.ZIndex=45014 row.Parent=secondaryContainer
-					local label=New("TextLabel") label.AnchorPoint=V2(0,0.5) label.Position=U2(0,0,0.5,0) label.Size=U2(1,-(dropdownWidth+componentLabelGap),1,0) label.BackgroundTransparency=1 label.Text=capitalizeUiWords(labelText) label.TextColor3=MENU_TEXT_SELECTED label.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(label,14) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.None label.Parent=row
-					local box=New("TextBox") box.AnchorPoint=V2(1,0.5) box.Position=U2(1,0,0.5,0) box.Size=U2O(dropdownWidth,px(24)) box.BackgroundColor3=FEATURE_OFF_COLOR box.BorderSizePixel=0 box.ClearTextOnFocus=false box.Text=currentValue~=nil and tostring(currentValue) or "" box.PlaceholderText="Any" box.PlaceholderColor3=MUTED_TEXT_COLOR box.TextColor3=MENU_TEXT_SELECTED box.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(box,13) box.TextTruncate=Enum.TextTruncate.None box.Parent=row ensureCorner(box,px(6)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(box)
-					box.FocusLost:Connect(function() local value=tonumber(box.Text) if value~=nil then value=math.max(0,value) end onCommit(value) box.Text=value~=nil and tostring(value) or "" saveTradeChatOffers() task.defer(rebuildTradeChatOffers) end)
-					return box
 				end
 				local function checkboxRow(text,yPos,getter,setter)
 					local row=New("Frame") row.Position=U2O(0,yPos) row.Size=U2(1,0,0,featureRowHeight) row.BackgroundTransparency=1 row.ZIndex=45014 row.Parent=secondaryContainer
 					local label=New("TextLabel") label.AnchorPoint=V2(0,0.5) label.Position=U2(0,0,0.5,0) label.Size=U2(1,-(toggleWidth+componentLabelGap),1,0) label.BackgroundTransparency=1 label.Text=capitalizeUiWords(text) label.TextColor3=getter() and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR label.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(label,14) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.None label.Parent=row
-					local track=New("TextButton") track.AnchorPoint=V2(1,0.5) track.Position=U2(1,0,0.5,0) track.Size=U2O(toggleWidth,toggleHeight) track.BackgroundColor3=getter() and PINK or FEATURE_OFF_COLOR track.BorderSizePixel=0 track.AutoButtonColor=false track.Text="" track.ZIndex=45015 track.Parent=row ensureCorner(track,toggleHeight*0.5) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(track)
+					local track=New("TextButton") track.AnchorPoint=V2(1,0.5) track.Position=U2(1,0,0.5,0) track.Size=U2O(toggleWidth,toggleHeight) track.BackgroundColor3=getter() and PINK or FEATURE_OFF_COLOR track.BorderSizePixel=0 track.AutoButtonColor=false track.Text="" track.ZIndex=45015 track.Parent=row ensureCorner(track,toggleHeight*0.5) rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(track)
 					local knob=New("Frame") knob.Size=U2O(toggleHeight-knobInset*2,toggleHeight-knobInset*2) knob.Position=getter() and U2(0,toggleWidth-toggleHeight+knobInset,0,knobInset) or U2O(knobInset,knobInset) knob.BackgroundColor3=MENU_TEXT_SELECTED knob.BorderSizePixel=0 knob.Parent=track ensureCorner(knob,(toggleHeight-knobInset*2)*0.5)
-					track.MouseButton1Click:Connect(function() setter(not getter()) saveTradeChatOffers() task.defer(rebuildTradeChatOffers) end)
+					track.MouseButton1Click:Connect(function() setter(not getter()) task.defer(rebuildTradeChatOffers) end)
 				end
 				local function makeOfferSlider(labelText, initialValue, minValue, maxValue, yPos, onCommit)
 					local frame=New("Frame") frame.Position=U2O(0,yPos) frame.Size=U2(1,0,0,amountControlsHeight) frame.BackgroundTransparency=1 frame.ZIndex=45015 frame.Parent=secondaryContainer
 					local label=New("TextLabel") label.Size=U2(1,-amountValueWidth-componentLabelGap,0,px(15)) label.BackgroundTransparency=1 label.Text=capitalizeUiWords(labelText) label.TextColor3=MENU_TEXT_SELECTED label.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(label,13) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.None label.Parent=frame
-					local value=New("TextBox") value.AnchorPoint=V2(1,0) value.Position=U2(1,0,0,0) value.Size=U2O(amountValueWidth,px(20)) value.BackgroundColor3=FEATURE_OFF_COLOR value.BorderSizePixel=0 value.ClearTextOnFocus=false value.TextColor3=MENU_TEXT_SELECTED value.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(value,13) value.TextTruncate=Enum.TextTruncate.None value.ClipsDescendants=true value.Parent=frame ensureCorner(value,px(5)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(value)
-					local track=New("Frame") track.Position=U2O(0,px(27)) track.Size=U2(1,0,0,px(5)) track.BackgroundColor3=FEATURE_OFF_COLOR track.BorderSizePixel=0 track.Active=true track.Parent=frame ensureCorner(track,px(3)) rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(track)
+					local value=New("TextBox") value.AnchorPoint=V2(1,0) value.Position=U2(1,0,0,0) value.Size=U2O(amountValueWidth,px(20)) value.BackgroundColor3=FEATURE_OFF_COLOR value.BorderSizePixel=0 value.ClearTextOnFocus=false value.TextColor3=MENU_TEXT_SELECTED value.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(value,13) value.TextTruncate=Enum.TextTruncate.None value.ClipsDescendants=true value.Parent=frame ensureCorner(value,px(5)) rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(value)
+					local track=New("Frame") track.Position=U2O(0,px(27)) track.Size=U2(1,0,0,px(5)) track.BackgroundColor3=FEATURE_OFF_COLOR track.BorderSizePixel=0 track.Active=true track.Parent=frame ensureCorner(track,px(3)) rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(track)
 					local fill=New("Frame") fill.BackgroundColor3=PINK fill.BorderSizePixel=0 fill.Parent=track ensureCorner(fill,px(3))
 					local knob=New("Frame") knob.AnchorPoint=V2(0.5,0.5) knob.Size=U2O(px(11),px(11)) knob.BackgroundColor3=MENU_TEXT_SELECTED knob.BorderSizePixel=0 knob.Parent=track ensureCorner(knob,px(6))
-					local function setValue(v,save) v=math.clamp(math.floor(tonumber(v) or minValue),minValue,maxValue) local adjusted=onCommit(v) if adjusted~=nil then v=math.clamp(math.floor(tonumber(adjusted) or v),minValue,maxValue) end value.Text=tostring(v) local a=maxValue==minValue and 0 or ((v-minValue)/(maxValue-minValue)) fill.Size=U2S(a,1) knob.Position=U2(a,0,0.5,0) if save then saveTradeChatOffers() end end
-					setValue(initialValue,false) value.FocusLost:Connect(function() setValue(value.Text,true) end)
-					track.InputBegan:Connect(function(input) if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then beginSliderDrag(input,function(x) local a=math.clamp((x-track.AbsolutePosition.X)/math.max(1,track.AbsoluteSize.X),0,1) setValue(minValue+math.floor(a*(maxValue-minValue)+0.5),true) end) end end)
+					local function setValue(v) v=math.clamp(math.floor(tonumber(v) or minValue),minValue,maxValue) local adjusted=onCommit(v) if adjusted~=nil then v=math.clamp(math.floor(tonumber(adjusted) or v),minValue,maxValue) end value.Text=tostring(v) local a=maxValue==minValue and 0 or ((v-minValue)/(maxValue-minValue)) fill.Size=U2S(a,1) knob.Position=U2(a,0,0.5,0) end
+					setValue(initialValue) value.FocusLost:Connect(function() setValue(value.Text) end)
+					track.InputBegan:Connect(function(input) if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then beginSliderDrag(input,function(x) local a=math.clamp((x-track.AbsolutePosition.X)/math.max(1,track.AbsoluteSize.X),0,1) setValue(minValue+math.floor(a*(maxValue-minValue)+0.5)) end) end end)
 				end
 				for entryIndex, rawEntry in ipairs(entries) do
 					local entry=normalizeTradeChatEntry(rawEntry) entries[entryIndex]=entry
@@ -7731,11 +7601,11 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					end
 					local function specificCount() local c=0 for _,v in pairs(entry.SpecificItems) do if v==true then c+=1 end end return c end
 					local function rarityUnits(except) local c=0 for _,r in ipairs(OUTGOING_BRAINROT_RARITY_OPTIONS) do if r~=except and entry.Targets[r]==true then c+=math.clamp(math.floor(tonumber(entry.Amounts[r]) or 1),1,6) end end return c end
-					local input=textBoxBase(entry.LookFor,"Trade Chat To Look For",y) input.FocusLost:Connect(function() entry.LookFor=input.Text refreshClearStyle() saveTradeChatOffers() end) y+=px(31)
+					local input=textBoxBase(entry.LookFor,"Trade Chat To Look For",y) input.FocusLost:Connect(function() entry.LookFor=input.Text refreshClearStyle() end) y+=px(31)
 					local rarityButton=labeledDropdown("Offer Brainrots / Items By Rarity",y)
 					fitWholeDropdownNames(rarityButton,selectedTargetList(entry,OUTGOING_BRAINROT_RARITY_OPTIONS),"Select")
 					rarityButton.MouseButton1Click:Connect(function()
-						openManagedMultiDropdown(rarityButton,OUTGOING_BRAINROT_RARITY_OPTIONS,entry.Targets,tostring,"Select",function(option,selected) if selected then entry.Amounts[option]=math.clamp(math.floor(tonumber(entry.Amounts[option]) or 1),1,6) else entry.Amounts[option]=nil end saveTradeChatOffers() end,function() return rarityUnits(nil)+specificCount()<6 end,rebuildTradeChatOffers)
+						openManagedMultiDropdown(rarityButton,OUTGOING_BRAINROT_RARITY_OPTIONS,entry.Targets,tostring,"Select",function(option,selected) if selected then entry.Amounts[option]=math.clamp(math.floor(tonumber(entry.Amounts[option]) or 1),1,6) else entry.Amounts[option]=nil end end,function() return rarityUnits(nil)+specificCount()<6 end,rebuildTradeChatOffers)
 					end)
 					y+=featureRowHeight
 					for _,rarity in ipairs(OUTGOING_BRAINROT_RARITY_OPTIONS) do
@@ -7751,7 +7621,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					local specificNames={} for _,id in ipairs(specificOptions) do if entry.SpecificItems[id]==true then specificNames[#specificNames+1]=autoServerHopState.OwnedTradeableItemOptionLabel(id) end end
 					fitWholeDropdownNames(specificButton,specificNames,"Select")
 					specificButton.MouseButton1Click:Connect(function()
-						openManagedMultiDropdown(specificButton,specificOptions,entry.SpecificItems,autoServerHopState.OwnedTradeableItemOptionLabel,"Select",function() saveTradeChatOffers() end,function() return rarityUnits(nil)+specificCount()<6 end,rebuildTradeChatOffers)
+						openManagedMultiDropdown(specificButton,specificOptions,entry.SpecificItems,autoServerHopState.OwnedTradeableItemOptionLabel,"Select",nil,function() return rarityUnits(nil)+specificCount()<6 end,rebuildTradeChatOffers)
 					end)
 					y+=featureRowHeight
 					makeOfferSlider("Token Amount",entry.TokenAmount,0,1000000,y,function(v) entry.TokenAmount=v refreshClearStyle() return v end) y+=amountControlsHeight+px(3)
@@ -7760,13 +7630,13 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					refreshClearStyle()
 					clearButton.MouseButton1Click:Connect(function()
 						if not hasClearableOffer() then return end
-						entries[entryIndex]=blankTradeChatOffer() saveTradeChatOffers() task.defer(rebuildTradeChatOffers)
+						entries[entryIndex]=blankTradeChatOffer() task.defer(rebuildTradeChatOffers)
 					end)
 					y+=px(31)
-					if entryIndex>1 then local remove=buttonBase("Remove Custom Offer",y) remove.TextColor3=MUTED_TEXT_COLOR remove.MouseButton1Click:Connect(function() table.remove(entries,entryIndex) if #entries==0 then entries[1]=blankTradeChatOffer() end saveTradeChatOffers() task.defer(rebuildTradeChatOffers) end) y+=px(31) end
+					if entryIndex>1 then local remove=buttonBase("Remove Custom Offer",y) remove.TextColor3=MUTED_TEXT_COLOR remove.MouseButton1Click:Connect(function() table.remove(entries,entryIndex) if #entries==0 then entries[1]=blankTradeChatOffer() end task.defer(rebuildTradeChatOffers) end) y+=px(31) end
 					y+=px(12)
 				end
-				local add=buttonBase("Add Another Trade Chat Offer",y) add.MouseButton1Click:Connect(function() entries[#entries+1]=blankTradeChatOffer() saveTradeChatOffers() task.defer(rebuildTradeChatOffers) end) y+=px(35)
+				local add=buttonBase("Add Another Trade Chat Offer",y) add.MouseButton1Click:Connect(function() entries[#entries+1]=blankTradeChatOffer() task.defer(rebuildTradeChatOffers) end) y+=px(35)
 				managerHeight=y secondaryContainer.Size=U2(1,0,0,managerHeight) task.defer(relayoutRows)
 			end
 			rebuildTradeChatOffers()
@@ -7787,8 +7657,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			end
 			local managerHeight = px(1)
 			dynamicSecondaryHeight = function() return managerHeight end
-			local function saveSpecificCriteria()
-			end
 			local function specificItemKind(name)
 				return autoServerHopState.SpecificItemKindFromName(name)
 			end
@@ -7810,7 +7678,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 						multiSelection,
 						tostring,
 						"Select",
-						function() saveSpecificCriteria() end,
+						nil,
 						nil,
 						function() task.defer(rebuildSpecificCriteria) end
 					)
@@ -7906,7 +7774,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					optionRows[#optionRows + 1] = {Button=row, Option=option, Search=string.lower(tostring(label))}
 					row.MouseButton1Click:Connect(function()
 						if type(onSingle) == "function" then onSingle(option) end
-						saveSpecificCriteria()
 						closeActivePanelDropdown()
 						task.defer(rebuildSpecificCriteria)
 					end)
@@ -8007,7 +7874,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 							box.Text = ""
 						end
 						onCommit(value)
-						saveSpecificCriteria()
 					end)
 					return row
 				end
@@ -8168,7 +8034,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 						setResponsiveTextSize(valueBox,14)
 						valueBox.Parent = amountFrame
 						ensureCorner(valueBox,px(5))
-						rawget(_G,"__TUFFHUB_ENSURE_INPUT_BORDER")(valueBox)
+						rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(valueBox)
 						local track = New("Frame")
 						track.Position = U2O(0,px(27))
 						track.Size = U2(1,0,0,px(5))
@@ -8188,7 +8054,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 							fill.Size=U2S(alpha,1) knob.Position=U2(alpha,0,0.5,0)
 						end
 						setAmount(entry.Amount,true)
-						valueBox.FocusLost:Connect(function() setAmount(valueBox.Text,true) saveSpecificCriteria() end)
+						valueBox.FocusLost:Connect(function() setAmount(valueBox.Text,true) end)
 						track.InputBegan:Connect(function(input)
 							if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
 								beginSliderDrag(input,function(pointX)
@@ -8209,7 +8075,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 							entry.Signature, entry.Level = nil, nil
 							entry.Multiplier, entry.Cooldown, entry.Power = nil, nil, nil
 							entry.Amount = 1
-							saveSpecificCriteria()
 							task.defer(rebuildSpecificCriteria)
 						end)
 						y += px(31)
@@ -8219,7 +8084,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 						remove.TextColor3 = MUTED_TEXT_COLOR
 						remove.MouseButton1Click:Connect(function()
 							table.remove(entries, entryIndex)
-							saveSpecificCriteria()
 							task.defer(rebuildSpecificCriteria)
 						end)
 						y += px(31)
@@ -10119,6 +9983,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			MinigameParentId = definition and definition.MinigameParentId or nil,
 			BoothSlotIndex = definition and definition.BoothSlotIndex or nil,
 			UtilityToggleKey = isUtilityToggle and definition.UtilityToggleKey or nil,
+			IsActionButton = isActionButton == true,
 			UtilityExclusiveGroup = utilityExclusiveGroup,
 			SeparatorGroup = definition and definition.SeparatorGroup or nil,
 			RefreshUtilityDropdown = utilityDropdownRefresh,
@@ -10967,6 +10832,8 @@ end
 	local configStatus
 	local configNames = {}
 	local autoloadConfigName
+	autoServerHopState.RuntimeAutoloadTargetName = nil
+	autoServerHopState.RuntimeAutoloadCurrentLabel = nil
 
 	local function readAutoloadConfigName()
 		autoloadConfigName = nil
@@ -11009,12 +10876,19 @@ end
 		if autoloadConfigName and not table.find(configNames, autoloadConfigName) then
 			writeAutoloadConfigName(nil)
 		end
-		if not currentConfigName and autoloadConfigName then currentConfigName = autoloadConfigName end
+		if autoServerHopState.RuntimeAutoloadTargetName
+			and not table.find(configNames, autoServerHopState.RuntimeAutoloadTargetName)
+		then
+			autoServerHopState.RuntimeAutoloadTargetName = nil
+		end
 		if configSelectButton then
 			configSelectButton.Text = currentConfigName or (#configNames > 0 and "Select Config" or "")
 		end
 		if autoloadSelectButton then
-			autoloadSelectButton.Text = autoloadConfigName or (#configNames > 0 and "None" or "")
+			autoloadSelectButton.Text = autoServerHopState.RuntimeAutoloadTargetName or "None"
+		end
+		if autoServerHopState.RuntimeAutoloadCurrentLabel then
+			autoServerHopState.RuntimeAutoloadCurrentLabel.Text = "Current autoload config: " .. (autoloadConfigName or "none")
 		end
 	end
 
@@ -11167,26 +11041,6 @@ end
 				setConfigStatus("Selected " .. currentConfigName, MUTED_TEXT_COLOR)
 			end)
 		end)
-		autoloadSelectButton = h.selectRow("Autoload Config", "", function(button)
-			refreshConfigList()
-			local options = {"None"}
-			for _, name in ipairs(configNames) do options[#options + 1] = name end
-			openChoicePopup(button, options, autoloadConfigName or "None", function(choice)
-				if tostring(choice) == "None" then
-					writeAutoloadConfigName(nil)
-					button.Text = "None"
-					setConfigStatus("Autoload disabled", MUTED_TEXT_COLOR)
-				else
-					local name = tostring(choice)
-					if writeAutoloadConfigName(name) then
-						button.Text = name
-						setConfigStatus("Autoload set to " .. name, GOOD)
-					else
-						setConfigStatus("Could not save autoload selection", DANGER)
-					end
-				end
-			end)
-		end)
 		h.button("Load Config", loadConfig)
 		h.button("Overwrite Config", function()
 			if configNameBox and configNameBox.Text == "" and currentConfigName then configNameBox.Text = currentConfigName end
@@ -11197,6 +11051,38 @@ end
 			refreshConfigList()
 			setConfigStatus("Config list refreshed", MUTED_TEXT_COLOR)
 		end)
+		h.subheading("Autoload")
+		autoloadSelectButton = h.selectRow("Autoload Target", "None", function(button)
+			refreshConfigList()
+			local options = {"None"}
+			for _, name in ipairs(configNames) do options[#options + 1] = name end
+			openChoicePopup(button, options, autoServerHopState.RuntimeAutoloadTargetName or "None", function(choice)
+				local name = tostring(choice)
+				autoServerHopState.RuntimeAutoloadTargetName = name ~= "None" and name or nil
+				button.Text = autoServerHopState.RuntimeAutoloadTargetName or "None"
+			end)
+		end)
+		h.button("Set as Autoload", function()
+			local target = autoServerHopState.RuntimeAutoloadTargetName
+			if not target or not table.find(configNames, target) then
+				setConfigStatus("Select an autoload target", WARNING)
+				return
+			end
+			if writeAutoloadConfigName(target) then
+				if autoServerHopState.RuntimeAutoloadCurrentLabel then autoServerHopState.RuntimeAutoloadCurrentLabel.Text = "Current autoload config: " .. target end
+				setConfigStatus("Autoload set to " .. target, GOOD)
+			else
+				setConfigStatus("Could not save autoload selection", DANGER)
+			end
+		end)
+		h.button("Reset Autoload", function()
+			writeAutoloadConfigName(nil)
+			autoServerHopState.RuntimeAutoloadTargetName = nil
+			if autoloadSelectButton then autoloadSelectButton.Text = "None" end
+			if autoServerHopState.RuntimeAutoloadCurrentLabel then autoServerHopState.RuntimeAutoloadCurrentLabel.Text = "Current autoload config: none" end
+			setConfigStatus("Autoload reset", MUTED_TEXT_COLOR)
+		end)
+		autoServerHopState.RuntimeAutoloadCurrentLabel = h.note("Current autoload config: none", MUTED_TEXT_COLOR, px(28))
 		configStatus = h.note("Current config: none", MUTED_TEXT_COLOR, px(28))
 	end)
 
@@ -11208,7 +11094,8 @@ end
 		if themeFontButton then themeFontButton.Text = tostring(autoServerHopState.Utility.ThemeFontChoice or "BuilderSans") end
 		refreshConfigList()
 		if configStatus then configStatus.Text = currentConfigName and ("Current config: " .. currentConfigName) or "Current config: none" end
-		if autoloadSelectButton then autoloadSelectButton.Text = autoloadConfigName or (#configNames > 0 and "None" or "") end
+		if autoloadSelectButton then autoloadSelectButton.Text = autoServerHopState.RuntimeAutoloadTargetName or "None" end
+		if autoServerHopState.RuntimeAutoloadCurrentLabel then autoServerHopState.RuntimeAutoloadCurrentLabel.Text = "Current autoload config: " .. (autoloadConfigName or "none") end
 	end
 	rawset(_G, "__TUFFHUB_REFRESH_CUSTOM_SETTINGS_UI", refreshCustomSettings)
 	refreshCustomSettings()
@@ -11216,6 +11103,7 @@ end
 
 	screenGui.Destroying:Connect(function()
 		autoServerHopState.RuntimeMenuBindCaptureActive = false
+		autoServerHopState.RuntimeAutoloadCurrentLabel = nil
 		closeChoicePopup()
 		if bindCaptureConnection then bindCaptureConnection:Disconnect(); bindCaptureConnection = nil end
 		for _, connection in ipairs(liveConnections) do
@@ -11890,42 +11778,42 @@ end)()
 			{Label = "Avoid Listing These Specific Brainrots", UtilityMultiDropdownKey = "AutoBoothAvoidBrainrots", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAvoidGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothBrainrotOptions() end},
 		}
 		local boothMessages = {
-			{Label = "Send Message When All Listings Are Listed", UtilityToggleKey = "AutoBoothMessageAllListingsCompleted", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAllListingsMessageGroup"},
-			{Label = "Message", UtilityTextKey = "AutoBoothAllListingsCompletedMessage", UtilityParentKeys = {"AutoBooth", "AutoBoothMessageAllListingsCompleted"}, SeparatorGroup = "AutoBoothAllListingsMessageGroup", Placeholder = "Message when all configured listings are listed"},
-			{Label = "Delay Before Sending Message", UtilitySliderKey = "AutoBoothAllListingsCompletedMessageDelay", UtilityParentKeys = {"AutoBooth", "AutoBoothMessageAllListingsCompleted"}, SeparatorGroup = "AutoBoothAllListingsMessageGroup", MinValue = 0, MaxValue = 30, Step = 0.25, Decimals = 2, UnitLabel = "Seconds"},
-			{Label = "Send Message When All Possible Listings Are Listed", UtilityToggleKey = "AutoBoothMessageAllPossibleCompleted", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAllPossibleMessageGroup"},
-			{Label = "Message", UtilityTextKey = "AutoBoothAllPossibleCompletedMessage", UtilityParentKeys = {"AutoBooth", "AutoBoothMessageAllPossibleCompleted"}, SeparatorGroup = "AutoBoothAllPossibleMessageGroup", Placeholder = "Message when every possible eligible listing is listed"},
-			{Label = "Delay Before Sending Message", UtilitySliderKey = "AutoBoothAllPossibleCompletedMessageDelay", UtilityParentKeys = {"AutoBooth", "AutoBoothMessageAllPossibleCompleted"}, SeparatorGroup = "AutoBoothAllPossibleMessageGroup", MinValue = 0, MaxValue = 30, Step = 0.25, Decimals = 2, UnitLabel = "Seconds"},
+			{Label = "Send Message When All Listings Are Listed", UtilityToggleKey = "AutoBoothMessageAllListingsCompleted", SeparatorGroup = "AutoBoothAllListingsMessageGroup"},
+			{Label = "Message", UtilityTextKey = "AutoBoothAllListingsCompletedMessage", UtilityParentKeys = {"AutoBoothMessageAllListingsCompleted"}, SeparatorGroup = "AutoBoothAllListingsMessageGroup", Placeholder = "Message when all configured listings are listed"},
+			{Label = "Delay Before Sending Message", UtilitySliderKey = "AutoBoothAllListingsCompletedMessageDelay", UtilityParentKeys = {"AutoBoothMessageAllListingsCompleted"}, SeparatorGroup = "AutoBoothAllListingsMessageGroup", MinValue = 0, MaxValue = 30, Step = 0.25, Decimals = 2, UnitLabel = "Seconds"},
+			{Label = "Send Message When All Possible Listings Are Listed", UtilityToggleKey = "AutoBoothMessageAllPossibleCompleted", SeparatorGroup = "AutoBoothAllPossibleMessageGroup"},
+			{Label = "Message", UtilityTextKey = "AutoBoothAllPossibleCompletedMessage", UtilityParentKeys = {"AutoBoothMessageAllPossibleCompleted"}, SeparatorGroup = "AutoBoothAllPossibleMessageGroup", Placeholder = "Message when every possible eligible listing is listed"},
+			{Label = "Delay Before Sending Message", UtilitySliderKey = "AutoBoothAllPossibleCompletedMessageDelay", UtilityParentKeys = {"AutoBoothMessageAllPossibleCompleted"}, SeparatorGroup = "AutoBoothAllPossibleMessageGroup", MinValue = 0, MaxValue = 30, Step = 0.25, Decimals = 2, UnitLabel = "Seconds"},
 		}
 		local listings = {}
 		for index = 1, 14 do
 			local prefix = "AutoBoothListing" .. tostring(index)
-			local parents = {"AutoBooth", prefix .. "Enabled"}
+			local parents = {prefix .. "Enabled"}
 			local function add(definition) definition.BoothSlotIndex = index; listings[#listings + 1] = definition end
-			add({Label = "Listing " .. tostring(index), UtilityToggleKey = prefix .. "Enabled", UtilityParentKey = "AutoBooth"})
+			add({Label = "Listing " .. tostring(index), UtilityToggleKey = prefix .. "Enabled"})
 			add({Label = "List By Rarity", UtilityToggleKey = prefix .. "ListByRarity", UtilityParentKeys = parents, UtilityExclusiveGroup = prefix .. "SelectionMode", UtilityExclusiveRequired = true, SeparatorGroup = prefix .. "ListByRarityGroup"})
-			add({Label = "Rarity", UtilityDropdownKey = prefix .. "Rarity", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Select", Options = BRAINROT_RARITY_OPTIONS})
-			add({Label = "Mutation", UtilityMultiDropdownKey = prefix .. "BrainrotMutations", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end})
-			add({Label = "Traits", UtilityMultiDropdownKey = prefix .. "BrainrotTraits", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end})
-			add({Label = "Signature", UtilityMultiDropdownKey = prefix .. "BrainrotSignatures", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Any", Options = {"Signed", "Unsigned"}})
-			add({Label = "Size", UtilityMultiDropdownKey = prefix .. "BrainrotSizes", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end})
-			add({Label = "Level", UtilityMultiDropdownKey = prefix .. "BrainrotLevels", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end})
-			add({Label = "List When You Have At Least", UtilitySliderKey = prefix .. "MinimumCopies", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", MinValue = 1, MaxValue = 100, UnitLabel = "Owned"})
+			add({Label = "Rarity", UtilityDropdownKey = prefix .. "Rarity", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Select", Options = BRAINROT_RARITY_OPTIONS})
+			add({Label = "Mutation", UtilityMultiDropdownKey = prefix .. "BrainrotMutations", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end})
+			add({Label = "Traits", UtilityMultiDropdownKey = prefix .. "BrainrotTraits", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end})
+			add({Label = "Signature", UtilityMultiDropdownKey = prefix .. "BrainrotSignatures", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Any", Options = {"Signed", "Unsigned"}})
+			add({Label = "Size", UtilityMultiDropdownKey = prefix .. "BrainrotSizes", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end})
+			add({Label = "Level", UtilityMultiDropdownKey = prefix .. "BrainrotLevels", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end})
+			add({Label = "List When You Have At Least", UtilitySliderKey = prefix .. "MinimumCopies", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", MinValue = 1, MaxValue = 100, UnitLabel = "Owned"})
 			add({Label = "List Brainrot By Name", UtilityToggleKey = prefix .. "ListByBrainrot", UtilityParentKeys = parents, UtilityExclusiveGroup = prefix .. "SelectionMode", UtilityExclusiveRequired = true, SeparatorGroup = prefix .. "ListByBrainrotGroup"})
-			add({Label = "Brainrot Name", UtilityDropdownKey = prefix .. "Brainrot", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothBrainrotOptions() end})
-			add({Label = "Mutation", UtilityMultiDropdownKey = prefix .. "BrainrotMutations", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end})
-			add({Label = "Traits", UtilityMultiDropdownKey = prefix .. "BrainrotTraits", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end})
-			add({Label = "Signature", UtilityMultiDropdownKey = prefix .. "BrainrotSignatures", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Any", Options = {"Signed", "Unsigned"}})
-			add({Label = "Size", UtilityMultiDropdownKey = prefix .. "BrainrotSizes", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end})
-			add({Label = "Level", UtilityMultiDropdownKey = prefix .. "BrainrotLevels", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end})
-			add({Label = "List When You Have At Least", UtilitySliderKey = prefix .. "MinimumCopies", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", MinValue = 1, MaxValue = 100, UnitLabel = "Owned"})
+			add({Label = "Brainrot Name", UtilityDropdownKey = prefix .. "Brainrot", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothBrainrotOptions() end})
+			add({Label = "Mutation", UtilityMultiDropdownKey = prefix .. "BrainrotMutations", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end})
+			add({Label = "Traits", UtilityMultiDropdownKey = prefix .. "BrainrotTraits", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end})
+			add({Label = "Signature", UtilityMultiDropdownKey = prefix .. "BrainrotSignatures", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Any", Options = {"Signed", "Unsigned"}})
+			add({Label = "Size", UtilityMultiDropdownKey = prefix .. "BrainrotSizes", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end})
+			add({Label = "Level", UtilityMultiDropdownKey = prefix .. "BrainrotLevels", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end})
+			add({Label = "List When You Have At Least", UtilitySliderKey = prefix .. "MinimumCopies", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", MinValue = 1, MaxValue = 100, UnitLabel = "Owned"})
 			add({Label = "List Specific Brainrot", UtilityToggleKey = prefix .. "ListSpecificBrainrot", UtilityParentKeys = parents, UtilityExclusiveGroup = prefix .. "SelectionMode", UtilityExclusiveRequired = true, SeparatorGroup = prefix .. "ListSpecificBrainrotGroup"})
-			add({Label = "Owned Brainrot", UtilityDropdownKey = prefix .. "SpecificBrainrotId", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "ListSpecificBrainrot"}, SeparatorGroup = prefix .. "ListSpecificBrainrotGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true})
+			add({Label = "Owned Brainrot", UtilityDropdownKey = prefix .. "SpecificBrainrotId", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListSpecificBrainrot"}, SeparatorGroup = prefix .. "ListSpecificBrainrotGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true})
 			add({Label = "List Above This Inventory Or Higher", UtilitySliderKey = prefix .. "InventoryThreshold", UtilityParentKeys = parents, SeparatorGroup = prefix .. "ListingConditionsGroup", MinValue = 1, MaxValue = 100, UnitLabel = "Inventory"})
 			add({Label = "Listing " .. tostring(index) .. " Tokens", UtilitySliderKey = prefix .. "Tokens", UtilityParentKeys = parents, SeparatorGroup = prefix .. "ListingConditionsGroup", MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"})
 			add({Label = "Message When Listed", UtilityToggleKey = prefix .. "MessageWhenListed", UtilityParentKeys = parents, SeparatorGroup = prefix .. "MessageWhenListedGroup"})
-			add({Label = "Message", UtilityTextKey = prefix .. "ListedMessage", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "MessageWhenListed"}, SeparatorGroup = prefix .. "MessageWhenListedGroup", Placeholder = "Message to send when listed"})
-			add({Label = "Delay Before Sending Message", UtilitySliderKey = prefix .. "MessageDelay", UtilityParentKeys = {"AutoBooth", prefix .. "Enabled", prefix .. "MessageWhenListed"}, SeparatorGroup = prefix .. "MessageWhenListedGroup", MinValue = 0, MaxValue = 30, Step = 0.25, Decimals = 2, UnitLabel = "Seconds"})
+			add({Label = "Message", UtilityTextKey = prefix .. "ListedMessage", UtilityParentKeys = {prefix .. "Enabled", prefix .. "MessageWhenListed"}, SeparatorGroup = prefix .. "MessageWhenListedGroup", Placeholder = "Message to send when listed"})
+			add({Label = "Delay Before Sending Message", UtilitySliderKey = prefix .. "MessageDelay", UtilityParentKeys = {prefix .. "Enabled", prefix .. "MessageWhenListed"}, SeparatorGroup = prefix .. "MessageWhenListedGroup", MinValue = 0, MaxValue = 30, Step = 0.25, Decimals = 2, UnitLabel = "Seconds"})
 		end
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Booth, 16, 1, 1, "Booth Settings", boothSettings)
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Booth, 30, 2, 1, "Booth Messages", boothMessages)
@@ -12032,17 +11920,6 @@ end)()
 		"Undo Settings",
 		{
 			{Label = "Undo All Settings", ActionButton = true, Action = "UndoAllSettings"},
-		}
-	)
-	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
-		tabs.System,
-		7,
-		1,
-		4,
-		"Join Player",
-		{
-			{Label = "", HideLabel = true, UtilityTextKey = "JoinPlayerName", Placeholder = "Player Name", EditingKey = "JoinPlayerEditing", RevisionKey = "JoinPlayerRevision", SeparatorGroup = "JoinPlayerGroup"},
-			{Label = "Join Player", ActionButton = true, Action = "JoinPlayer", SeparatorGroup = "JoinPlayerGroup"},
 		}
 	)
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
@@ -12906,7 +12783,7 @@ end
 			beginIconDrag(input)
 		end
 	end)
-	UserInputService.InputChanged:Connect(function(input)
+	autoServerHopState.ConnectPersistent(UserInputService.InputChanged, function(input)
 		if not iconDragging then
 			return
 		end
@@ -12920,7 +12797,7 @@ end
 			updateIconDrag(input.Position)
 		end
 	end)
-	UserInputService.InputEnded:Connect(function(input)
+	autoServerHopState.ConnectPersistent(UserInputService.InputEnded, function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1
 			and iconTouchInput == nil
 		then
@@ -12948,7 +12825,7 @@ closeButton.MouseButton1Click:Connect(function()
 end)
 end)()
 end)()
-UserInputService.InputBegan:Connect(
+autoServerHopState.ConnectPersistent(UserInputService.InputBegan,
 	function(input, gameProcessedEvent)
 		if guiDestroyed then
 			return
@@ -13123,14 +13000,14 @@ UserInputService.InputBegan:Connect(
 			)
 		)
 	end
-	UserInputService.InputBegan:Connect(function(input)
+	autoServerHopState.ConnectPersistent(UserInputService.InputBegan, function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1
 			or input.UserInputType == Enum.UserInputType.Touch
 		then
 			beginDrag(input)
 		end
 	end)
-	UserInputService.InputChanged:Connect(function(input)
+	autoServerHopState.ConnectPersistent(UserInputService.InputChanged, function(input)
 		if not dragging then
 			return
 		end
@@ -13144,7 +13021,7 @@ UserInputService.InputBegan:Connect(
 			updateDrag(input.Position)
 		end
 	end)
-	UserInputService.InputEnded:Connect(function(input)
+	autoServerHopState.ConnectPersistent(UserInputService.InputEnded, function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1
 			and dragState.TouchInput == nil
 		then
@@ -13529,25 +13406,6 @@ if MINIGAME_MODE then
 				if type(permanent) == "table" and permanent[userId] == true then return true end
 			end
 			return false
-		end
-		local function toolMutationAS(tool)
-			if not tool then return nil end
-			local value = tool:GetAttribute("Mutation") or tool:GetAttribute("BrainrotMutation")
-			return type(value) == "string" and value or nil
-		end
-		local function toolTraitsAS(tool)
-			local result = {}
-			if not tool then return result end
-			for _, attributeName in ipairs({"Traits", "BrainrotTraits", "Trait"}) do
-				local value = tool:GetAttribute(attributeName)
-				if type(value) == "string" then
-					for trait in string.gmatch(value, "[^,|;]+") do
-						trait = string.gsub(trait, "^%s*(.-)%s*$", "%1")
-						if trait ~= "" then result[trait] = true end
-					end
-				end
-			end
-			return result
 		end
 		local function toolPassesSitFiltersAS(tool, rarity)
 			local utility = autoServerHopState.Utility
@@ -14897,25 +14755,6 @@ if MINIGAME_MODE then
 				or string.find(string.lower(name), "%f[%a]meta%f[%A]") ~= nil
 			return rarity == "Infinity" and metaMarked and "Meta" or rarity
 		end
-		local function toolMutationAC(tool)
-			if not tool then return nil end
-			local value = tool:GetAttribute("Mutation") or tool:GetAttribute("BrainrotMutation")
-			return type(value) == "string" and value or nil
-		end
-		local function toolTraitsAC(tool)
-			local result = {}
-			if not tool then return result end
-			for _, attributeName in ipairs({"Traits", "BrainrotTraits", "Trait"}) do
-				local value = tool:GetAttribute(attributeName)
-				if type(value) == "string" then
-					for trait in string.gmatch(value, "[^,|;]+") do
-						trait = string.gsub(trait, "^%s*(.-)%s*$", "%1")
-						if trait ~= "" then result[trait] = true end
-					end
-				end
-			end
-			return result
-		end
 		local function toolPassesCancelFiltersAC(tool, rarity)
 			local utility = autoServerHopState.Utility
 			local prefix = "AutoCancel" .. tostring(rarity)
@@ -15978,10 +15817,10 @@ if MINIGAME_MODE then
 		for _, player in ipairs(PlayersCS:GetPlayers()) do
 			playerSeenAtCS[tostring(player.UserId)] = os.clock()
 		end
-		PlayersCS.PlayerAdded:Connect(function(player)
+		autoServerHopState.ConnectPersistent(PlayersCS.PlayerAdded, function(player)
 			playerSeenAtCS[tostring(player.UserId)] = os.clock()
 		end)
-		PlayersCS.PlayerRemoving:Connect(function(player)
+		autoServerHopState.ConnectPersistent(PlayersCS.PlayerRemoving, function(player)
 			playerSeenAtCS[tostring(player.UserId)] = nil
 		end)
 		local tryCS = safeTryIndex
@@ -16408,7 +16247,7 @@ if MINIGAME_MODE then
 		end
 		recordRecentServerHP(game.JobId)
 		local tryIndexHP = safeTryIndex
-		TeleportServiceHP.TeleportInitFailed:Connect(function(player)
+		autoServerHopState.ConnectPersistent(TeleportServiceHP.TeleportInitFailed, function(player)
 			if player == LocalPlayerHP then
 				hoppingHP = false
 				serverCacheAtHP = 0
@@ -17101,7 +16940,7 @@ if MINIGAME_MODE then
 				end
 			end)
 		end
-		GuiServiceAR.ErrorMessageChanged:Connect(function(message)
+		autoServerHopState.ConnectPersistent(GuiServiceAR.ErrorMessageChanged, function(message)
 			if not screenGui.Parent then return end
 			if autoServerHopState.Utility.AutoReconnect ~= true
 				or autoServerHopState.Utility.PauseScript == true
@@ -17112,7 +16951,7 @@ if MINIGAME_MODE then
 				beginReconnectAR()
 			end
 		end)
-		TeleportServiceAR.TeleportInitFailed:Connect(function(player, _, errorMessage)
+		autoServerHopState.ConnectPersistent(TeleportServiceAR.TeleportInitFailed, function(player, _, errorMessage)
 			if player ~= LocalPlayerAR or not screenGui.Parent then return end
 			if autoServerHopState.Utility.AutoReconnect ~= true
 				or autoServerHopState.Utility.PauseScript == true
@@ -20309,33 +20148,6 @@ if MINIGAME_MODE then
 					and string.find(string.lower(name), "%f[%a]meta%f[%A]") ~= nil)
 			return baseRarity == "Infinity" and metaMarked and "Meta" or baseRarity
 		end
-		local function itemMutationAAC(item)
-			if type(item) ~= "table" then return nil end
-			local value = item.mutation or item.Mutation
-				or (item.sub and (item.sub.mutation or item.sub.Mutation))
-			return type(value) == "string" and value or nil
-		end
-		local function itemTraitsAAC(item)
-			if type(item) ~= "table" then return {} end
-			local value = item.traits or item.Traits
-				or (item.sub and (item.sub.traits or item.sub.Traits))
-			local result = {}
-			if type(value) == "table" then
-				for key, enabled in pairs(value) do
-					if type(key) == "number" then
-						if enabled ~= nil and enabled ~= false then result[tostring(enabled)] = true end
-					elseif enabled ~= nil and enabled ~= false then
-						result[tostring(key)] = true
-					end
-				end
-			elseif type(value) == "string" then
-				for trait in string.gmatch(value, "[^,|;]+") do
-					trait = string.gsub(trait, "^%s*(.-)%s*$", "%1")
-					if trait ~= "" then result[trait] = true end
-				end
-			end
-			return result
-		end
 		local function itemPassesAcceptFiltersAAC(item, rarity)
 			local utility = autoServerHopState.Utility
 			local prefix = "AutoAccept" .. tostring(rarity)
@@ -22120,21 +21932,6 @@ if MINIGAME_MODE then
 				or item.Mutation
 				or (item.sub and (item.sub.mutation or item.sub.Mutation))
 			return type(mutation) == "string" and mutation or nil
-		end
-		local function brainrotTraitsAB(item)
-			if type(item) ~= "table" then return {} end
-			local traits = item.traits
-				or item.Traits
-				or (item.sub and (item.sub.traits or item.sub.Traits))
-			if type(traits) == "table" then return traits end
-			if type(traits) == "string" and traits ~= "" then
-				local parsed = {}
-				for trait in string.gmatch(traits, "[^,]+") do
-					parsed[#parsed + 1] = trait
-				end
-				return parsed
-			end
-			return {}
 		end
 		local function itemPassesGlobalFiltersAB(item)
 			-- Eternal is receive-only. Simple Autofarm also never sells Paradox.
