@@ -95,7 +95,7 @@ end
 local DESKTOP_GUI_WIDTH = 800
 local DESKTOP_GUI_HEIGHT = 600
 local MOBILE_GUI_WIDTH = 500
-local MOBILE_GUI_HEIGHT = 500
+local MOBILE_GUI_HEIGHT = 300
 local FONT_SIZE_SCALE = 0.90
 local function isPhonePanelLayout()
 	local currentCamera = workspace.CurrentCamera or camera
