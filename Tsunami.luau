@@ -48,6 +48,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
+local TUFFHUB_HOP_PLACE_ID = 111917342868480
 local New = Instance.new
 local function safeRepGet(rep, key)
 	if not rep or type(rep.get) ~= "function" then return nil end
@@ -91,8 +92,10 @@ end
 if viewportSize.X < 320 or viewportSize.Y < 240 then
 	viewportSize = V2(1920, 1080)
 end
-local DEFAULT_WIDTH_SCALE = 0.60
-local DEFAULT_HEIGHT_SCALE = 0.70
+local DESKTOP_GUI_WIDTH = 800
+local DESKTOP_GUI_HEIGHT = 600
+local MOBILE_GUI_WIDTH = 300
+local MOBILE_GUI_HEIGHT = 200
 local FONT_SIZE_SCALE = 0.90
 local function isPhonePanelLayout()
 	local currentCamera = workspace.CurrentCamera or camera
@@ -392,10 +395,14 @@ if MINIGAME_MODE then
 		RuntimeStartedAt = os.clock(),
 		RuntimeBoothScriptRemoveUntil = {},
 		RuntimeTempBlacklistedUserIds = {},
+		RuntimeAvoidPlayerUntil = {},
 		RuntimeCanceledTradeCounts = {},
 		RuntimeCanceledTradeLastCountAt = {},
 		RuntimeUtilityToggleRows = {},
-		RuntimeServerHopPending = false,
+		-- Freeze all automation until the initial server stay/hop decision is complete.
+		RuntimeServerHopPending = true,
+		RuntimeStartupServerDecisionResolved = false,
+		RuntimePresenceStartupResolved = false,
 		RuntimeScriptUserHopRequested = false,
 		RuntimeScriptUserIds = {},
 		RuntimeScriptUserServerIds = {},
@@ -403,7 +410,9 @@ if MINIGAME_MODE then
 		RuntimePresenceStartedAt = os.clock(),
 		RuntimePresencePlayerSeenAt = {},
 		RuntimeCheckServerHopRequested = false,
+		RuntimeCheckServerStartupResolved = false,
 		RuntimeManualServerHopRequested = false,
+		RuntimeManualKickRequested = false,
 		RuntimePlayedMinigameUserIds = {},
 		RuntimeOwnedBrainrotOptionLabels = {},
 		RuntimeAutoSitBusy = false,
@@ -500,10 +509,12 @@ if MINIGAME_MODE then
 		RegularOpeningSpecificLevels = {},
 
 		-- Regular-trade fallbacks. These never modify minigame/wager fallback settings.
-		RegularFallbackOffers = false,
+		RegularFallbackOffers = false, -- next-highest lower-rarity fallback
+		RegularFallbackToNextHigherRarityBrainrot = false,
 		RegularFallbackToSpecificItems = false,
 		RegularFallbackToTokens = false,
 		RegularFallbackNextLowerRarityAmount = 1,
+		RegularFallbackNextHigherRarityAmount = 1,
 		RegularFallbackAvoidMutationsEnabled = false,
 		RegularFallbackAvoidMutations = {},
 		RegularFallbackAvoidTraitsEnabled = false,
@@ -540,9 +551,11 @@ if MINIGAME_MODE then
 		FallbackOffers = false,
 		FallbackToTokens = false,
 		FallbackToNextLowerRarityBrainrot = false,
+		FallbackToNextHigherRarityBrainrot = false,
 		FallbackToSpecificBrainrotItem = false,
 		FallbackSpecificBrainrotItem = nil,
 		FallbackNextLowerRarityAmount = 1,
+		FallbackNextHigherRarityAmount = 1,
 		FallbackAvoidMutationsEnabled = false,
 		FallbackAvoidMutations = {},
 		FallbackAvoidTraitsEnabled = false,
@@ -592,6 +605,9 @@ if MINIGAME_MODE then
 		DeleteNonBrainrotsFirst = false,
 		DeleteWorstBrainrotsFirst = false,
 		DeleteInventoryThreshold = 95,
+		NeverDeleteNonBrainrots = false,
+		NeverDeleteRaritiesEnabled = false,
+		NeverDeleteRarities = {},
 		NeverDeleteEnabled = false,
 		NeverDeleteItems = {}, -- legacy migration source
 		NeverDeleteSpecificItems = {
@@ -693,6 +709,7 @@ if MINIGAME_MODE then
 		TempBlacklistAfterCanceledTrades = 1,
 		PermanentBlacklistPlayersAfterCanceledTrade = false,
 		PermanentBlacklistAfterCanceledTrades = 3,
+		AvoidSamePlayerSeconds = 30,
 		PermanentBlacklistedUserIds = {},
 		CheckServerHopNobodyServer = false,
 		CheckServerHopPlayedEveryoneServer = false,
@@ -2085,6 +2102,33 @@ if MINIGAME_MODE then
 		if type(temporary) == "table" then temporary[key] = nil end
 		return false
 	end
+	autoServerHopState.MarkAvoidRecentPlayer = function(userId)
+		userId = tonumber(userId)
+		local localPlayer = Players.LocalPlayer
+		if not userId or userId <= 0 or (localPlayer and userId == localPlayer.UserId) then return false end
+		local seconds = math.clamp(
+			tonumber(autoServerHopState.Utility.AvoidSamePlayerSeconds) or 30,
+			1,
+			60
+		)
+		autoServerHopState.RuntimeAvoidPlayerUntil =
+			type(autoServerHopState.RuntimeAvoidPlayerUntil) == "table"
+				and autoServerHopState.RuntimeAvoidPlayerUntil or {}
+		autoServerHopState.RuntimeAvoidPlayerUntil[tostring(userId)] = os.clock() + seconds
+		return true
+	end
+	autoServerHopState.IsRecentlyAvoidedPlayer = function(userId)
+		userId = tonumber(userId)
+		if not userId or userId <= 0 then return false end
+		local recent = autoServerHopState.RuntimeAvoidPlayerUntil
+		if type(recent) ~= "table" then return false end
+		local key = tostring(userId)
+		local untilAt = tonumber(recent[key])
+		if not untilAt then return false end
+		if os.clock() < untilAt then return true end
+		recent[key] = nil
+		return false
+	end
 	;(function()
 		local function copyJsonSafe(value, seen)
 			local valueType = type(value)
@@ -2170,9 +2214,11 @@ if MINIGAME_MODE then
 			"RegularOpeningSpecificSizes",
 			"RegularOpeningSpecificLevels",
 			"RegularFallbackOffers",
+			"RegularFallbackToNextHigherRarityBrainrot",
 			"RegularFallbackToSpecificItems",
 			"RegularFallbackToTokens",
 			"RegularFallbackNextLowerRarityAmount",
+			"RegularFallbackNextHigherRarityAmount",
 			"RegularFallbackAvoidMutationsEnabled",
 			"RegularFallbackAvoidMutations",
 			"RegularFallbackAvoidTraitsEnabled",
@@ -2205,9 +2251,11 @@ if MINIGAME_MODE then
 			"FallbackOffers",
 			"FallbackToTokens",
 			"FallbackToNextLowerRarityBrainrot",
+			"FallbackToNextHigherRarityBrainrot",
 			"FallbackToSpecificBrainrotItem",
 			"FallbackSpecificBrainrotItem",
 			"FallbackNextLowerRarityAmount",
+			"FallbackNextHigherRarityAmount",
 			"FallbackAvoidMutationsEnabled",
 			"FallbackAvoidMutations",
 			"FallbackAvoidTraitsEnabled",
@@ -2249,6 +2297,9 @@ if MINIGAME_MODE then
 			"DeleteNonBrainrotsFirst",
 			"DeleteWorstBrainrotsFirst",
 			"DeleteInventoryThreshold",
+			"NeverDeleteNonBrainrots",
+			"NeverDeleteRaritiesEnabled",
+			"NeverDeleteRarities",
 			"NeverDeleteEnabled",
 			"NeverDeleteItems",
 			"NeverDeleteSpecificItems",
@@ -2347,6 +2398,7 @@ if MINIGAME_MODE then
 			"TempBlacklistAfterCanceledTrades",
 			"PermanentBlacklistPlayersAfterCanceledTrade",
 			"PermanentBlacklistAfterCanceledTrades",
+			"AvoidSamePlayerSeconds",
 			"PermanentBlacklistedUserIds",
 			"CheckServerHopNobodyServer",
 			"CheckServerHopPlayedEveryoneServer",
@@ -2479,7 +2531,7 @@ if MINIGAME_MODE then
 				utility[key] = copyJsonSafe(autoServerHopState.Utility[key])
 			end
 			return {
-				Version = 3,
+				Version = 4,
 				MinigameAutoplay = copyJsonSafe(minigameAutoplayState),
 				AutoOffer = copyJsonSafe(autoOfferState),
 				RegularAutoOffer = copyJsonSafe(regularAutoOfferState),
@@ -2518,8 +2570,8 @@ if MINIGAME_MODE then
 			local responseTokens = {
 				Common = 100, Uncommon = 100, Rare = 100, Epic = 100,
 				Legendary = 100, Mythical = 100, Cosmic = 100, Secret = 100,
-				Celestial = 100, Divine = 250, Infinity = 500, Meta = 1000,
-				Paradox = 100, Eternal = 250000,
+				Celestial = 100, Divine = 500, Infinity = 1000, Meta = 2500,
+				Paradox = 25000, Eternal = 250000,
 			}
 			for _, id in ipairs({
 				"ConnectFour", "FootballDraft", "CandyBomb", "Battleship",
@@ -2645,8 +2697,10 @@ if MINIGAME_MODE then
 			utility.FallbackOffers = true
 			utility.FallbackToTokens = true
 			utility.FallbackToNextLowerRarityBrainrot = true
+			utility.FallbackToNextHigherRarityBrainrot = false
 			utility.FallbackToSpecificBrainrotItem = false
 			utility.FallbackNextLowerRarityAmount = 6
+			utility.FallbackNextHigherRarityAmount = 6
 			for rarity, amount in pairs(responseTokens) do
 				utility["FallbackTokens" .. rarity] = amount
 				utility["Fallback" .. rarity .. "OfferAllTokens"] = false
@@ -2922,14 +2976,18 @@ if MINIGAME_MODE then
 				copyJsonSafe(autoServerHopState.CanceledTradeCounts) or {}
 			autoServerHopState.RuntimeCanceledTradeLastCountAt = {}
 			autoServerHopState.RuntimeUtilityToggleRows = {}
-			autoServerHopState.RuntimeServerHopPending = false
+			autoServerHopState.RuntimeServerHopPending = true
+			autoServerHopState.RuntimeStartupServerDecisionResolved = false
+			autoServerHopState.RuntimePresenceStartupResolved = false
 			autoServerHopState.RuntimeScriptUserHopRequested = false
 			autoServerHopState.RuntimeScriptUserIds = {}
 			autoServerHopState.RuntimeScriptUserServerIds = {}
 			autoServerHopState.RuntimeGlobalPresenceConnectedAt = nil
 			autoServerHopState.RuntimePresenceStartedAt = os.clock()
 			autoServerHopState.RuntimeCheckServerHopRequested = false
+			autoServerHopState.RuntimeCheckServerStartupResolved = false
 			autoServerHopState.RuntimeManualServerHopRequested = false
+			autoServerHopState.RuntimeManualKickRequested = false
 			autoServerHopState.RuntimePlayedMinigameUserIds = {}
 			if autoServerHopState.Utility.EquipBestBrainrot == true
 				and autoServerHopState.Utility.EquipBestMountableBrainrot == true
@@ -3006,6 +3064,26 @@ if MINIGAME_MODE then
 					1,
 					6
 				)
+				autoServerHopState.Utility.RegularFallbackNextHigherRarityAmount = math.clamp(
+					math.floor(tonumber(autoServerHopState.Utility.RegularFallbackNextHigherRarityAmount) or 1),
+					1,
+					6
+				)
+				autoServerHopState.Utility.FallbackNextLowerRarityAmount = math.clamp(
+					math.floor(tonumber(autoServerHopState.Utility.FallbackNextLowerRarityAmount) or 1),
+					1,
+					6
+				)
+				autoServerHopState.Utility.FallbackNextHigherRarityAmount = math.clamp(
+					math.floor(tonumber(autoServerHopState.Utility.FallbackNextHigherRarityAmount) or 1),
+					1,
+					6
+				)
+				autoServerHopState.Utility.AvoidSamePlayerSeconds = math.clamp(
+					math.floor(tonumber(autoServerHopState.Utility.AvoidSamePlayerSeconds) or 30),
+					1,
+					60
+				)
 				for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 					local tokenKey = "RegularFallbackTokens" .. rarity
 					autoServerHopState.Utility[tokenKey] = math.clamp(
@@ -3030,10 +3108,22 @@ if MINIGAME_MODE then
 				end
 				if hasSpecific then autoServerHopState.Utility.AutoCancelBasedOnSpecificItems = true end
 			end
-			-- The visible Next Lower Rarity master now directly controls lower-rarity
-			-- fallback behavior; retain that relationship for old profiles.
-			if autoServerHopState.Utility.FallbackOffers == true then
+			-- Version <=3 used the hidden legacy FallbackOffers flag as the visible
+			-- lower-rarity master. Migrate it once; version 4+ persists direction explicitly.
+			if (tonumber(saved.Version) or 1) < 4
+				and autoServerHopState.Utility.FallbackOffers == true
+			then
 				autoServerHopState.Utility.FallbackToNextLowerRarityBrainrot = true
+			end
+			if autoServerHopState.Utility.FallbackToNextLowerRarityBrainrot == true
+				and autoServerHopState.Utility.FallbackToNextHigherRarityBrainrot == true
+			then
+				autoServerHopState.Utility.FallbackToNextHigherRarityBrainrot = false
+			end
+			if autoServerHopState.Utility.RegularFallbackOffers == true
+				and autoServerHopState.Utility.RegularFallbackToNextHigherRarityBrainrot == true
+			then
+				autoServerHopState.Utility.RegularFallbackToNextHigherRarityBrainrot = false
 			end
 			-- Convert legacy singular per-rarity fallback choices to the new
 			-- multi-choice tables without discarding an existing selection.
@@ -3394,7 +3484,7 @@ if MINIGAME_MODE then
 			end
 			return ok
 		end
-		local SIMPLE_AUTOFARM_PROFILE_VERSION = 10
+		local SIMPLE_AUTOFARM_PROFILE_VERSION = 11
 		local function migrateSimpleAutofarmProfile(simple)
 			if type(simple) ~= "table" or type(simple.Profile) ~= "table" then return end
 			local version = math.floor(tonumber(simple.Version) or 1)
@@ -3403,7 +3493,7 @@ if MINIGAME_MODE then
 			local serverHop = type(profile.ServerHop) == "table" and profile.ServerHop or nil
 			local utility = serverHop and type(serverHop.Utility) == "table" and serverHop.Utility or nil
 			if not serverHop or not utility then return end
-			local responseTokens = {Common=100,Uncommon=100,Rare=100,Epic=100,Legendary=100,Mythical=100,Cosmic=100,Secret=100,Celestial=100,Divine=250,Infinity=500,Meta=1000,Paradox=100,Eternal=250000}
+			local responseTokens = {Common=100,Uncommon=100,Rare=100,Epic=100,Legendary=100,Mythical=100,Cosmic=100,Secret=100,Celestial=100,Divine=500,Infinity=1000,Meta=2500,Paradox=25000,Eternal=250000}
 			serverHop.Enabled=true; serverHop.ServerTimeEnabled=true; serverHop.ServerTime=5
 			serverHop.TimeSinceLastGameEnabled=true; serverHop.TimeSinceLastGame=3
 			serverHop.WinWagerTimeAdded=3; serverHop.BoothPurchaseTimeAdded=1
@@ -3427,7 +3517,7 @@ if MINIGAME_MODE then
 			utility.AutoChooseRound1Delay=1; utility.AutoChooseRound2Delay=2.5; utility.AutoChooseRound3Delay=5
 			utility.AutoChooseRounds=true; utility.RoundsToChoose="1"; utility.MatchOpponentRounds=true; utility.FallbackRoundChoices={["3"]=true,["5"]=true}
 			utility.AutoChooseRoundsRound1Delay=1; utility.AutoChooseRoundsRound2Delay=2.5; utility.AutoChooseRoundsRound3Delay=5
-			utility.FallbackOffers=true; utility.FallbackToTokens=true; utility.FallbackToNextLowerRarityBrainrot=true; utility.FallbackToSpecificBrainrotItem=false; utility.FallbackNextLowerRarityAmount=6
+			utility.FallbackOffers=true; utility.FallbackToTokens=true; utility.FallbackToNextLowerRarityBrainrot=true; utility.FallbackToNextHigherRarityBrainrot=false; utility.FallbackToSpecificBrainrotItem=false; utility.FallbackNextLowerRarityAmount=6; utility.FallbackNextHigherRarityAmount=6
 			for rarity,amount in pairs(responseTokens) do utility["FallbackTokens"..rarity]=amount; utility["Fallback"..rarity.."OfferAllTokens"]=false end
 			utility.AutoBooth=true; utility.AutoBoothName="hurry up n buy"; utility.AutoBoothListBestFirst=false; utility.AutoBoothListWorstFirst=true; utility.AutoBoothAvoidSignedBrainrots=true
 			for index=1,14 do
@@ -3561,6 +3651,10 @@ if MINIGAME_MODE then
 			end
 			autoServerHopState.RuntimeSimpleAutofarmTargetRarity = nil
 			autoServerHopState.RuntimePlayedMinigameUserIds = {}
+			autoServerHopState.RuntimeServerHopPending = true
+			autoServerHopState.RuntimeStartupServerDecisionResolved = false
+			autoServerHopState.RuntimePresenceStartupResolved = false
+			autoServerHopState.RuntimeCheckServerStartupResolved = false
 			refreshSettingsUiSoon()
 			return true
 		end
@@ -3612,9 +3706,14 @@ if MINIGAME_MODE then
 			autoServerHopState.CanceledTradeCounts = {}
 			autoServerHopState.RecentServerIds = {}
 			autoServerHopState.RuntimeTempBlacklistedUserIds = {}
+			autoServerHopState.RuntimeAvoidPlayerUntil = {}
 			autoServerHopState.RuntimeCanceledTradeCounts = {}
 			autoServerHopState.RuntimeCanceledTradeLastCountAt = {}
-			autoServerHopState.RuntimeServerHopPending = false
+			autoServerHopState.RuntimeServerHopPending = true
+			autoServerHopState.RuntimeStartupServerDecisionResolved = false
+			autoServerHopState.RuntimePresenceStartupResolved = false
+			autoServerHopState.RuntimeCheckServerStartupResolved = false
+			autoServerHopState.RuntimeManualKickRequested = false
 			local defaultUtility = defaultServerHop.Utility or {}
 			for _, key in ipairs(utilityKeys) do
 				autoServerHopState.Utility[key] = copyJsonSafe(defaultUtility[key])
@@ -3672,6 +3771,7 @@ if MINIGAME_MODE then
 		autoServerHopState.RuntimeScriptUserHopRequested = false
 		autoServerHopState.RuntimeCheckServerHopRequested = false
 		autoServerHopState.RuntimeManualServerHopRequested = false
+		autoServerHopState.RuntimeManualKickRequested = false
 		autoServerHopState.RuntimeAutoSitBusy = false
 		autoServerHopState.RuntimeBoothMutationBusy = false
 		autoServerHopState.RuntimeBoothListingsPending = false
@@ -3687,8 +3787,79 @@ if MINIGAME_MODE then
 			end
 		end)
 	end
+	-- One authoritative startup gate: no automation acts until every enabled
+	-- server-level stay/hop decision has completed.
+	autoServerHopState.RefreshStartupServerDecision = function()
+		if autoServerHopState.RuntimeStartupServerDecisionResolved == true then return true end
+		local utility = autoServerHopState.Utility
+		local checkEnabled = utility.CheckServerHopNobodyServer == true
+			or utility.CheckServerHopPlayedEveryoneServer == true
+			or utility.CheckServerHopNobodyMinigamesArea == true
+			or utility.CheckServerHopPlayedEveryoneMinigamesArea == true
+		if not checkEnabled then autoServerHopState.RuntimeCheckServerStartupResolved = true end
+		if autoServerHopState.LeaveIfScriptUserInServer ~= true then
+			autoServerHopState.RuntimePresenceStartupResolved = true
+		end
+		local canStay = autoServerHopState.RuntimeCheckServerStartupResolved == true
+			and autoServerHopState.RuntimePresenceStartupResolved == true
+			and autoServerHopState.RuntimeCheckServerHopRequested ~= true
+			and autoServerHopState.RuntimeScriptUserHopRequested ~= true
+			and autoServerHopState.RuntimeManualServerHopRequested ~= true
+		if canStay then
+			autoServerHopState.RuntimeStartupServerDecisionResolved = true
+			if utility.PauseScript ~= true then autoServerHopState.RuntimeServerHopPending = false end
+			return true
+		end
+		if utility.PauseScript ~= true then autoServerHopState.RuntimeServerHopPending = true end
+		return false
+	end
+	autoServerHopState.AutomationBlocked = function()
+		return autoServerHopState.Utility.PauseScript == true
+			or autoServerHopState.RuntimeStartupServerDecisionResolved ~= true
+			or autoServerHopState.RuntimeServerHopPending == true
+	end
 	if autoServerHopState.Utility.PauseScript == true then
 		task.defer(autoServerHopState.ApplyPauseState, true)
+	else
+		autoServerHopState.RefreshStartupServerDecision()
+	end
+	autoServerHopState.RequestManualHop = function(requireActiveMinigame)
+		if autoServerHopState.Utility.PauseScript == true then return false end
+		if requireActiveMinigame == true then
+			local activeFound = false
+			pcall(function()
+				local Replicator = require(
+					ReplicatedStorage:WaitForChild("Client")
+						:WaitForChild("Modules")
+						:WaitForChild("ReplicatorClient")
+				)
+				local active = safeRepGet(Replicator, "ActiveMinigame")
+				activeFound = safeTryIndex(active, {"phase"}) ~= nil
+					or safeTryIndex(active, {"session", "gameId"}) ~= nil
+			end)
+			if not activeFound then return false end
+		end
+		autoServerHopState.RuntimeManualKickRequested = requireActiveMinigame == true
+		autoServerHopState.RuntimeManualServerHopRequested = true
+		autoServerHopState.RuntimeServerHopPending = true
+		if requireActiveMinigame == true then
+			-- Manual Kick is intentionally different from Manual Server Hop: disconnect
+			-- immediately, then let the hop controller teleport to its top-10 random pick.
+			pcall(function()
+				local player = Players.LocalPlayer
+				if player then player:Kick("Manual Kick") end
+			end)
+		end
+		local wake = autoServerHopState.RuntimeServerHopWake
+		if type(wake) == "function" then
+			if requireActiveMinigame == true then
+				-- Kick has already been issued; start destination selection/teleport now.
+				pcall(wake)
+			else
+				task.spawn(wake)
+			end
+		end
+		return true
 	end
 end
 local PANEL_TWEEN_INFO = TI(
@@ -3734,6 +3905,35 @@ screenGui.ResetOnSpawn = false
 screenGui.DisplayOrder = 1000000
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = guiParent
+-- Startup and server-hop freeze runs after normal character controls so no
+-- automation/control path can make the character walk, sit, or drift while a
+-- stay/hop decision is pending.
+do
+	local localPlayerFreeze = Players.LocalPlayer
+	local bindName = "TuffHubServerFreeze_" .. tostring(localPlayerFreeze and localPlayerFreeze.UserId or 0)
+	pcall(RunService.UnbindFromRenderStep, RunService, bindName)
+	RunService:BindToRenderStep(
+		bindName,
+		Enum.RenderPriority.Character.Value + 200,
+		function()
+			if not screenGui.Parent then return end
+			if autoServerHopState.Utility.PauseScript == true
+				or autoServerHopState.RuntimeServerHopPending ~= true
+			then return end
+			local character = localPlayerFreeze and localPlayerFreeze.Character
+			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+			local root = character and character:FindFirstChild("HumanoidRootPart")
+			if humanoid then
+				humanoid.Sit = false
+				if root then pcall(function() humanoid:MoveTo(root.Position) end) end
+				humanoid:Move(Vector3.zero, false)
+			end
+		end
+	)
+	screenGui.Destroying:Connect(function()
+		pcall(RunService.UnbindFromRenderStep, RunService, bindName)
+	end)
+end
 autoServerHopState.RuntimePersistentConnections = {}
 autoServerHopState.ConnectPersistent = function(signal, callback)
 	local connection = signal:Connect(callback)
@@ -3910,12 +4110,10 @@ local function logicalPixelsForRenderedMinimum(renderedPixels)
 	)
 end
 local MIN_WIDTH = roundEvenPixel(
-		viewportSize.X
-			* (isPhonePanelLayout() and 0.92 or DEFAULT_WIDTH_SCALE)
+		isPhonePanelLayout() and MOBILE_GUI_WIDTH or DESKTOP_GUI_WIDTH
 	)
 local MIN_HEIGHT = roundEvenPixel(
-		viewportSize.Y
-			* (isPhonePanelLayout() and 0.88 or DEFAULT_HEIGHT_SCALE)
+		isPhonePanelLayout() and MOBILE_GUI_HEIGHT or DESKTOP_GUI_HEIGHT
 	)
 local FIXED_SIDEBAR_WIDTH = roundPixel(
 		MIN_WIDTH
@@ -3982,10 +4180,8 @@ local function applyDeviceWindowSize(
 	local viewportY = math.max(240, tonumber(currentViewport.Y) or 1080)
 	local phoneLayout = UserInputService.TouchEnabled
 		and math.min(viewportX, viewportY) < 700
-	local renderedWidth = viewportX * (phoneLayout and 0.92 or DEFAULT_WIDTH_SCALE)
-	local renderedHeight = viewportY * (phoneLayout and 0.88 or DEFAULT_HEIGHT_SCALE)
-	renderedWidth = math.min(renderedWidth, viewportX * 0.94)
-	renderedHeight = math.min(renderedHeight, viewportY * 0.92)
+	local renderedWidth = phoneLayout and MOBILE_GUI_WIDTH or DESKTOP_GUI_WIDTH
+	local renderedHeight = phoneLayout and MOBILE_GUI_HEIGHT or DESKTOP_GUI_HEIGHT
 	-- Keep UI controls/text at their established logical size while Roblox is
 	-- resized. Scaling the entire Window a second time made every child shrink
 	-- on smaller desktop windows even though the Window itself was already being
@@ -5769,28 +5965,34 @@ local function tweenChevronColor(
 	end
 end
 autoServerHopState.RuntimePanelChevronAsset=getEmbeddedIconAsset("Chevron")
-local activePanelDropdown
-local dropdownWindowBaseHeight
-local function restoreDropdownWindowHeight()
-	if dropdownWindowBaseHeight and window and window.Parent then
-		window.Size = U2O(window.Size.X.Offset, dropdownWindowBaseHeight)
+-- Store dropdown runtime state/helpers on the existing state table instead of
+-- consuming additional top-level locals. The main UI chunk is already close to
+-- Luau's 200-local/register limit, so keeping this state off the chunk stack
+-- prevents compile failures without changing dropdown behavior.
+autoServerHopState.RuntimeActivePanelDropdown = nil
+autoServerHopState.RuntimeDropdownWindowBaseHeight = nil
+autoServerHopState.RestoreDropdownWindowHeight = function()
+	local baseHeight = autoServerHopState.RuntimeDropdownWindowBaseHeight
+	if baseHeight and window and window.Parent then
+		window.Size = U2O(window.Size.X.Offset, baseHeight)
 	end
-	dropdownWindowBaseHeight = nil
+	autoServerHopState.RuntimeDropdownWindowBaseHeight = nil
 end
-local function pointInsideGui(gui, point)
+autoServerHopState.PointInsideGui = function(gui, point)
 	if not gui or not gui.Parent or not gui.Visible then return false end
 	local pos, size = gui.AbsolutePosition, gui.AbsoluteSize
 	return point.X >= pos.X and point.X <= pos.X + size.X
 		and point.Y >= pos.Y and point.Y <= pos.Y + size.Y
 end
-local function closeActivePanelDropdown()
-	if activePanelDropdown then
-		local popup = activePanelDropdown.Popup
-		local blocker = activePanelDropdown.Blocker
-		local overlay = activePanelDropdown.Overlay
-		local followConnection = activePanelDropdown.FollowConnection
-		local outsideConnection = activePanelDropdown.OutsideConnection
-		local onClose = activePanelDropdown.OnClose
+autoServerHopState.CloseActivePanelDropdown = function()
+	local active = autoServerHopState.RuntimeActivePanelDropdown
+	if active then
+		local popup = active.Popup
+		local blocker = active.Blocker
+		local overlay = active.Overlay
+		local followConnection = active.FollowConnection
+		local outsideConnection = active.OutsideConnection
+		local onClose = active.OnClose
 		if followConnection then followConnection:Disconnect() end
 		if outsideConnection then outsideConnection:Disconnect() end
 		if overlay then
@@ -5799,8 +6001,8 @@ local function closeActivePanelDropdown()
 			if popup then popup:Destroy() end
 			if blocker then blocker:Destroy() end
 		end
-		activePanelDropdown = nil
-		restoreDropdownWindowHeight()
+		autoServerHopState.RuntimeActivePanelDropdown = nil
+		autoServerHopState.RestoreDropdownWindowHeight()
 		if type(onClose) == "function" then task.defer(onClose) end
 	end
 end
@@ -6398,8 +6600,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		local windowBottom = window.AbsolutePosition.Y + window.AbsoluteSize.Y
 		local roomBelow = math.max(0, windowBottom - buttonBottom)
 		if roomBelow < desiredHeight then
-			if dropdownWindowBaseHeight == nil then
-				dropdownWindowBaseHeight = window.Size.Y.Offset
+			if autoServerHopState.RuntimeDropdownWindowBaseHeight == nil then
+				autoServerHopState.RuntimeDropdownWindowBaseHeight = window.Size.Y.Offset
 			end
 			local currentCamera = workspace.CurrentCamera or camera
 			local viewport = currentCamera and currentCamera.ViewportSize or viewportSize
@@ -6431,28 +6633,28 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		local openedAt = os.clock()
 		local outsideConnection
 		outsideConnection = UserInputService.InputBegan:Connect(function(input)
-			if not activePanelDropdown or activePanelDropdown.Popup ~= popup then return end
+			if not autoServerHopState.RuntimeActivePanelDropdown or autoServerHopState.RuntimeActivePanelDropdown.Popup ~= popup then return end
 			if input.UserInputType ~= Enum.UserInputType.MouseButton1
 				and input.UserInputType ~= Enum.UserInputType.Touch
 			then return end
 			if os.clock() - openedAt < 0.05 then return end
-			if pointInsideGui(popup, input.Position) or pointInsideGui(button, input.Position) then return end
+			if autoServerHopState.PointInsideGui(popup, input.Position) or autoServerHopState.PointInsideGui(button, input.Position) then return end
 			task.defer(function()
-				if activePanelDropdown and activePanelDropdown.Popup == popup then
-					closeActivePanelDropdown()
+				if autoServerHopState.RuntimeActivePanelDropdown and autoServerHopState.RuntimeActivePanelDropdown.Popup == popup then
+					autoServerHopState.CloseActivePanelDropdown()
 				end
 			end)
 		end)
-		if activePanelDropdown and activePanelDropdown.Popup == popup then
-			activePanelDropdown.OutsideConnection = outsideConnection
+		if autoServerHopState.RuntimeActivePanelDropdown and autoServerHopState.RuntimeActivePanelDropdown.Popup == popup then
+			autoServerHopState.RuntimeActivePanelDropdown.OutsideConnection = outsideConnection
 		end
 	end
 	local function openManagedMultiDropdown(button, options, selection, labelProvider, placeholder, onChanged, canSelect, onClosed)
-		if activePanelDropdown and activePanelDropdown.Button == button then
-			closeActivePanelDropdown()
+		if autoServerHopState.RuntimeActivePanelDropdown and autoServerHopState.RuntimeActivePanelDropdown.Button == button then
+			autoServerHopState.CloseActivePanelDropdown()
 			return
 		end
-		closeActivePanelDropdown()
+		autoServerHopState.CloseActivePanelDropdown()
 		options = type(options) == "table" and options or {}
 		selection = type(selection) == "table" and selection or {}
 		labelProvider = type(labelProvider) == "function" and labelProvider or tostring
@@ -6579,7 +6781,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		end
 		search:GetPropertyChangedSignal("Text"):Connect(filter)
 		local follow = RunService.RenderStepped:Connect(syncPosition)
-		activePanelDropdown = {Popup=popup, Button=button, Overlay=overlay, FollowConnection=follow, OnClose=onClosed}
+		autoServerHopState.RuntimeActivePanelDropdown = {Popup=popup, Button=button, Overlay=overlay, FollowConnection=follow, OnClose=onClosed}
 		attachDropdownOutsideClose(popup, button, overlay)
 		updateButton()
 		filter()
@@ -6600,7 +6802,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		-- relayoutRows() positions this from the actual bounds of both neighboring
 		-- features. Keep every feature separator inset and visually identical.
 		featureDivider.Position = U2(0.5, 0, 1, featureRowGap * 0.5)
-		featureDivider.Size = U2(0.94, 0, 0, LINE_THICKNESS)
+		featureDivider.Size = U2(1, 0, 0, LINE_THICKNESS)
 		featureDivider.BackgroundColor3 = LINE_COLOR
 		featureDivider.BackgroundTransparency = 0.52
 		featureDivider.BorderSizePixel = 0
@@ -6852,23 +7054,11 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					local refresh = rawget(_G, "__TUFFHUB_REFRESH_ALL_SETTINGS_UI")
 					if type(refresh) == "function" then pcall(refresh) end
 				elseif definition.Action == "ManualServerHop" then
-					autoServerHopState.RuntimeManualServerHopRequested = true
-					autoServerHopState.RuntimeServerHopPending = true
+					local request = autoServerHopState.RequestManualHop
+					if type(request) == "function" then request(false) end
 				elseif definition.Action == "ManualKickMinigame" then
-					pcall(function()
-						local RS = ReplicatedStorage
-						local Replicator = require(
-							RS:WaitForChild("Client")
-								:WaitForChild("Modules")
-								:WaitForChild("ReplicatorClient")
-						)
-						local active = Replicator.get("ActiveMinigame")
-						local phase = active and active:TryIndex({"phase"})
-						local gameId = active and active:TryIndex({"session", "gameId"})
-						if phase ~= nil or gameId ~= nil then
-							Players.LocalPlayer:Kick("Manual Minigame Kick")
-						end
-					end)
+					local request = autoServerHopState.RequestManualHop
+					if type(request) == "function" then request(true) end
 				end
 			end)
 		end
@@ -7452,7 +7642,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				end)
 			end
 			rebuildAutoOfferSource = function()
-				closeActivePanelDropdown()
+				autoServerHopState.CloseActivePanelDropdown()
 				for _, child in ipairs(secondaryContainer:GetChildren()) do child:Destroy() end
 				local y = px(2)
 				makeToggleRow("Offer Brainrots / Items By Rarity", y, function() return stateEntry.OfferModeRarity == true end, function(v) stateEntry.OfferModeRarity = v end)
@@ -7565,7 +7755,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				return entry
 			end
 			rebuildTradeChatOffers = function()
-				closeActivePanelDropdown()
+				autoServerHopState.CloseActivePanelDropdown()
 				for _, child in ipairs(secondaryContainer:GetChildren()) do child:Destroy() end
 				local entries = stateEntry[entriesKey]
 				if type(entries) ~= "table" or #entries == 0 then entries={blankTradeChatOffer()} stateEntry[entriesKey]=entries end
@@ -7696,11 +7886,11 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					)
 					return
 				end
-				if activePanelDropdown and activePanelDropdown.Button == button then
-					closeActivePanelDropdown()
+				if autoServerHopState.RuntimeActivePanelDropdown and autoServerHopState.RuntimeActivePanelDropdown.Button == button then
+					autoServerHopState.CloseActivePanelDropdown()
 					return
 				end
-				closeActivePanelDropdown()
+				autoServerHopState.CloseActivePanelDropdown()
 				options = type(options) == "table" and options or {}
 				local searchHeight = px(29)
 				local contentHeight = searchHeight + px(6) + (#options + 1) * px(25)
@@ -7786,7 +7976,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					optionRows[#optionRows + 1] = {Button=row, Option=option, Search=string.lower(tostring(label))}
 					row.MouseButton1Click:Connect(function()
 						if type(onSingle) == "function" then onSingle(option) end
-						closeActivePanelDropdown()
+						autoServerHopState.CloseActivePanelDropdown()
 						task.defer(rebuildSpecificCriteria)
 					end)
 				end
@@ -7809,7 +7999,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				end
 				search:GetPropertyChangedSignal("Text"):Connect(filter)
 				local follow = RunService.RenderStepped:Connect(syncPosition)
-				activePanelDropdown = {Popup=popup, Button=button, Overlay=overlay, FollowConnection=follow}
+				autoServerHopState.RuntimeActivePanelDropdown = {Popup=popup, Button=button, Overlay=overlay, FollowConnection=follow}
 				attachDropdownOutsideClose(popup, button, overlay)
 				filter()
 				syncPosition()
@@ -8299,11 +8489,11 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			dropdownButton:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncUtilityDropdownText)
 			dropdownButton:GetPropertyChangedSignal("TextSize"):Connect(syncUtilityDropdownText)
 			dropdownButton.MouseButton1Click:Connect(function()
-				if activePanelDropdown and activePanelDropdown.Button == dropdownButton then
-					closeActivePanelDropdown()
+				if autoServerHopState.RuntimeActivePanelDropdown and autoServerHopState.RuntimeActivePanelDropdown.Button == dropdownButton then
+					autoServerHopState.CloseActivePanelDropdown()
 					return
 				end
-				closeActivePanelDropdown()
+				autoServerHopState.CloseActivePanelDropdown()
 				sanitizeUtilityMultiSelection()
 				local popupOptions = {}
 				local excluded = definition.ExcludeUtilityDropdownKey
@@ -8383,7 +8573,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				task.defer(syncPopupPosition)
 				local followConnection =
 					RunService.RenderStepped:Connect(syncPopupPosition)
-				activePanelDropdown = {
+				autoServerHopState.RuntimeActivePanelDropdown = {
 					Popup = popup,
 					Button = dropdownButton,
 					Blocker = blocker,
@@ -8393,25 +8583,25 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				local openedAt = os.clock()
 				local outsideConnection
 				outsideConnection = UserInputService.InputBegan:Connect(function(input)
-					if not activePanelDropdown or activePanelDropdown.Popup ~= popup then return end
+					if not autoServerHopState.RuntimeActivePanelDropdown or autoServerHopState.RuntimeActivePanelDropdown.Popup ~= popup then return end
 					if input.UserInputType ~= Enum.UserInputType.MouseButton1
 						and input.UserInputType ~= Enum.UserInputType.Touch
 					then
 						return
 					end
 					if os.clock() - openedAt < 0.05 then return end
-					if pointInsideGui(popup, input.Position)
-						or pointInsideGui(dropdownButton, input.Position)
+					if autoServerHopState.PointInsideGui(popup, input.Position)
+						or autoServerHopState.PointInsideGui(dropdownButton, input.Position)
 					then
 						return
 					end
 					task.defer(function()
-						if activePanelDropdown and activePanelDropdown.Popup == popup then
-							closeActivePanelDropdown()
+						if autoServerHopState.RuntimeActivePanelDropdown and autoServerHopState.RuntimeActivePanelDropdown.Popup == popup then
+							autoServerHopState.CloseActivePanelDropdown()
 						end
 					end)
 				end)
-				activePanelDropdown.OutsideConnection = outsideConnection
+				autoServerHopState.RuntimeActivePanelDropdown.OutsideConnection = outsideConnection
 				local dropdownSearch = New("TextBox")
 				dropdownSearch.Name = "Search"
 				dropdownSearch.Position = U2O(px(4), px(4))
@@ -8536,7 +8726,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 							end
 						end
 						syncUtilityDropdownText()
-						closeActivePanelDropdown()
+						autoServerHopState.CloseActivePanelDropdown()
 					end)
 				end
 				refreshUtilityOptionVisuals()
@@ -8878,11 +9068,11 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				end
 			end
 			dropdownButton.MouseButton1Click:Connect(function()
-				if activePanelDropdown and activePanelDropdown.Button == dropdownButton then
-					closeActivePanelDropdown()
+				if autoServerHopState.RuntimeActivePanelDropdown and autoServerHopState.RuntimeActivePanelDropdown.Button == dropdownButton then
+					autoServerHopState.CloseActivePanelDropdown()
 					return
 				end
-				closeActivePanelDropdown()
+				autoServerHopState.CloseActivePanelDropdown()
 				local overlay = New("Frame")
 				overlay.Name = "DropdownOverlay"
 				overlay.AnchorPoint = V2(0, 0)
@@ -8969,7 +9159,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				stroke.Transparency = LINE_TRANSPARENCY
 				stroke.Parent = popup
 				local followConnection = RunService.RenderStepped:Connect(syncPopupPosition)
-				activePanelDropdown = {
+				autoServerHopState.RuntimeActivePanelDropdown = {
 					Popup = popup,
 					Button = dropdownButton,
 					Blocker = blocker,
@@ -8980,8 +9170,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				local outsideConnection
 				outsideConnection = UserInputService.InputBegan:Connect(
 					function(input)
-						if not activePanelDropdown
-							or activePanelDropdown.Popup ~= popup
+						if not autoServerHopState.RuntimeActivePanelDropdown
+							or autoServerHopState.RuntimeActivePanelDropdown.Popup ~= popup
 						then
 							return
 						end
@@ -8994,21 +9184,21 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 							return
 						end
 						local point = input.Position
-						if pointInsideGui(popup, point)
-							or pointInsideGui(dropdownButton, point)
+						if autoServerHopState.PointInsideGui(popup, point)
+							or autoServerHopState.PointInsideGui(dropdownButton, point)
 						then
 							return
 						end
 						task.defer(function()
-							if activePanelDropdown
-								and activePanelDropdown.Popup == popup
+							if autoServerHopState.RuntimeActivePanelDropdown
+								and autoServerHopState.RuntimeActivePanelDropdown.Popup == popup
 							then
-								closeActivePanelDropdown()
+								autoServerHopState.CloseActivePanelDropdown()
 							end
 						end)
 					end
 				)
-				activePanelDropdown.OutsideConnection = outsideConnection
+				autoServerHopState.RuntimeActivePanelDropdown.OutsideConnection = outsideConnection
 				local dropdownSearch = New("TextBox")
 				dropdownSearch.Name = "Search"
 				dropdownSearch.Position = U2O(px(4), px(4))
@@ -9110,7 +9300,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 							end
 							updateDropdownText(dropdownButton, stateEntry, "Any", definition.Options)
 							refreshOptionVisuals()
-							closeActivePanelDropdown()
+							autoServerHopState.CloseActivePanelDropdown()
 							relayoutRows()
 							return
 						end
@@ -9582,23 +9772,11 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					return
 				end
 				if definition.MomentaryAction == "ManualServerHop" then
-					autoServerHopState.RuntimeManualServerHopRequested = true
-					autoServerHopState.RuntimeServerHopPending = true
+					local request = autoServerHopState.RequestManualHop
+					if type(request) == "function" then request(false) end
 				elseif definition.MomentaryAction == "ManualKickMinigame" then
-					pcall(function()
-						local RS = ReplicatedStorage
-						local Replicator = require(
-							RS:WaitForChild("Client")
-								:WaitForChild("Modules")
-								:WaitForChild("ReplicatorClient")
-						)
-						local active = Replicator.get("ActiveMinigame")
-						local phase = active and active:TryIndex({"phase"})
-						local gameId = active and active:TryIndex({"session", "gameId"})
-						if phase ~= nil or gameId ~= nil then
-							Players.LocalPlayer:Kick("Manual Minigame Kick")
-						end
-					end)
+					local request = autoServerHopState.RequestManualHop
+					if type(request) == "function" then request(true) end
 				end
 				featureEnabled = false
 				if stateEntry and definition.UtilityToggleKey then
@@ -9656,6 +9834,10 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					if toggledUtilityKey == "PauseScript" then
 						local applyPause = autoServerHopState.ApplyPauseState
 						if type(applyPause) == "function" then pcall(applyPause, featureEnabled) end
+						if featureEnabled ~= true then
+							local refreshDecision = autoServerHopState.RefreshStartupServerDecision
+							if type(refreshDecision) == "function" then pcall(refreshDecision) end
+						end
 					end
 					if toggledUtilityKey == "FallbackOffers" then
 						stateEntry.FallbackToNextLowerRarityBrainrot = featureEnabled
@@ -9670,7 +9852,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 							or stateEntry.AutoEquipModeHoldMount == true
 					end
 					if utilityExclusiveGroup then
-						if activePanelDropdown then closeActivePanelDropdown() end
+						if autoServerHopState.RuntimeActivePanelDropdown then autoServerHopState.CloseActivePanelDropdown() end
 						refreshUtilityChildVisibility()
 					end
 				end
@@ -9688,7 +9870,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 							)
 						end
 					end
-					if activePanelDropdown then closeActivePanelDropdown() end
+					if autoServerHopState.RuntimeActivePanelDropdown then autoServerHopState.CloseActivePanelDropdown() end
 					refreshUtilityChildVisibility()
 				end
 				relayoutRows()
@@ -9703,7 +9885,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			elseif isServerHop then
 				if stateEntry then stateEntry[definition.ServerHopKey] = featureEnabled end
 				if isServerHopMaster then
-					if activePanelDropdown then closeActivePanelDropdown() end
+					if autoServerHopState.RuntimeActivePanelDropdown then autoServerHopState.CloseActivePanelDropdown() end
 					for _, rowData in ipairs(featureRows) do
 						if rowData.ServerHopChild then
 							rowData.Row.Visible = featureEnabled
@@ -9735,7 +9917,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				end
 			elseif definition and minigameAutoplayState then
 				minigameAutoplayState[definition.Id] = featureEnabled
-				if activePanelDropdown then closeActivePanelDropdown() end
+				if autoServerHopState.RuntimeActivePanelDropdown then autoServerHopState.CloseActivePanelDropdown() end
 				refreshUtilityChildVisibility()
 				relayoutRows()
 			end
@@ -11553,6 +11735,26 @@ end)()
 			{Label = "Avoid Deleting These Levels", UtilityMultiDropdownKey = "AvoidDeletingLevels",
 				SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
 			{
+				Label = "Never Delete Non Brainrots",
+				UtilityToggleKey = "NeverDeleteNonBrainrots",
+				UtilityParentKey = "AutoDeleteWorstInventory",
+				SeparatorGroup = "NeverDeleteProtectionGroup",
+			},
+			{
+				Label = "Never Delete These Rarities",
+				UtilityToggleKey = "NeverDeleteRaritiesEnabled",
+				UtilityParentKey = "AutoDeleteWorstInventory",
+				SeparatorGroup = "NeverDeleteProtectionGroup",
+			},
+			{
+				Label = "Rarities To Never Delete",
+				UtilityMultiDropdownKey = "NeverDeleteRarities",
+				UtilityParentKeys = {"AutoDeleteWorstInventory", "NeverDeleteRaritiesEnabled"},
+				SeparatorGroup = "NeverDeleteProtectionGroup",
+				Placeholder = "Select",
+				OptionsProvider = function() return BRAINROT_RARITY_OPTIONS end,
+			},
+			{
 				Label = "Never Delete",
 				UtilityToggleKey = "NeverDeleteEnabled",
 				UtilityParentKey = "AutoDeleteWorstInventory",
@@ -11573,16 +11775,16 @@ end)()
 			{Label = "Auto Equip (Hold)", UtilityToggleKey = "AutoEquipModeHold", UtilityExclusiveGroup = "AutoEquipMode", SeparatorGroup = "AutoEquipHoldGroup"},
 			{Label = "Equip Best Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipHoldGroup"},
 			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipHoldGroup"},
-			{Label = "Brainrot To Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipHoldGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Brainrot To Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipHoldGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = false},
 			{Label = "Auto Equip (Mount)", UtilityToggleKey = "AutoEquipModeMount", UtilityExclusiveGroup = "AutoEquipMode", SeparatorGroup = "AutoEquipMountGroup"},
 			{Label = "Equip Best Mountable Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipMountGroup"},
 			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipMountGroup"},
-			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipMountGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedMountableBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipMountGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedMountableBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = false},
 			{Label = "Auto Equip (Hold + Mount)", UtilityToggleKey = "AutoEquipModeHoldMount", UtilityExclusiveGroup = "AutoEquipMode", SeparatorGroup = "AutoEquipHoldMountGroup"},
 			{Label = "Equip Best Brainrot + Mountable Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipHoldMountGroup"},
 			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipHoldMountGroup"},
-			{Label = "Brainrot To Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipHoldMountGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
-			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipHoldMountGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedMountableBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true},
+			{Label = "Brainrot To Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipHoldMountGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = false},
+			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipHoldMountGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedMountableBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = false},
 		}
 	)
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
@@ -11838,13 +12040,20 @@ end)()
 		-- All three fallback types stay visible and independent. Each enabled type
 		-- reveals only its own controls immediately beneath it.
 		local features = {
-			{Label = "Next Lower Rarity Fallback Offers", UtilityToggleKey = "FallbackToNextLowerRarityBrainrot", SeparatorGroup = "MinigameFallbackLowerGroup"},
+			{Label = "Next Highest Lower Rarity Fallback Offers", UtilityToggleKey = "FallbackToNextLowerRarityBrainrot", UtilityExclusiveGroup = "MinigameFallbackRarityDirection", SeparatorGroup = "MinigameFallbackLowerGroup"},
 			{Label = "Amount Of Brainrots To Offer", UtilitySliderKey = "FallbackNextLowerRarityAmount", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
 			{Label = "Avoid Offering Brainrots With These Mutations", UtilityMultiDropdownKey = "FallbackAvoidMutations", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
 			{Label = "Avoid Offering Brainrots With These Traits", UtilityMultiDropdownKey = "FallbackAvoidTraits", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
 			{Label = "Avoid Offering Signed Brainrots", UtilityToggleKey = "FallbackAvoidSignedBrainrots", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot"},
 			{Label = "Avoid Offering Brainrots With These Sizes", UtilityMultiDropdownKey = "FallbackAvoidSizes", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
 			{Label = "Avoid Offering Brainrots At These Levels", UtilityMultiDropdownKey = "FallbackAvoidLevels", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
+			{Label = "Next Highest Higher Rarity Fallback Offers", UtilityToggleKey = "FallbackToNextHigherRarityBrainrot", UtilityExclusiveGroup = "MinigameFallbackRarityDirection", SeparatorGroup = "MinigameFallbackHigherGroup"},
+			{Label = "Amount Of Brainrots To Offer", UtilitySliderKey = "FallbackNextHigherRarityAmount", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
+			{Label = "Avoid Offering Brainrots With These Mutations", UtilityMultiDropdownKey = "FallbackAvoidMutations", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Avoid Offering Brainrots With These Traits", UtilityMultiDropdownKey = "FallbackAvoidTraits", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Avoid Offering Signed Brainrots", UtilityToggleKey = "FallbackAvoidSignedBrainrots", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot"},
+			{Label = "Avoid Offering Brainrots With These Sizes", UtilityMultiDropdownKey = "FallbackAvoidSizes", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+			{Label = "Avoid Offering Brainrots At These Levels", UtilityMultiDropdownKey = "FallbackAvoidLevels", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
 			{Label = "Specific Brainrots / Items Fallback", UtilityToggleKey = "FallbackToSpecificBrainrotItem"},
 		}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
@@ -11866,13 +12075,20 @@ end)()
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Fallbacks, 17, 1, 1, "Minigame Trade Fallbacks", features)
 
 		local regularFeatures = {
-			{Label = "Next Lower Rarity Fallback Offers", UtilityToggleKey = "RegularFallbackOffers", SeparatorGroup = "RegularFallbackLowerGroup"},
+			{Label = "Next Highest Lower Rarity Fallback Offers", UtilityToggleKey = "RegularFallbackOffers", UtilityExclusiveGroup = "RegularFallbackRarityDirection", SeparatorGroup = "RegularFallbackLowerGroup"},
 			{Label = "Amount Of Brainrots To Offer", UtilitySliderKey = "RegularFallbackNextLowerRarityAmount", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
 			{Label = "Avoid Offering Brainrots With These Mutations", UtilityMultiDropdownKey = "RegularFallbackAvoidMutations", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
 			{Label = "Avoid Offering Brainrots With These Traits", UtilityMultiDropdownKey = "RegularFallbackAvoidTraits", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
 			{Label = "Avoid Offering Signed Brainrots", UtilityToggleKey = "RegularFallbackAvoidSignedBrainrots", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers"},
 			{Label = "Avoid Offering Brainrots With These Sizes", UtilityMultiDropdownKey = "RegularFallbackAvoidSizes", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
 			{Label = "Avoid Offering Brainrots At These Levels", UtilityMultiDropdownKey = "RegularFallbackAvoidLevels", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
+			{Label = "Next Highest Higher Rarity Fallback Offers", UtilityToggleKey = "RegularFallbackToNextHigherRarityBrainrot", UtilityExclusiveGroup = "RegularFallbackRarityDirection", SeparatorGroup = "RegularFallbackHigherGroup"},
+			{Label = "Amount Of Brainrots To Offer", UtilitySliderKey = "RegularFallbackNextHigherRarityAmount", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
+			{Label = "Avoid Offering Brainrots With These Mutations", UtilityMultiDropdownKey = "RegularFallbackAvoidMutations", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Avoid Offering Brainrots With These Traits", UtilityMultiDropdownKey = "RegularFallbackAvoidTraits", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Avoid Offering Signed Brainrots", UtilityToggleKey = "RegularFallbackAvoidSignedBrainrots", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot"},
+			{Label = "Avoid Offering Brainrots With These Sizes", UtilityMultiDropdownKey = "RegularFallbackAvoidSizes", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+			{Label = "Avoid Offering Brainrots At These Levels", UtilityMultiDropdownKey = "RegularFallbackAvoidLevels", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
 			{Label = "Specific Brainrots / Items Fallback", UtilityToggleKey = "RegularFallbackToSpecificItems"},
 		}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
@@ -11904,6 +12120,7 @@ end)()
 			{Label = "After This Many Canceled Trades In A Row", UtilitySliderKey = "TempBlacklistAfterCanceledTrades", UtilityParentKey = "TempBlacklistPlayersAfterCanceledTrade", MinValue = 1, MaxValue = 10, UnitLabel = "Trades"},
 			{Label = "Perm Blacklist", UtilityToggleKey = "PermanentBlacklistPlayersAfterCanceledTrade"},
 			{Label = "After This Many Canceled Trades In A Row", UtilitySliderKey = "PermanentBlacklistAfterCanceledTrades", UtilityParentKey = "PermanentBlacklistPlayersAfterCanceledTrade", MinValue = 1, MaxValue = 10, UnitLabel = "Trades"},
+			{Label = "Avoid Going Back To Same Player For This Long", UtilitySliderKey = "AvoidSamePlayerSeconds", MinValue = 1, MaxValue = 60, UnitLabel = "Seconds"},
 		}
 	)
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
@@ -12453,6 +12670,13 @@ local function setSidebarCollapsed(
 	syncRightPanelGeometry(true)
 end
 logoToggleButton.MouseButton1Click:Connect(function()
+	-- On mobile the compact TH logo doubles as a window-drag handle. A drag
+	-- must never also trigger the sidebar-collapse click when it is released.
+	if isPhonePanelLayout()
+		and os.clock() < (tonumber(autoServerHopState.RuntimeSuppressLogoToggleUntil) or 0)
+	then
+		return
+	end
 	setSidebarCollapsed(
 		not sidebarCollapsed
 	)
@@ -12870,6 +13094,8 @@ autoServerHopState.ConnectPersistent(UserInputService.InputBegan,
 		StartPosition = nil,
 		TouchInput = nil,
 		RightContentScrolling = nil,
+		LogoSource = false,
+		Moved = false,
 	}
 	local function belongsToWindow(object)
 		return object == window
@@ -12897,14 +13123,58 @@ autoServerHopState.ConnectPersistent(UserInputService.InputBegan,
 		end
 		return false
 	end
+	local function isMobileLogoObject(object)
+		if not isPhonePanelLayout() or not object then return false end
+		return object == sidebarLogoHolder
+			or object == logoToggleButton
+			or object:IsDescendantOf(sidebarLogoHolder)
+	end
+	local function pointIsInMobilePanelContentLane(point)
+		if not isPhonePanelLayout() or not autoServerHopState.PointInsideGui(rightContent, point) then
+			return false
+		end
+		local activePanels = unsupportedPanelGroups[selectedMenuItem] or {}
+		local localX = point.X - rightContent.AbsolutePosition.X
+		local canvasY = point.Y - rightContent.AbsolutePosition.Y + rightContent.CanvasPosition.Y
+		local minX, maxX, minY, maxY
+		for _, data in ipairs(activePanels) do
+			local frame = data.Frame
+			if frame and frame.Visible then
+				local x = frame.Position.X.Offset
+				local y = frame.Position.Y.Offset
+				local width = frame.AbsoluteSize.X
+				local height = frame.AbsoluteSize.Y
+				minX = minX and math.min(minX, x) or x
+				maxX = maxX and math.max(maxX, x + width) or (x + width)
+				minY = minY and math.min(minY, y) or y
+				maxY = maxY and math.max(maxY, y + height) or (y + height)
+			end
+		end
+		return minX ~= nil
+			and localX >= minX
+			and localX <= maxX
+			and canvasY >= minY
+			and canvasY <= maxY
+	end
 	local function objectBlocksDrag(object, point)
 		if object == window or not object:IsA("GuiObject") then
+			return false
+		end
+		-- Mobile-only: the compact TH logo is an explicit window drag handle.
+		-- Desktop keeps the existing non-draggable logo behavior.
+		if isMobileLogoObject(object) then
 			return false
 		end
 		if isInsidePanel(object) then
 			return true
 		end
 		if object == rightContent then
+			-- On mobile, the vertical lane occupied by panels (including the gaps
+			-- between them) belongs exclusively to content scrolling. Empty black
+			-- space outside that lane remains available for moving the window.
+			if point and pointIsInMobilePanelContentLane(point) then
+				return true
+			end
 			return false
 		end
 		if object == selectedTabTitle and point then
@@ -12949,13 +13219,13 @@ autoServerHopState.ConnectPersistent(UserInputService.InputBegan,
 			end
 			return foundWindow
 		end
-		if not pointInsideGui(window, point) then
+		if not autoServerHopState.PointInsideGui(window, point) then
 			return false
 		end
 		for _, object in ipairs(window:GetDescendants()) do
 			if object:IsA("GuiObject")
 				and object.Visible
-				and pointInsideGui(object, point)
+				and autoServerHopState.PointInsideGui(object, point)
 				and isActuallyVisible(object)
 				and objectBlocksDrag(object, point)
 			then
@@ -12967,7 +13237,7 @@ autoServerHopState.ConnectPersistent(UserInputService.InputBegan,
 	local function startsInScrollableContent(point, inputType)
 		-- Native scrollbar input is not exposed as a child GuiObject. Reserve the
 		-- entire sidebar scrolling region so dragging its thumb never drags the window.
-		if pointInsideGui(menuHolder, point) then
+		if autoServerHopState.PointInsideGui(menuHolder, point) then
 			return true
 		end
 		-- On touch, actual panels/interactables are rejected by objectBlocksDrag.
@@ -12976,9 +13246,11 @@ autoServerHopState.ConnectPersistent(UserInputService.InputBegan,
 		return false
 	end
 	local function beginDrag(input)
+		local mobileLogoSource = isPhonePanelLayout()
+			and autoServerHopState.PointInsideGui(sidebarLogoHolder, input.Position)
 		if not window.Visible
 			or startsInScrollableContent(input.Position, input.UserInputType)
-			or not pointIsEmptyBlackBackground(input.Position)
+			or (not mobileLogoSource and not pointIsEmptyBlackBackground(input.Position))
 		then
 			return
 		end
@@ -12989,6 +13261,8 @@ autoServerHopState.ConnectPersistent(UserInputService.InputBegan,
 			and input
 			or nil
 		dragState.RightContentScrolling = rightContent.ScrollingEnabled
+		dragState.LogoSource = mobileLogoSource == true
+		dragState.Moved = false
 		rightContent.ScrollingEnabled = false
 	end
 	local function endDrag()
@@ -13000,6 +13274,8 @@ autoServerHopState.ConnectPersistent(UserInputService.InputBegan,
 		dragState.StartPosition = nil
 		dragState.TouchInput = nil
 		dragState.RightContentScrolling = nil
+		dragState.LogoSource = false
+		dragState.Moved = false
 	end
 	local function updateDrag(position)
 		if not dragging
@@ -13009,6 +13285,14 @@ autoServerHopState.ConnectPersistent(UserInputService.InputBegan,
 			return
 		end
 		local delta = position - dragState.Start
+		if not dragState.Moved
+			and (math.abs(delta.X) >= px(4) or math.abs(delta.Y) >= px(4))
+		then
+			dragState.Moved = true
+			if dragState.LogoSource then
+				autoServerHopState.RuntimeSuppressLogoToggleUntil = os.clock() + 0.30
+			end
+		end
 		local liveCamera = workspace.CurrentCamera or camera
 		local liveViewport = liveCamera and liveCamera.ViewportSize or viewportSize
 		local absoluteSize = window.AbsoluteSize
@@ -13199,6 +13483,7 @@ if MINIGAME_MODE then
 		local RemotesAS = requireAS(sharedAS:WaitForChild("Remotes"))
 		if not (EconomyMathAS and ReplicatorAS and RemotesAS) then return end
 		local MinigameLeaveQueueAS = RemotesAS.MinigameLeaveQueue
+		local SetSettingAS = RemotesAS.SetSetting
 		local activeMinigameAS
 		local activeNegotiationAS
 		local tablesFolderCacheAS
@@ -13209,6 +13494,7 @@ if MINIGAME_MODE then
 		local lastJoinAttemptAS = 0
 		local blockedPreviousTableAS
 		local lastObservedPhysicalTableAS
+		local lastObservedPartnerUserIdAS
 		local TABLE_APPROACH_DISTANCE_AS = 1.80
 		local TABLE_MOVE_TIMEOUT_AS = 15.0
 		local TABLE_PROMPT_CAPTURE_DISTANCE_AS = 7.50
@@ -13233,6 +13519,19 @@ if MINIGAME_MODE then
 			activeNegotiationAS = safeRepGet(ReplicatorAS, "ActiveNegotiation") or activeNegotiationAS
 		end
 		local tryIndexAS = safeTryIndex
+		local lastPlayerSpeedRequestAS = 0
+		local function ensureAutoSitGameSpeedAS()
+			if not SetSettingAS then return end
+			local playerData = safeRepGet(ReplicatorAS, "PlayerData")
+			local configuredSpeed = tryIndexAS(playerData, {"Settings", "PlayerSpeed"})
+			if tonumber(configuredSpeed) == 50 then return end
+			local now = os.clock()
+			if now - lastPlayerSpeedRequestAS < 0.75 then return end
+			lastPlayerSpeedRequestAS = now
+			pcall(function()
+				SetSettingAS:FireServer("PlayerSpeed", 50)
+			end)
+		end
 		local function minigameQueuedAS()
 			refreshReplicatorsAS()
 			local queued = tryIndexAS(activeMinigameAS, {"queued"})
@@ -13434,6 +13733,8 @@ if MINIGAME_MODE then
 					return true
 				end
 			end
+			local recentChecker = autoServerHopState.IsRecentlyAvoidedPlayer
+			if type(recentChecker) == "function" and recentChecker(player.UserId) then return true end
 			if utility.TempBlacklistPlayersAfterCanceledTrade == true then
 				local checker = autoServerHopState.IsTempBlacklistedUser
 				if type(checker) == "function" and checker(player.UserId) then return true end
@@ -13445,6 +13746,16 @@ if MINIGAME_MODE then
 				if type(permanent) == "table" and permanent[userId] == true then return true end
 			end
 			return false
+		end
+		local function markAvoidPartnerAS(playerOrUserId)
+			local userId
+			if typeof(playerOrUserId) == "Instance" and playerOrUserId:IsA("Player") then
+				userId = playerOrUserId.UserId
+			else
+				userId = tonumber(playerOrUserId)
+			end
+			local marker = autoServerHopState.MarkAvoidRecentPlayer
+			if userId and type(marker) == "function" then marker(userId) end
 		end
 		local function toolPassesSitFiltersAS(tool, rarity)
 			local utility = autoServerHopState.Utility
@@ -13706,6 +14017,12 @@ if MINIGAME_MODE then
 			local _, humanoid, root = characterPartsAS()
 			local folder = tablesFolderAS()
 			if not humanoid or not root or not folder then return false end
+			local departingPartner = expectedTable and waitingPartnerAtTableAS(
+				expectedTable,
+				replicatedTablePlayerCountAS(expectedTable)
+			) or nil
+			local departingUserId = departingPartner and departingPartner.UserId
+				or (expectedTable == lastObservedPhysicalTableAS and lastObservedPartnerUserIdAS or nil)
 			if not minigameQueuedAS() then
 				return false
 			end
@@ -13755,6 +14072,7 @@ if MINIGAME_MODE then
 						LocalPlayerAS:SetAttribute("Seated", false)
 					end
 					pcall(humanoid.ChangeState, humanoid, Enum.HumanoidStateType.Running)
+					markAvoidPartnerAS(departingUserId)
 					return true
 				end
 				if stillRobloxSeated then
@@ -13784,6 +14102,7 @@ if MINIGAME_MODE then
 					LocalPlayerAS:SetAttribute("Seated", false)
 				end
 				pcall(humanoid.ChangeState, humanoid, Enum.HumanoidStateType.Running)
+				markAvoidPartnerAS(departingUserId)
 				return true
 			end
 			return false
@@ -13973,7 +14292,35 @@ if MINIGAME_MODE then
 			local jumpRearmAnchor
 			local nextPartnerScan = 0
 			local deadline = os.clock() + TABLE_MOVE_TIMEOUT_AS
+			local movementBindName = "__TUFFHUB_AUTOSIT_MOVE_" .. tostring(LocalPlayerAS.UserId)
+			local movementBound = false
+			pcall(function() RunServiceAS:UnbindFromRenderStep(movementBindName) end)
+			local function bindContinuousMovementAS()
+				if movementBound then return end
+				local ok = pcall(function()
+					RunServiceAS:BindToRenderStep(
+						movementBindName,
+						Enum.RenderPriority.Character.Value + 1,
+						function()
+							if not activeTarget or not root.Parent or not humanoid.Parent then return end
+							local delta = Vector3.new(
+								activeTarget.X - root.Position.X,
+								0,
+								activeTarget.Z - root.Position.Z
+							)
+							if delta.Magnitude > 0.05 then
+								humanoid:Move(delta.Unit, false)
+							end
+						end
+					)
+				end)
+				movementBound = ok
+			end
 			local function cleanup(stopMovement)
+				if movementBound then
+					pcall(function() RunServiceAS:UnbindFromRenderStep(movementBindName) end)
+					movementBound = false
+				end
 				if blockedConnection then
 					blockedConnection:Disconnect()
 					blockedConnection = nil
@@ -14020,6 +14367,18 @@ if MINIGAME_MODE then
 				end
 				return false
 			end
+			local function driveTowardActiveTargetAS()
+				if not activeTarget or not root.Parent or not humanoid.Parent then return end
+				bindContinuousMovementAS()
+				if movementBound then return end
+				-- Fallback for an executor/client that rejects RenderStep binding.
+				local delta = Vector3.new(
+					activeTarget.X - root.Position.X,
+					0,
+					activeTarget.Z - root.Position.Z
+				)
+				if delta.Magnitude > 0.05 then humanoid:Move(delta.Unit, false) end
+			end
 			local function issueTarget(target)
 				if activeTarget
 					and target
@@ -14028,9 +14387,7 @@ if MINIGAME_MODE then
 					return
 				end
 				activeTarget = target
-				if activeTarget then
-					humanoid:MoveTo(activeTarget)
-				end
+				driveTowardActiveTargetAS()
 			end
 			local function requestNavigationJumpAS(target)
 				local okState, state = pcall(humanoid.GetState, humanoid)
@@ -14053,36 +14410,13 @@ if MINIGAME_MODE then
 				jumpRearmAnchor = root.Position
 				if typeof(target) == "Vector3" then
 					activeTarget = target
-					humanoid:MoveTo(target)
-				elseif activeTarget then
-					humanoid:MoveTo(activeTarget)
 				end
+				driveTowardActiveTargetAS()
 				return true
 			end
 			local function sustainJumpMovementAS()
-				if not jumpActive or not activeTarget or not root.Parent or not humanoid.Parent then
-					return
-				end
-				local okState, state = pcall(humanoid.GetState, humanoid)
-				local airborne = okState and (
-					state == Enum.HumanoidStateType.Jumping
-					or state == Enum.HumanoidStateType.Freefall
-				)
-				if not airborne then
-					return
-				end
-				local delta = Vector3.new(
-					activeTarget.X - root.Position.X,
-					0,
-					activeTarget.Z - root.Position.Z
-				)
-				if delta.Magnitude <= 0.05 then
-					return
-				end
-				humanoid:Move(delta.Unit, false)
-				pcall(function()
-					humanoid:MoveTo(activeTarget)
-				end)
+				if not jumpActive or not activeTarget or not root.Parent or not humanoid.Parent then return end
+				driveTowardActiveTargetAS()
 			end
 			local function rebuildPath()
 				local newPath, newWaypoints = buildShortestRouteAS(
@@ -14131,7 +14465,7 @@ if MINIGAME_MODE then
 					if rebuildPath() then break end
 				end
 				if not waypoints then
-					cleanup(false)
+					cleanup(true)
 					return false, "unreachable"
 				end
 			end
@@ -14141,9 +14475,10 @@ if MINIGAME_MODE then
 					return false, "paused"
 				end
 				local now = os.clock()
+				driveTowardActiveTargetAS()
 				sustainJumpMovementAS()
 				if joinedTargetAS(candidate) then
-					cleanup(false)
+					cleanup(true)
 					return true, "joined"
 				end
 				if candidate.Prompt
@@ -14167,7 +14502,7 @@ if MINIGAME_MODE then
 								return false, "paused"
 							end
 							if joinedTargetAS(candidate) then
-								cleanup(false)
+								cleanup(true)
 								return true, "joined"
 							end
 							local captureValid, captureReason = candidateStillAvailableAS(
@@ -14175,7 +14510,7 @@ if MINIGAME_MODE then
 								candidate.LockedAsPartner == true
 							)
 							if not captureValid then
-								cleanup(false)
+								cleanup(true)
 								return false, captureReason or "claimed"
 							end
 							local seatedHere = physicalCurrentTableAS() == candidate.Model
@@ -14185,12 +14520,16 @@ if MINIGAME_MODE then
 								pcall(function() humanoid:MoveTo(root.Position) end)
 							else
 								local liveCapturePoint = tableApproachPointAS(candidate, root)
-								if liveCapturePoint
-									and flatDistanceAS(root.Position, liveCapturePoint)
+								if liveCapturePoint then
+									if flatDistanceAS(root.Position, liveCapturePoint)
 										> PATH_WAYPOINT_REACHED_AS
-								then
-									activeTarget = liveCapturePoint
-									humanoid:MoveTo(liveCapturePoint)
+									then
+										activeTarget = liveCapturePoint
+										driveTowardActiveTargetAS()
+									else
+										activeTarget = nil
+										humanoid:Move(Vector3.zero, false)
+									end
 								end
 							end
 							local livePrompt = candidate.Prompt
@@ -14215,11 +14554,11 @@ if MINIGAME_MODE then
 							RunServiceAS.Heartbeat:Wait()
 						end
 						if joinedTargetAS(candidate) then
-							cleanup(false)
+							cleanup(true)
 							return true, "joined"
 						end
 						if physicalCurrentTableAS() == candidate.Model then
-							cleanup(false)
+							cleanup(true)
 							return true, "joined"
 						end
 						rebuildPath()
@@ -14230,7 +14569,7 @@ if MINIGAME_MODE then
 					candidate.LockedAsPartner == true
 				)
 				if not routeValid then
-					cleanup(false)
+					cleanup(true)
 					return false, routeReason or "invalid"
 				end
 				if candidate.LockedAsPartner ~= true
@@ -14249,20 +14588,20 @@ if MINIGAME_MODE then
 				end
 				local waypoint = waypoints and waypoints[waypointIndex]
 				if not waypoint then
-					cleanup(false)
+					cleanup(true)
 					return false, "unreachable"
 				end
 				local distanceToWaypoint = flatDistanceAS(root.Position, waypoint.Position)
 				local distanceToDestination = flatDistanceAS(root.Position, destination)
 				if distanceToDestination <= PATH_WAYPOINT_REACHED_AS then
-					cleanup(false)
+					cleanup(true)
 					return true, "reached"
 				end
 				if distanceToWaypoint <= PATH_WAYPOINT_REACHED_AS then
 					waypointIndex += 1
 					waypoint = waypoints[waypointIndex]
 					if not waypoint then
-						cleanup(false)
+						cleanup(true)
 						return true, "reached"
 					end
 					if waypoint.Action == Enum.PathWaypointAction.Jump
@@ -14276,7 +14615,6 @@ if MINIGAME_MODE then
 					lastSampleDistance = flatDistanceAS(root.Position, waypoint.Position)
 					slowSince = nil
 					pathBlocked = false
-					RunServiceAS.Heartbeat:Wait()
 					continue
 				end
 				if now >= nextProgressSample then
@@ -14368,7 +14706,7 @@ if MINIGAME_MODE then
 				end
 				RunServiceAS.Heartbeat:Wait()
 			end
-			cleanup(false)
+			cleanup(true)
 			return joinedTargetAS(candidate), "timeout"
 		end
 		local function joinCandidateAS(candidate)
@@ -14436,6 +14774,10 @@ if MINIGAME_MODE then
 					end
 					if joined then
 						lastObservedPhysicalTableAS = target.Model
+						lastObservedPartnerUserIdAS =
+							typeof(target.Partner) == "Instance"
+							and target.Partner:IsA("Player")
+							and target.Partner.UserId or nil
 						if target.Model ~= blockedPreviousTableAS then
 							blockedPreviousTableAS = nil
 						end
@@ -14523,6 +14865,10 @@ if MINIGAME_MODE then
 					end
 					if switched then
 						lastObservedPhysicalTableAS = target.Model
+						lastObservedPartnerUserIdAS =
+							typeof(target.Partner) == "Instance"
+							and target.Partner:IsA("Player")
+							and target.Partner.UserId or nil
 						if target.Model ~= blockedPreviousTableAS then
 							blockedPreviousTableAS = nil
 						end
@@ -14543,7 +14889,18 @@ if MINIGAME_MODE then
 			autoServerHopState.RuntimeAutoSitBusy = false
 			return ok and switched
 		end
+		local function checkServerBlocksStartupSitAS()
+			local utility = autoServerHopState.Utility
+			local checkEnabled = utility.CheckServerHopNobodyServer == true
+				or utility.CheckServerHopPlayedEveryoneServer == true
+				or utility.CheckServerHopNobodyMinigamesArea == true
+				or utility.CheckServerHopPlayedEveryoneMinigamesArea == true
+			if not checkEnabled then return false end
+			return autoServerHopState.RuntimeCheckServerStartupResolved ~= true
+				or autoServerHopState.RuntimeCheckServerHopRequested == true
+		end
 		local function schedulerStepAS()
+			if checkServerBlocksStartupSitAS() then return end
 			if autoServerHopState.Utility.PauseScript ~= true
 				and os.clock()
 					- (tonumber(autoServerHopState.RuntimePresenceStartedAt) or 0)
@@ -14564,6 +14921,7 @@ if MINIGAME_MODE then
 				and autoSitState.OneOfTwo
 				and autoSitState.OneOfTwo.Enabled == true
 			if not emptyEnabled and not partnerEnabled then return end
+			ensureAutoSitGameSpeedAS()
 			if routeBusyAS or (minigamePlayingAS() or negotiationActiveAS()) then
 				stopMovementAS()
 				return
@@ -14572,9 +14930,18 @@ if MINIGAME_MODE then
 			local queued = minigameQueuedAS()
 			if current then
 				lastObservedPhysicalTableAS = current
+				local observedPartner = waitingPartnerAtTableAS(
+					current,
+					replicatedTablePlayerCountAS(current)
+				)
+				if typeof(observedPartner) == "Instance" and observedPartner:IsA("Player") then
+					lastObservedPartnerUserIdAS = observedPartner.UserId
+				end
 			elseif lastObservedPhysicalTableAS then
 				blockedPreviousTableAS = lastObservedPhysicalTableAS
+				markAvoidPartnerAS(lastObservedPartnerUserIdAS)
 				lastObservedPhysicalTableAS = nil
+				lastObservedPartnerUserIdAS = nil
 			end
 			if queued and not current then
 				local orphanedTable = activeTableAS()
@@ -14632,6 +14999,7 @@ if MINIGAME_MODE then
 			local active = utility.PauseScript ~= true
 				and utility.PauseMinigameFeatures ~= true
 				and autoServerHopState.RuntimeServerHopPending ~= true
+				and not checkServerBlocksStartupSitAS()
 				and not (minigamePlayingAS() or negotiationActiveAS())
 				and (emptyEnabled or partnerEnabled)
 			task.wait(active and 0.20 or 0.90)
@@ -15255,10 +15623,10 @@ if MINIGAME_MODE then
 			end
 			return string.format("%08x", h)
 		end
-		local materialSP = "THP10|" .. tostring(game.PlaceId) .. "|" .. tostring(game.JobId) .. "|8f31c6"
+		local materialSP = "THP10|" .. tostring(TUFFHUB_HOP_PLACE_ID) .. "|" .. tostring(game.JobId) .. "|8f31c6"
 		local serverKeySP = hash32SP(materialSP, 5381) .. hash32SP(materialSP, 2166136261)
 		local roomSP = "thp10-" .. serverKeySP
-		local globalMaterialSP = "THP10G|" .. tostring(game.PlaceId) .. "|8f31c6"
+		local globalMaterialSP = "THP10G|" .. tostring(TUFFHUB_HOP_PLACE_ID) .. "|8f31c6"
 		local globalKeySP = hash32SP(globalMaterialSP, 5381) .. hash32SP(globalMaterialSP, 2166136261)
 		local globalRoomSP = "thp10g-" .. globalKeySP
 		local heartbeatEverySP = 0.75
@@ -15521,20 +15889,40 @@ if MINIGAME_MODE then
 			return true
 		end
 		local function armLeaveIfOlderSP(remoteUserId, remoteStarted, remoteId, remoteSeen)
-			-- Local policy is intentionally unconditional: if this client has
-			-- LeaveIfScriptUserInServer enabled, detecting any other TuffHub
-			-- client in this JobId must make this client leave. A deterministic
-			-- age tie-break can strand an enabled user when the peer has its own
-			-- leave option disabled. Global presence filtering keeps both enabled
-			-- clients from repeatedly choosing a server that is already occupied.
 			if not leaveEnabledSP() then return false end
-			if tonumber(remoteUserId) == tonumber(LocalPlayerSP.UserId)
+			remoteUserId = tonumber(remoteUserId)
+			if remoteUserId == tonumber(LocalPlayerSP.UserId)
 				or not playerStillHereSP(remoteUserId)
 			then
 				return false
 			end
-			requestPresenceHopSP()
-			return true
+			local remoteKey = tostring(remoteUserId)
+			local localKey = tostring(LocalPlayerSP.UserId)
+			local localSawRemoteAtStart = type(identitySP.seenAtStart) == "table"
+				and identitySP.seenAtStart[remoteKey] == true
+			local remoteSawLocalAtStart = type(remoteSeen) == "table"
+				and remoteSeen[localKey] == true
+			local localIsJoiner
+			if localSawRemoteAtStart ~= remoteSawLocalAtStart then
+				-- The client whose startup snapshot already contained the peer is the
+				-- newcomer. Only that client leaves; the incumbent remains untouched.
+				localIsJoiner = localSawRemoteAtStart
+			else
+				-- Simultaneous/late auto-execute can make both snapshots agree. In that
+				-- race, the later script identity is treated as the joiner.
+				local remoteStart = tonumber(remoteStarted)
+				if remoteStart and remoteStart ~= startedMsSP then
+					localIsJoiner = startedMsSP > remoteStart
+				else
+					local remoteInstance = tostring(remoteId or "")
+					localIsJoiner = remoteInstance ~= "" and instanceIdSP > remoteInstance
+				end
+			end
+			if localIsJoiner then
+				requestPresenceHopSP()
+				return true
+			end
+			return false
 		end
 		local function channelHeartbeatPayloadSP(channel)
 			local endpoint = channel and channel.endpoint or nil
@@ -15606,7 +15994,7 @@ if MINIGAME_MODE then
 							markScriptUserServerSP(job)
 							if tostring(job) == tostring(game.JobId) and playerStillHereSP(uid) then
 								markScriptUserSP(uid)
-								if requestPresenceHopSP() then return end
+								if armLeaveIfOlderSP(uid, start, iid, nil) then return end
 							end
 						end
 					else
@@ -15614,7 +16002,7 @@ if MINIGAME_MODE then
 						uid, start = tonumber(uid), tonumber(start)
 						if uid and start and iid and uid ~= tonumber(LocalPlayerSP.UserId) and playerStillHereSP(uid) then
 							markScriptUserSP(uid)
-							if requestPresenceHopSP() then return end
+							if armLeaveIfOlderSP(uid, start, iid, nil) then return end
 						end
 					end
 				end
@@ -16095,6 +16483,21 @@ if MINIGAME_MODE then
 			end
 			return true
 		end
+		local function refreshStartupDecisionCS()
+			local refresh = autoServerHopState.RefreshStartupServerDecision
+			if type(refresh) == "function" then refresh() end
+		end
+		do
+			local utility = autoServerHopState.Utility
+			local enabled = utility.CheckServerHopNobodyServer == true
+				or utility.CheckServerHopPlayedEveryoneServer == true
+				or utility.CheckServerHopNobodyMinigamesArea == true
+				or utility.CheckServerHopPlayedEveryoneMinigamesArea == true
+			if not enabled then
+				autoServerHopState.RuntimeCheckServerStartupResolved = true
+				refreshStartupDecisionCS()
+			end
+		end
 		while screenGui.Parent do
 			task.wait(1.00)
 			local utility = autoServerHopState.Utility
@@ -16136,13 +16539,30 @@ if MINIGAME_MODE then
 				or utility.CheckServerHopPlayedEveryoneServer == true
 				or utility.CheckServerHopNobodyMinigamesArea == true
 				or utility.CheckServerHopPlayedEveryoneMinigamesArea == true
-			if not anyCondition or not rosterStableCS() then
+			if not anyCondition then
+				autoServerHopState.RuntimeCheckServerHopRequested = false
+				autoServerHopState.RuntimeCheckServerStartupResolved = true
+				refreshStartupDecisionCS()
+				continue
+			end
+			-- Simple Autofarm builds its live rarity criteria from replicated inventory.
+			-- Do not declare the initial server check finished before that first target
+			-- rarity exists, or Auto Sit can start walking against stale/empty criteria.
+			if utility.SimpleAutofarmEnabled == true
+				and autoServerHopState.RuntimeSimpleAutofarmTargetRarity == nil
+			then
+				autoServerHopState.RuntimeCheckServerHopRequested = false
+				continue
+			end
+			if not rosterStableCS() then
 				autoServerHopState.RuntimeCheckServerHopRequested = false
 				continue
 			end
 			local criteria = checkCriteriaCS()
 			if #criteria == 0 then
 				autoServerHopState.RuntimeCheckServerHopRequested = false
+				autoServerHopState.RuntimeCheckServerStartupResolved = true
+				refreshStartupDecisionCS()
 				continue
 			end
 			local serverPlayers
@@ -16184,6 +16604,8 @@ if MINIGAME_MODE then
 				end
 			end
 			autoServerHopState.RuntimeCheckServerHopRequested = shouldHop
+			autoServerHopState.RuntimeCheckServerStartupResolved = true
+			refreshStartupDecisionCS()
 		end
 	end)
 end
@@ -16326,20 +16748,25 @@ if MINIGAME_MODE then
 			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 			local root = character and character:FindFirstChild("HumanoidRootPart")
 			if humanoid then
+				humanoid.Sit = false
 				humanoid:Move(Vector3.zero, false)
 				if root then pcall(function() humanoid:MoveTo(root.Position) end) end
 			end
 		end
-		local function hopPreparationBlockedHP(active)
-			if autoServerHopState.Utility.PauseScript == true
-				or autoServerHopState.Utility.PauseMinigameFeatures == true
+		local function hopPreparationBlockedHP(active, forcedManual)
+			if autoServerHopState.Utility.PauseScript == true then return true end
+			local immediateManualKick = forcedManual == true
+				and autoServerHopState.RuntimeManualKickRequested == true
+			if not immediateManualKick and lifecycleBlockedHP(active or activeMinigameHP()) then return true end
+			if forcedManual == true then return false end
+			if autoServerHopState.Utility.PauseMinigameFeatures == true
 				or autoServerHopState.RuntimeAutoSitBusy == true
 				or autoServerHopState.RuntimeBoothMutationBusy == true
 				or os.clock() < postWagerSettleUntilHP
 			then
 				return true
 			end
-			return lifecycleBlockedHP(active or activeMinigameHP())
+			return false
 		end
 		local function serverDurationHP()
 			return math.max(1, tonumber(autoServerHopState.ServerTime) or 10) * 60
@@ -16357,15 +16784,18 @@ if MINIGAME_MODE then
 			if autoServerHopState.Utility.PauseScript == true then
 				return false
 			end
+			-- Manual hop/kick is an explicit departure request. It may bypass
+			-- Pause Minigame Features, but it remains queued through active trades/games.
+			if autoServerHopState.RuntimeManualServerHopRequested == true then
+				return true
+			end
 			if presenceDueHP() then
 				return true
 			end
 			if autoServerHopState.Utility.PauseMinigameFeatures == true then
 				return false
 			end
-			if autoServerHopState.RuntimeCheckServerHopRequested == true
-				or autoServerHopState.RuntimeManualServerHopRequested == true
-			then
+			if autoServerHopState.RuntimeCheckServerHopRequested == true then
 				return true
 			end
 			if autoServerHopState.Enabled ~= true then
@@ -16530,11 +16960,14 @@ if MINIGAME_MODE then
 		-- ActiveMinigame may be replaced across sessions. Rebind the direct result
 		-- observer whenever that happens; polling remains as a second safety path.
 		local observedResultSourceHP
+		local matchResultDirtyHP = false
 		local function bindMatchResultObserverHP(source)
 			if not source or source == observedResultSourceHP then return end
 			local ok = pcall(function()
 				source:Listen({"matchResult"}, function()
-					if screenGui.Parent then processMatchResultHP(source, false) end
+					-- Some executors run ReplicatorSignal handlers in a restricted thread.
+					-- Only mutate plain Lua state here; the controller loop processes it.
+					matchResultDirtyHP = true
 				end)
 			end)
 			if ok then observedResultSourceHP = source end
@@ -16560,7 +16993,7 @@ if MINIGAME_MODE then
 			return okDecode and type(decoded) == "table" and decoded or nil
 		end
 		local function fetchServerPageHP(requestFn, cursor)
-			local url = "https://games.roblox.com/v1/games/" .. tostring(game.PlaceId)
+			local url = "https://games.roblox.com/v1/games/" .. tostring(TUFFHUB_HOP_PLACE_ID)
 				.. "/servers/Public?sortOrder=Desc&limit=100&excludeFullGames=true"
 			if cursor and cursor ~= "" then url ..= "&cursor=" .. HttpServiceHP:UrlEncode(cursor) end
 			if requestFn then
@@ -16585,17 +17018,19 @@ if MINIGAME_MODE then
 			if not okHttpGet then return nil end
 			return decodeServerPageHP(body)
 		end
-		local function collectCandidatesHP()
-			if hopPreparationBlockedHP(activeMinigameHP()) then return {} end
+		local function collectCandidatesHP(forcedManual)
+			if hopPreparationBlockedHP(activeMinigameHP(), forcedManual) then return {} end
 			local requestFn = requestFunctionHP()
 			local candidates = {}
 			local seen = {}
 			local cursor
 			pruneServerBlacklistHP()
-			for _ = 1, 5 do
-				if hopPreparationBlockedHP(activeMinigameHP()) then break end
+			-- The API is already sorted by player count descending. Stop as soon as
+			-- ten eligible servers are known; later pages cannot outrank them.
+			for _ = 1, 3 do
+				if hopPreparationBlockedHP(activeMinigameHP(), forcedManual) then break end
 				local decoded = fetchServerPageHP(requestFn, cursor)
-				if hopPreparationBlockedHP(activeMinigameHP()) then break end
+				if hopPreparationBlockedHP(activeMinigameHP(), forcedManual) then break end
 				if not decoded then break end
 				for _, server in ipairs(decoded.data or {}) do
 					local id = server.id
@@ -16622,7 +17057,7 @@ if MINIGAME_MODE then
 					end
 				end
 				cursor = decoded.nextPageCursor
-				if #candidates >= 25 or type(cursor) ~= "string" or cursor == "" then break end
+				if #candidates >= 10 or type(cursor) ~= "string" or cursor == "" then break end
 			end
 			table.sort(candidates, function(a, b)
 				if a.playing ~= b.playing then return a.playing > b.playing end
@@ -16632,17 +17067,17 @@ if MINIGAME_MODE then
 			end)
 			return candidates
 		end
-		local function refreshServerCacheHP()
+		local function refreshServerCacheHP(forcedManual)
 			if cacheRefreshingHP
 				or not screenGui.Parent
-				or hopPreparationBlockedHP(activeMinigameHP())
+				or hopPreparationBlockedHP(activeMinigameHP(), forcedManual)
 			then
 				return
 			end
 			cacheRefreshingHP = true
-			local ok, candidates = pcall(collectCandidatesHP)
+			local ok, candidates = pcall(collectCandidatesHP, forcedManual)
 			if ok
-				and not hopPreparationBlockedHP(activeMinigameHP())
+				and not hopPreparationBlockedHP(activeMinigameHP(), forcedManual)
 				and type(candidates) == "table"
 				and #candidates > 0
 			then
@@ -16683,97 +17118,91 @@ if MINIGAME_MODE then
 			local collisionDueHP = presenceDueHP()
 			local manualDueHP = autoServerHopState.RuntimeManualServerHopRequested == true
 			if not manualDueHP and os.clock() < wagerNotBeforeHP then return end
-			if hopPreparationBlockedHP(activeMinigameHP()) then return end
+			if hopPreparationBlockedHP(activeMinigameHP(), manualDueHP) then return end
 			local presenceWarmHP = true
-			if not collisionDueHP and autoServerHopState.LeaveIfScriptUserInServer == true then
+			if not manualDueHP
+				and not collisionDueHP
+				and autoServerHopState.LeaveIfScriptUserInServer == true
+			then
 				local startedAt = tonumber(autoServerHopState.RuntimePresenceStartedAt) or os.clock()
 				local connectedAt = tonumber(autoServerHopState.RuntimeGlobalPresenceConnectedAt)
-				presenceWarmHP = (connectedAt ~= nil and os.clock() - connectedAt >= 0.30)
-					or os.clock() - startedAt >= 1.50
+				presenceWarmHP = (connectedAt ~= nil and os.clock() - connectedAt >= 0.20)
+					or os.clock() - startedAt >= 0.75
 			end
-			if not presenceWarmHP then
-				return
-			end
-			if hoppingHP
-				or hopPreparationBlockedHP(activeMinigameHP())
-				or not scheduledDueHP()
-			then
-				return
-			end
+			if not presenceWarmHP or hoppingHP or not scheduledDueHP() then return end
 			hoppingHP = true
-			if hopPreparationBlockedHP(activeMinigameHP()) then
-				hoppingHP = false
-				return
-			end
-			local activeBeforeTeleport = activeMinigameHP()
-			local checkServerDueHP =
-				autoServerHopState.RuntimeCheckServerHopRequested == true
+			stopForServerHopHP()
+			local checkServerDueHP = autoServerHopState.RuntimeCheckServerHopRequested == true
 			if not scheduledDueHP()
 				or (not manualDueHP and os.clock() < hopNotBeforeHP)
-				or (
-					not collisionDueHP
-					and not checkServerDueHP
-					and not manualDueHP
-					and boothBlockRemainingHP > 0
-				)
-				or hopPreparationBlockedHP(activeBeforeTeleport)
+				or (not collisionDueHP and not checkServerDueHP and not manualDueHP and boothBlockRemainingHP > 0)
+				or hopPreparationBlockedHP(activeMinigameHP(), manualDueHP)
 			then
 				hoppingHP = false
 				return
 			end
-			-- Resolve a fresh server list only while completely idle. Games, voting,
-			-- negotiations, Auto Sit movement and pauses never perform server-list
-			-- preparation, avoiding unnecessary work during latency-sensitive states.
-			if hopPreparationBlockedHP(activeMinigameHP()) then
+
+			-- Reuse only a very fresh sorted cache. Otherwise one descending API page
+			-- normally supplies the complete eligible top ten and avoids the old
+			-- cache-refresh + second-fetch delay.
+			local chosen
+			if serverCacheAtHP > 0 and os.clock() - serverCacheAtHP <= 2.0 then
+				chosen = chooseTopTenHP(cachedCandidatesHP)
+			end
+			if not chosen then
+				local freshOk, freshCandidates = pcall(collectCandidatesHP, manualDueHP)
+				if freshOk and type(freshCandidates) == "table" and #freshCandidates > 0 then
+					cachedCandidatesHP = freshCandidates
+					serverCacheAtHP = os.clock()
+					chosen = chooseTopTenHP(freshCandidates)
+				end
+			end
+			if not chosen then
 				hoppingHP = false
+				serverCacheAtHP = 0
+				if not cacheRefreshingHP then task.spawn(refreshServerCacheHP, manualDueHP) end
 				return
 			end
-			local chosen
-			local freshOk, freshCandidates = pcall(collectCandidatesHP)
-			if freshOk and type(freshCandidates) == "table" and #freshCandidates > 0 then
-				cachedCandidatesHP = freshCandidates
-				serverCacheAtHP = os.clock()
-				chosen = chooseTopTenHP(freshCandidates)
-			end
-			if not chosen then
-				chosen = collisionDueHP and presenceChoiceHP() or cachedChoiceHP()
-			end
-			if not chosen then
+
+			local immediateManualKickHP = manualDueHP
+				and autoServerHopState.RuntimeManualKickRequested == true
+			if lifecycleBlockedHP(activeMinigameHP()) and not immediateManualKickHP then
 				hoppingHP = false
-				if not cacheRefreshingHP then task.spawn(refreshServerCacheHP) end
+				autoServerHopState.RuntimeServerHopPending = false
 				return
 			end
 			local originJobId = game.JobId
 			recordRecentServerHP(originJobId)
 			recordRecentServerHP(chosen.id)
-			if hopPreparationBlockedHP(activeMinigameHP()) then
+			stopForServerHopHP()
+			if lifecycleBlockedHP(activeMinigameHP()) and not immediateManualKickHP then
 				hoppingHP = false
+				autoServerHopState.RuntimeServerHopPending = false
 				return
 			end
 			local ok = pcall(function()
-				TeleportServiceHP:TeleportToPlaceInstance(game.PlaceId, chosen.id, LocalPlayerHP)
+				TeleportServiceHP:TeleportToPlaceInstance(TUFFHUB_HOP_PLACE_ID, chosen.id, LocalPlayerHP)
 			end)
 			if not ok then
 				serverCacheAtHP = 0
-				task.delay(2, function() hoppingHP = false end)
+				hoppingHP = false
 				return
 			end
-			task.delay(10, function()
+			-- If Roblox accepted the call but never transitions, retry quickly. The
+			-- request flags intentionally stay set until the teleport actually wins.
+			task.delay(4, function()
 				if screenGui.Parent and game.JobId == originJobId then
 					hoppingHP = false
 					serverCacheAtHP = 0
 				end
 			end)
 		end
+		autoServerHopState.RuntimeServerHopWake = hopDifferentHP
 		local wakePresenceHopHP = function()
 			if not screenGui.Parent
 				or not presenceDueHP()
-				or hopPreparationBlockedHP(activeMinigameHP())
+				or hopPreparationBlockedHP(activeMinigameHP(), false)
 			then
-				return
-			end
-			if presenceChoiceHP() == nil then
-				if not cacheRefreshingHP then task.spawn(refreshServerCacheHP) end
 				return
 			end
 			hopDifferentHP()
@@ -16786,6 +17215,7 @@ if MINIGAME_MODE then
 				autoServerHopState.RuntimeScriptUserHopRequested = false
 				autoServerHopState.RuntimeCheckServerHopRequested = false
 				autoServerHopState.RuntimeManualServerHopRequested = false
+				autoServerHopState.RuntimeManualKickRequested = false
 				table.clear(cachedCandidatesHP)
 				serverCacheAtHP = 0
 				hoppingHP = false
@@ -16795,6 +17225,21 @@ if MINIGAME_MODE then
 				continue
 			end
 			local active = activeMinigameHP()
+			if autoServerHopState.RuntimePresenceStartupResolved ~= true then
+				if autoServerHopState.LeaveIfScriptUserInServer ~= true then
+					autoServerHopState.RuntimePresenceStartupResolved = true
+				else
+					local presenceStarted = tonumber(autoServerHopState.RuntimePresenceStartedAt) or nowStartedHP
+					local connectedAt = tonumber(autoServerHopState.RuntimeGlobalPresenceConnectedAt)
+					if (connectedAt and os.clock() - connectedAt >= 1.00)
+						or os.clock() - presenceStarted >= 2.50
+					then
+						autoServerHopState.RuntimePresenceStartupResolved = true
+					end
+				end
+			end
+			local refreshStartup = autoServerHopState.RefreshStartupServerDecision
+			if type(refreshStartup) == "function" then refreshStartup() end
 			bindMatchResultObserverHP(active)
 			local nowPlaying = playingHP(active)
 			if wasPlayingHP and not nowPlaying and lastResultSignatureHP == nil then
@@ -16803,21 +17248,18 @@ if MINIGAME_MODE then
 				hopNotBeforeHP = math.max(hopNotBeforeHP, settleUntil)
 			end
 			local lifecycleBlocked = lifecycleBlockedHP(active)
+			local manualHopDueEarlyHP = autoServerHopState.RuntimeManualServerHopRequested == true
 			local pausedHP = autoServerHopState.Utility.PauseScript == true
 				or autoServerHopState.Utility.PauseMinigameFeatures == true
-			local preparationBlockedHP = pausedHP
-				or lifecycleBlocked
-				or os.clock() < postWagerSettleUntilHP
-				or autoServerHopState.RuntimeAutoSitBusy == true
-				or autoServerHopState.RuntimeBoothMutationBusy == true
-			if preparationBlockedHP then
-				autoServerHopState.RuntimeServerHopPending = false
+			local preparationBlockedHP = hopPreparationBlockedHP(active, manualHopDueEarlyHP)
+			if preparationBlockedHP and not manualHopDueEarlyHP then
 				if serverCacheAtHP ~= 0 or #cachedCandidatesHP > 0 then
 					table.clear(cachedCandidatesHP)
 					serverCacheAtHP = 0
 				end
 			end
 			if not pausedHP then
+				if matchResultDirtyHP then matchResultDirtyHP = false end
 				processMatchResultHP(active, nowPlaying)
 			end
 			local nowHP = os.clock()
@@ -16877,20 +17319,22 @@ if MINIGAME_MODE then
 			local manualHopDueHP = autoServerHopState.RuntimeManualServerHopRequested == true
 			local wagerDelayActiveHP = not manualHopDueHP and nowHP < wagerNotBeforeHP
 			local hopDueHP = rawHopDueHP and not wagerDelayActiveHP
-			local preparedHopReadyHP = hopDueHP and (
-				(presenceNowHP and presenceChoiceHP() ~= nil)
-				or (not presenceNowHP and cachedChoiceHP() ~= nil)
-			)
-			local pendingHopHP = not pausedHP
-				and not lifecycleBlocked
+			local lifecycleNowBlockedHP = lifecycleBlockedHP(active)
+			local immediateManualKickPendingHP = manualHopDueHP
+				and autoServerHopState.RuntimeManualKickRequested == true
+			local startupDecisionPendingHP =
+				autoServerHopState.RuntimeStartupServerDecisionResolved ~= true
+			local pendingHopHP = autoServerHopState.Utility.PauseScript ~= true
 				and not wagerDelayActiveHP
-				and (hopDueHP or hoppingHP)
+				and (
+					startupDecisionPendingHP
+					or ((hopDueHP or hoppingHP)
+						and (not lifecycleNowBlockedHP or immediateManualKickPendingHP))
+				)
 			autoServerHopState.RuntimeServerHopPending = pendingHopHP
 			if pendingHopHP then
-				if not standstillActiveHP then
-					standstillActiveHP = true
-					stopForServerHopHP()
-				end
+				standstillActiveHP = true
+				stopForServerHopHP()
 			elseif standstillActiveHP then
 				standstillActiveHP = false
 			end
@@ -16935,13 +17379,15 @@ if MINIGAME_MODE then
 					or boothBlockRemainingHP <= 0
 				)
 				and not hoppingHP
-				and preparedHopReadyHP
 			then
 				task.spawn(hopDifferentHP)
 			end
 		end
 		if autoServerHopState.RuntimePresenceHopWake == wakePresenceHopHP then
 			autoServerHopState.RuntimePresenceHopWake = nil
+		end
+		if autoServerHopState.RuntimeServerHopWake == hopDifferentHP then
+			autoServerHopState.RuntimeServerHopWake = nil
 		end
 	end)
 end
@@ -16999,7 +17445,7 @@ if MINIGAME_MODE then
 				do
 					attempt += 1
 					pcall(function()
-						TeleportServiceAR:Teleport(game.PlaceId, LocalPlayerAR)
+						TeleportServiceAR:Teleport(TUFFHUB_HOP_PLACE_ID, LocalPlayerAR)
 					end)
 					local retryAt = os.clock() + math.min(8, 3 + attempt)
 					while screenGui.Parent
@@ -17050,6 +17496,7 @@ if MINIGAME_MODE then
 				and autoServerHopState.Utility
 				and autoServerHopState.Utility.PauseScript ~= true
 				and autoServerHopState.Utility.PauseMinigameFeatures ~= true
+				and autoServerHopState.RuntimeServerHopPending ~= true
 				and autoServerHopState.Utility.AutoChat == true
 			)
 		do
@@ -17072,7 +17519,9 @@ if MINIGAME_MODE then
 		local lastIntervalAC
 		local pausedAtAC
 		local function sendPublicChatMessageAC(message)
-			if autoServerHopState.Utility.PauseScript == true then return false end
+			if autoServerHopState.Utility.PauseScript == true
+				or autoServerHopState.RuntimeServerHopPending == true
+			then return false end
 			local value = tostring(message or "")
 			if value == "" then return false end
 			if TextChatServiceAC.ChatVersion == Enum.ChatVersion.LegacyChatService then
@@ -17104,6 +17553,7 @@ if MINIGAME_MODE then
 			local enabled = state
 				and state.PauseScript ~= true
 				and state.PauseMinigameFeatures ~= true
+				and autoServerHopState.RuntimeServerHopPending ~= true
 				and state.AutoChat == true
 			local now = os.clock()
 			if not enabled then
@@ -17223,6 +17673,7 @@ if MINIGAME_MODE then
 			if not state
 				or state.PauseScript == true
 				or state.PauseMinigameFeatures == true
+				or autoServerHopState.RuntimeServerHopPending == true
 				or state.AutoTradeChat ~= true
 			then
 				return false
@@ -17387,6 +17838,7 @@ if MINIGAME_MODE then
 			local enabled = state
 				and state.PauseScript ~= true
 				and state.PauseMinigameFeatures ~= true
+				and autoServerHopState.RuntimeServerHopPending ~= true
 				and state.AutoTradeChat == true
 			task.wait(enabled and 0.15 or 0.75)
 			if not enabled then
@@ -17659,7 +18111,10 @@ if MINIGAME_MODE then
 			return string.find(lower, "%f[%a]meta%f[%A]") ~= nil
 		end
 		local function deleteBlockedADI()
-			if autoServerHopState.Utility.PauseScript == true or autoServerHopState.Utility.PauseMinigameFeatures == true then return true end
+			if autoServerHopState.Utility.PauseScript == true
+				or autoServerHopState.Utility.PauseMinigameFeatures == true
+				or autoServerHopState.RuntimeServerHopPending == true
+			then return true end
 			refreshReplicatorsADI()
 			return tryIndexADI(ActiveNegotiationADI, {"guid"}) ~= nil
 				or tryIndexADI(ActiveMinigameADI, {"phase"}) ~= nil
@@ -17682,31 +18137,32 @@ if MINIGAME_MODE then
 				return true
 			end
 			local evaluatedAt = tonumber(autoServerHopState.RuntimeBoothLastEvaluationAt) or 0
-			-- A freshly enabled/re-executed Auto Booth gets first priority. Auto Delete
-			-- cannot act until the booth controller has completed a recent listing pass.
-			return evaluatedAt <= 0 or os.clock() - evaluatedAt > 2.25
+			return evaluatedAt <= 0 or os.clock() - evaluatedAt > 1.25
+		end
+		local function confirmBoothPriorityBeforeDeleteADI()
+			local utility = autoServerHopState and autoServerHopState.Utility
+			if not utility or utility.AutoBooth ~= true then return true end
+			local requestedAt = os.clock()
+			autoServerHopState.RuntimeBoothLastEvaluationAt = 0
+			local deadline = requestedAt + 1.35
+			repeat
+				if deleteBlockedADI() then return false end
+				if autoServerHopState.RuntimeBoothMutationBusy == true
+					or autoServerHopState.RuntimeBoothListingsPending == true
+				then
+					return false
+				end
+				local evaluatedAt = tonumber(autoServerHopState.RuntimeBoothLastEvaluationAt) or 0
+				if evaluatedAt >= requestedAt then
+					task.wait(0.05)
+					return autoServerHopState.RuntimeBoothMutationBusy ~= true
+						and autoServerHopState.RuntimeBoothListingsPending ~= true
+				end
+				task.wait(0.05)
+			until os.clock() >= deadline
+			return false
 		end
 
-		local function configuredBrainrotRarityADI(item)
-			if type(item) ~= "table" then return nil end
-			local explicit = (item.sub and item.sub.rarity)
-				or item.rarity
-				or item.Rarity
-			if type(explicit) == "string"
-				and RARITY_ORDER_ADI[explicit] ~= nil
-			then
-				return explicit
-			end
-			local name = item.name or (item.sub and item.sub.name)
-			if type(name) ~= "string" or name == "" then
-				return nil
-			end
-			local ok, rarity = pcall(EconomyMathADI.GetBrainrotRarity, name)
-			return ok and type(rarity) == "string"
-				and RARITY_ORDER_ADI[rarity] ~= nil
-				and rarity
-				or nil
-		end
 		local function neverDeleteNameADI(item)
 			if type(item) ~= "table" then return nil end
 			local displayName
@@ -17729,8 +18185,26 @@ if MINIGAME_MODE then
 		local function neverDeleteADI(item)
 			local state = autoServerHopState and autoServerHopState.Utility
 			if not state or type(item) ~= "table" then return false end
+			-- Auto Delete never unlocks inventory entries implicitly. Locked items are
+			-- always excluded; the visible locked toggle remains backward-compatible.
+			if item.locked == true then return true end
+			local itemType = inventoryItemTypeADI(item)
+			local effectiveRarity = getItemRarityADI(item)
+			if effectiveRarity == "Infinity" and brainrotIsMetaADI(item) then
+				effectiveRarity = "Meta"
+			end
 			-- Eternal is a terminal progression reward; never discard it automatically.
-			if getItemRarityADI(item) == "Eternal" then return true end
+			if effectiveRarity == "Eternal" then return true end
+			if state.NeverDeleteNonBrainrots == true and itemType ~= "Brainrot" then
+				return true
+			end
+			if state.NeverDeleteRaritiesEnabled == true
+				and type(state.NeverDeleteRarities) == "table"
+				and effectiveRarity ~= nil
+				and state.NeverDeleteRarities[effectiveRarity] == true
+			then
+				return true
+			end
 			if state.NeverDeleteEnabled == true then
 				local name = neverDeleteNameADI(item)
 				local directName = tostring(item.name or (item.sub and item.sub.name) or "")
@@ -17802,10 +18276,7 @@ if MINIGAME_MODE then
 			then
 				return false
 			end
-			if inventoryItemTypeADI(item) == "Brainrot" then
-				return false
-			end
-			return configuredBrainrotRarityADI(item) == nil
+			return inventoryItemTypeADI(item) ~= "Brainrot"
 		end
 		local function nonBrainrotIdsADI()
 			local ids = {}
@@ -18198,6 +18669,9 @@ if MINIGAME_MODE then
 				100
 			)
 			if effectiveInventoryCountADI() < threshold then
+				continue
+			end
+			if not confirmBoothPriorityBeforeDeleteADI() then
 				continue
 			end
 			local deleteNonFirst = state.DeleteNonBrainrotsFirst == true
@@ -18715,20 +19189,62 @@ if MINIGAME_MODE then
 				end
 				return added
 			end
-			local function lowerRarity(source)
-				for i,r in ipairs(OUTGOING_BRAINROT_RARITY_OPTIONS) do if r==source then return i>1 and OUTGOING_BRAINROT_RARITY_OPTIONS[i-1] or nil end end
-			end
-			local function applyFallback(sourceRarity,missingTargetRarity)
-				if u.RegularFallbackToSpecificItems==true then
-					local selected=type(u["RegularFallbackSpecific"..sourceRarity.."Items"])=="table" and u["RegularFallbackSpecific"..sourceRarity.."Items"] or {}
-					addSelectedInInventoryOrder(selected,nil,nil,nil)
-				end
-				if u.RegularFallbackOffers==true then
-					local lower=lowerRarity(missingTargetRarity)
-					if lower then addRarity(lower,math.clamp(math.floor(tonumber(u.RegularFallbackNextLowerRarityAmount) or 1),1,6),true) end
-				end
+			local pendingFallbackRequests={}
+			local function applyFallback(sourceRarity,missingTargetRarity,exactAdded)
+				pendingFallbackRequests[#pendingFallbackRequests+1]={
+					SourceRarity=sourceRarity,
+					TargetRarity=missingTargetRarity,
+					ExactAdded=math.max(0,math.floor(tonumber(exactAdded) or 0)),
+				}
 				if u.RegularFallbackToTokens==true then
-					if u["RegularFallback"..sourceRarity.."OfferAllTokens"]==true then forceAllTokens=true else tokens+=math.max(0,math.floor(tonumber(u["RegularFallbackTokens"..sourceRarity]) or 0)) end
+					if u["RegularFallback"..sourceRarity.."OfferAllTokens"]==true then
+						forceAllTokens=true
+					else
+						tokens+=math.max(0,math.floor(tonumber(u["RegularFallbackTokens"..sourceRarity]) or 0))
+					end
+				end
+			end
+			local function applyQueuedFallbacks()
+				if #pendingFallbackRequests==0 then return end
+				-- Specific fallback is globally higher priority than directional fallback.
+				-- Reserve every applicable unique specific item first, up to the six-slot cap.
+				if u.RegularFallbackToSpecificItems==true then
+					for _,request in ipairs(pendingFallbackRequests) do
+						if #desired>=6 then break end
+						local selected=type(u["RegularFallbackSpecific"..request.SourceRarity.."Items"])=="table"
+							and u["RegularFallbackSpecific"..request.SourceRarity.."Items"] or {}
+						addSelectedInInventoryOrder(selected,nil,nil,nil,nil)
+					end
+				end
+				local useLower=u.RegularFallbackOffers==true
+				local useHigher=u.RegularFallbackToNextHigherRarityBrainrot==true
+				if useLower and useHigher then useHigher=false end
+				if not (useLower or useHigher) or #desired>=6 then return end
+				local fallbackTotal=math.clamp(math.floor(tonumber(
+					useHigher and u.RegularFallbackNextHigherRarityAmount
+						or u.RegularFallbackNextLowerRarityAmount
+				) or 1),1,6)
+				for _,request in ipairs(pendingFallbackRequests) do
+					if #desired>=6 then break end
+					local remaining=math.max(0,fallbackTotal-request.ExactAdded)
+					local targetIndex=table.find(OUTGOING_BRAINROT_RARITY_OPTIONS,request.TargetRarity)
+					if not targetIndex then
+						local fullIndex=table.find(BRAINROT_RARITY_OPTIONS,request.TargetRarity)
+						if fullIndex then targetIndex=math.min(fullIndex,#OUTGOING_BRAINROT_RARITY_OPTIONS+1) end
+					end
+					if targetIndex and remaining>0 then
+						if useHigher then
+							for higherIndex=targetIndex+1,#OUTGOING_BRAINROT_RARITY_OPTIONS do
+								if remaining<=0 or #desired>=6 then break end
+								remaining-=addRarity(OUTGOING_BRAINROT_RARITY_OPTIONS[higherIndex],remaining,true)
+							end
+						else
+							for lowerIndex=math.min(targetIndex-1,#OUTGOING_BRAINROT_RARITY_OPTIONS),1,-1 do
+								if remaining<=0 or #desired>=6 then break end
+								remaining-=addRarity(OUTGOING_BRAINROT_RARITY_OPTIONS[lowerIndex],remaining,true)
+							end
+						end
+					end
 				end
 			end
 			local reactiveMatched=false
@@ -18755,7 +19271,7 @@ if MINIGAME_MODE then
 									for _,target in ipairs(OUTGOING_BRAINROT_RARITY_OPTIONS) do
 										if config.Targets and config.Targets[target]==true then
 											sourceConfigured=true; local need=math.clamp(math.floor(tonumber(config.Amounts and config.Amounts[target]) or 1),1,6)
-											local got=addRarity(target,need,false); if got<need then applyFallback(sourceRarity,target) end
+											local got=addRarity(target,need,false); if got<need then applyFallback(sourceRarity,target,got) end
 										end
 									end
 								end
@@ -18779,6 +19295,7 @@ if MINIGAME_MODE then
 					end
 				end
 			end
+			applyQueuedFallbacks()
 			if not reactiveMatched then
 				-- Opening Offer is the only baseline. When a reactive rule stops matching,
 				-- return to that baseline instead of retaining a stale reactive offer.
@@ -18816,7 +19333,7 @@ if MINIGAME_MODE then
 		end
 		while screenGui.Parent do
 			local u=autoServerHopState.Utility
-			if u.PauseScript==true then
+			if u.PauseScript==true or autoServerHopState.RuntimeServerHopPending == true then
 				releaseAutomatedReady()
 				rawset(_G,"__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID",nil)
 				lastGuid=nil; openingAppliedGuid=nil; table.clear(opponentItemCache)
@@ -18841,6 +19358,7 @@ if MINIGAME_MODE then
 					local requestKey=tostring(key)
 					liveRequestKeys[requestKey]=true
 					if u.AutoAcceptTradesAcceptRequests==true
+						and autoServerHopState.RuntimeServerHopPending ~= true
 						and type(req)=="table"
 						and req.targetPlayer==tostring(localPlayer.UserId)
 						and req.gift~=true
@@ -18853,7 +19371,9 @@ if MINIGAME_MODE then
 							handledRequests[requestKey]=true
 							local delay=tradeDelay(u,"AutoAcceptTradesInitialDelay",0.65)
 							if delay>0 then task.wait(delay) end
-							if u.PauseScript == true then break end
+							if u.PauseScript == true
+								or autoServerHopState.RuntimeServerHopPending == true
+							then break end
 							pcall(Respond.InvokeServer,Respond,key,true)
 							break
 						end
@@ -18944,6 +19464,7 @@ if MINIGAME_MODE then
             if utility
                 and utility.PauseScript ~= true
                 and utility.PauseMinigameFeatures ~= true
+                and autoServerHopState.RuntimeServerHopPending ~= true
                 and (
                     utility.AutoOfferMaster == true
                     or utility.AutoOfferTokensEnabled == true
@@ -19484,6 +20005,7 @@ if MINIGAME_MODE then
         local function invokeAO(remote, ...)
             if autoServerHopState.Utility.PauseScript == true
                 or autoServerHopState.Utility.PauseMinigameFeatures == true
+                or autoServerHopState.RuntimeServerHopPending == true
             then return false end
             if not remote then return false end
             local args = table.pack(...)
@@ -19604,6 +20126,7 @@ if MINIGAME_MODE then
             if rawget(_G, "__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID") ~= nil then task.wait(0.15) continue end
             if utilityAO.PauseScript == true
                 or utilityAO.PauseMinigameFeatures == true
+                or autoServerHopState.RuntimeServerHopPending == true
                 or (
                     utilityAO.AutoOfferMaster ~= true
                     and utilityAO.AutoOfferTokensEnabled ~= true
@@ -19649,15 +20172,12 @@ if MINIGAME_MODE then
             local specificPrimarySeenAO = {}
             local fallbackEnabled = utilityAO.FallbackToTokens == true
                 or utilityAO.FallbackToNextLowerRarityBrainrot == true
+                or utilityAO.FallbackToNextHigherRarityBrainrot == true
                 or utilityAO.FallbackToSpecificBrainrotItem == true
             local availableCounts = availableRarityCountsAO()
             local plannedInventoryUse = {}
             local primaryRequests = {}
             local sourceOccurrences = {}
-            local function nextLowerRarityAO(rarity)
-                local index = table.find(BRAINROT_RARITY_OPTIONS, rarity)
-                return index and index > 1 and BRAINROT_RARITY_OPTIONS[index - 1] or nil
-            end
             local function availableForRarityAO(rarity)
                 return math.max(
                     0,
@@ -19949,107 +20469,28 @@ if MINIGAME_MODE then
                     if request.Rarity == rarity then
                         local wanted = math.max(0, math.floor(tonumber(request.Amount) or 0))
                         local selected = math.min(wanted, selectionSlotsLeft)
-                        local overflow = wanted - selected
-                        if overflow > 0 then
-                            markOccurrenceFallbackAO(request.Occurrence, rarity)
-                        end
+                        local reserved = 0
                         if selected > 0 then
-                            local reserved = reservePrimaryAO(rarity, selected, selectionSlotsLeft)
-                            if reserved < selected then
-                                markOccurrenceFallbackAO(request.Occurrence, rarity)
-                            end
+                            reserved = reservePrimaryAO(rarity, selected, selectionSlotsLeft)
                             selectionSlotsLeft -= selected
+                        end
+                        if request.Occurrence then
+                            request.Occurrence.ExactReserved = request.Occurrence.ExactReserved or {}
+                            request.Occurrence.ExactReserved[rarity] =
+                                (request.Occurrence.ExactReserved[rarity] or 0) + reserved
+                        end
+                        if reserved < wanted then
+                            markOccurrenceFallbackAO(request.Occurrence, rarity)
                         end
                     end
                 end
             end
+            -- First determine which fallback modes apply. Brainrot substitution is
+            -- planned below after exact-rarity reservations and specific fallback
+            -- slots are known, so it can preserve the requested total precisely.
             if fallbackEnabled then
-                local simpleFallbackPlannedAO = {}
-                local simpleFallbackSlotsPlannedAO = 0
-                local simpleFallbackSlotBudgetAO = math.max(0, 6 - #specificPrimaryIdsAO)
-                for _, amount in pairs(aggregateTargets) do
-                    simpleFallbackSlotBudgetAO -= math.max(0, math.floor(tonumber(amount) or 0))
-                end
-                simpleFallbackSlotBudgetAO = math.max(0, simpleFallbackSlotBudgetAO)
                 for _, occurrence in ipairs(sourceOccurrences) do
                     if occurrence.NeedsFallback == true then
-                        if utilityAO.SimpleAutofarmEnabled == true
-                            and utilityAO.FallbackToNextLowerRarityBrainrot == true
-                        then
-                            local lowerAmount = math.clamp(
-                                math.floor(tonumber(utilityAO.FallbackNextLowerRarityAmount) or 1),
-                                1,
-                                6
-                            )
-                            local remainingSlotBudget = math.max(
-                                0,
-                                simpleFallbackSlotBudgetAO - simpleFallbackSlotsPlannedAO
-                            )
-                            local plannedThisOccurrence = 0
-                            for missingRarity in pairs(occurrence.MissingTargets or {}) do
-                                if plannedThisOccurrence >= remainingSlotBudget then break end
-                                local missingIndex = table.find(OUTGOING_BRAINROT_RARITY_OPTIONS, missingRarity)
-                                    or table.find(BRAINROT_RARITY_OPTIONS, missingRarity)
-                                if missingIndex then
-                                    -- Simple Autofarm prefers one closest available HIGHER
-                                    -- rarity when the exact accepted rarity cannot be matched.
-                                    -- Eternal is receive-only, so it is never considered here.
-                                    local usedHigher = false
-                                    local firstHigherIndex = math.min(
-                                        missingIndex + 1,
-                                        #OUTGOING_BRAINROT_RARITY_OPTIONS + 1
-                                    )
-                                    for higherIndex = firstHigherIndex, #OUTGOING_BRAINROT_RARITY_OPTIONS do
-                                        local higherRarity = OUTGOING_BRAINROT_RARITY_OPTIONS[higherIndex]
-                                        local alreadyPlanned = simpleFallbackPlannedAO[higherRarity] or 0
-                                        local available = math.max(
-                                            0,
-                                            availableForRarityAO(higherRarity) - alreadyPlanned
-                                        )
-                                        if available > 0 then
-                                            simpleFallbackPlannedAO[higherRarity] = alreadyPlanned + 1
-                                            aggregateFallbackRequests[higherRarity] =
-                                                (aggregateFallbackRequests[higherRarity] or 0) + 1
-                                            plannedThisOccurrence += 1
-                                            usedHigher = true
-                                            break
-                                        end
-                                    end
-                                    -- If no higher outgoing rarity is owned, retain the
-                                    -- established six-best-lower fallback so an otherwise
-                                    -- valid accepted offer can still be answered.
-                                    if not usedHigher and plannedThisOccurrence < remainingSlotBudget then
-                                        local wantedLower = math.min(
-                                            lowerAmount,
-                                            remainingSlotBudget - plannedThisOccurrence
-                                        )
-                                        local topLowerIndex = math.min(
-                                            missingIndex - 1,
-                                            #OUTGOING_BRAINROT_RARITY_OPTIONS
-                                        )
-                                        local lowerPlanned = 0
-                                        for lowerIndex = topLowerIndex, 1, -1 do
-                                            local lowerRarity = OUTGOING_BRAINROT_RARITY_OPTIONS[lowerIndex]
-                                            local alreadyPlanned = simpleFallbackPlannedAO[lowerRarity] or 0
-                                            local available = math.max(
-                                                0,
-                                                availableForRarityAO(lowerRarity) - alreadyPlanned
-                                            )
-                                            local take = math.min(wantedLower - lowerPlanned, available)
-                                            if take > 0 then
-                                                simpleFallbackPlannedAO[lowerRarity] = alreadyPlanned + take
-                                                aggregateFallbackRequests[lowerRarity] =
-                                                    (aggregateFallbackRequests[lowerRarity] or 0) + take
-                                                lowerPlanned += take
-                                                plannedThisOccurrence += take
-                                            end
-                                            if lowerPlanned >= wantedLower then break end
-                                        end
-                                    end
-                                end
-                            end
-                            simpleFallbackSlotsPlannedAO += plannedThisOccurrence
-                        end
                         if utilityAO.FallbackToTokens == true then
                             if utilityAO["Fallback" .. tostring(occurrence.SourceRarity) .. "OfferAllTokens"] == true then
                                 forceAllTokensAO = true
@@ -20074,22 +20515,6 @@ if MINIGAME_MODE then
                         then
                             specificFallbackSourceRequests[occurrence.SourceRarity] = true
                         end
-                        if utilityAO.SimpleAutofarmEnabled ~= true
-                            and utilityAO.FallbackToNextLowerRarityBrainrot == true
-                        then
-                            local lowerAmount = math.clamp(
-                                math.floor(tonumber(utilityAO.FallbackNextLowerRarityAmount) or 1),
-                                1,
-                                6
-                            )
-                            for missingRarity in pairs(occurrence.MissingTargets or {}) do
-                                local lowerRarity = nextLowerRarityAO(missingRarity)
-                                if lowerRarity then
-                                    aggregateFallbackRequests[lowerRarity] =
-                                        (aggregateFallbackRequests[lowerRarity] or 0) + lowerAmount
-                                end
-                            end
-                        end
                     end
                 end
             end
@@ -20097,33 +20522,166 @@ if MINIGAME_MODE then
             for _, amount in pairs(aggregateTargets) do
                 reservedPrimarySlots += math.max(0, math.floor(tonumber(amount) or 0))
             end
-            local plannedSpecificFallbackCountAO = 0
+            -- Specific fallback IDs reserve fallback slots first. Directional
+            -- rarity fallback (higher OR lower) can only use the remaining slots.
+            local plannedSpecificFallbackIdsAO = {}
+            local plannedSpecificFallbackSeenAO = {}
             if fallbackEnabled and utilityAO.FallbackToSpecificBrainrotItem == true then
-                for sourceRarity in pairs(specificFallbackSourceRequests) do
-                    plannedSpecificFallbackCountAO += #selectedSpecificFallbackIdsAO(sourceRarity)
+                local specificCapacityAO = math.max(
+                    0,
+                    6 - reservedPrimarySlots - #specificPrimaryIdsAO
+                )
+                for _, sourceRarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+                    if specificFallbackSourceRequests[sourceRarity] == true then
+                        for _, valid in ipairs(selectedSpecificFallbackIdsAO(sourceRarity)) do
+                            if #plannedSpecificFallbackIdsAO >= specificCapacityAO then break end
+                            if not specificPrimarySeenAO[valid]
+                                and not plannedSpecificFallbackSeenAO[valid]
+                            then
+                                plannedSpecificFallbackSeenAO[valid] = true
+                                plannedSpecificFallbackIdsAO[#plannedSpecificFallbackIdsAO + 1] = valid
+                            end
+                        end
+                    end
+                    if #plannedSpecificFallbackIdsAO >= specificCapacityAO then break end
                 end
             end
-            local fallbackSlotsLeft = math.max(0, 6 - reservedPrimarySlots - #specificPrimaryIdsAO - plannedSpecificFallbackCountAO)
+            local plannedSpecificFallbackCountAO = #plannedSpecificFallbackIdsAO
+            -- Reserve the actual inventory copies selected by specific fallback so
+            -- directional planning cannot count those same copies as available.
+            do
+                local inventory = inventoryAO()
+                if type(inventory) == "table" then
+                    for _, id in ipairs(plannedSpecificFallbackIdsAO) do
+                        local item = inventory[id]
+                            or inventory[tostring(id)]
+                            or (tonumber(id) and inventory[tonumber(id)] or nil)
+                        local rarity = rarityAO(item)
+                        if rarity then
+                            plannedInventoryUse[rarity] =
+                                (plannedInventoryUse[rarity] or 0) + 1
+                        end
+                    end
+                end
+            end
+            local fallbackSlotsLeft = math.max(
+                0,
+                6 - reservedPrimarySlots - #specificPrimaryIdsAO - plannedSpecificFallbackCountAO
+            )
+            local useLowerFallbackAO = utilityAO.FallbackToNextLowerRarityBrainrot == true
+            local useHigherFallbackAO = utilityAO.FallbackToNextHigherRarityBrainrot == true
+            -- Malformed/legacy state can never make both directions active at once.
+            if useLowerFallbackAO and useHigherFallbackAO then
+                useHigherFallbackAO = false
+            end
             if fallbackEnabled
-                and utilityAO.FallbackToNextLowerRarityBrainrot == true
+                and (useLowerFallbackAO or useHigherFallbackAO)
                 and fallbackSlotsLeft > 0
             then
-                for rarityIndex = #BRAINROT_RARITY_OPTIONS, 1, -1 do
-                    local fallbackRarity = BRAINROT_RARITY_OPTIONS[rarityIndex]
+                local fallbackTotal = math.clamp(
+                    math.floor(tonumber(
+                        useHigherFallbackAO
+                            and utilityAO.FallbackNextHigherRarityAmount
+                            or utilityAO.FallbackNextLowerRarityAmount
+                    ) or 1),
+                    1,
+                    6
+                )
+                local fallbackPlanUseAO = {}
+                for _, occurrence in ipairs(sourceOccurrences) do
+                    if occurrence.NeedsFallback == true and fallbackSlotsLeft > 0 then
+                        for missingRarity in pairs(occurrence.MissingTargets or {}) do
+                            if fallbackSlotsLeft <= 0 then break end
+                            local exactReserved = type(occurrence.ExactReserved) == "table"
+                                and math.max(0, math.floor(tonumber(occurrence.ExactReserved[missingRarity]) or 0))
+                                or 0
+                            -- Exact copies count toward the desired total; only the
+                            -- shortfall is cascaded in the selected direction.
+                            local remaining = math.max(0, fallbackTotal - exactReserved)
+                            local targetIndex = table.find(
+                                OUTGOING_BRAINROT_RARITY_OPTIONS,
+                                missingRarity
+                            )
+                            if not targetIndex then
+                                local fullIndex = table.find(BRAINROT_RARITY_OPTIONS, missingRarity)
+                                if fullIndex then
+                                    targetIndex = math.min(
+                                        fullIndex,
+                                        #OUTGOING_BRAINROT_RARITY_OPTIONS + 1
+                                    )
+                                end
+                            end
+                            if targetIndex then
+                                if useHigherFallbackAO then
+                                    for higherIndex = targetIndex + 1,
+                                        #OUTGOING_BRAINROT_RARITY_OPTIONS
+                                    do
+                                        if remaining <= 0 or fallbackSlotsLeft <= 0 then break end
+                                        local higherRarity = OUTGOING_BRAINROT_RARITY_OPTIONS[higherIndex]
+                                        local alreadyPlanned = fallbackPlanUseAO[higherRarity] or 0
+                                        local available = math.max(
+                                            0,
+                                            availableForRarityAO(higherRarity) - alreadyPlanned
+                                        )
+                                        local take = math.min(remaining, available, fallbackSlotsLeft)
+                                        if take > 0 then
+                                            fallbackPlanUseAO[higherRarity] = alreadyPlanned + take
+                                            aggregateFallbackRequests[higherRarity] =
+                                                (aggregateFallbackRequests[higherRarity] or 0) + take
+                                            remaining -= take
+                                            fallbackSlotsLeft -= take
+                                        end
+                                    end
+                                else
+                                    for lowerIndex = math.min(
+                                        targetIndex - 1,
+                                        #OUTGOING_BRAINROT_RARITY_OPTIONS
+                                    ), 1, -1 do
+                                        if remaining <= 0 or fallbackSlotsLeft <= 0 then break end
+                                        local lowerRarity = OUTGOING_BRAINROT_RARITY_OPTIONS[lowerIndex]
+                                        local alreadyPlanned = fallbackPlanUseAO[lowerRarity] or 0
+                                        local available = math.max(
+                                            0,
+                                            availableForRarityAO(lowerRarity) - alreadyPlanned
+                                        )
+                                        local take = math.min(remaining, available, fallbackSlotsLeft)
+                                        if take > 0 then
+                                            fallbackPlanUseAO[lowerRarity] = alreadyPlanned + take
+                                            aggregateFallbackRequests[lowerRarity] =
+                                                (aggregateFallbackRequests[lowerRarity] or 0) + take
+                                            remaining -= take
+                                            fallbackSlotsLeft -= take
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+                local commitSlotsLeft = math.max(
+                    0,
+                    6 - reservedPrimarySlots - #specificPrimaryIdsAO - plannedSpecificFallbackCountAO
+                )
+                for rarityIndex = #OUTGOING_BRAINROT_RARITY_OPTIONS, 1, -1 do
+                    local fallbackRarity = OUTGOING_BRAINROT_RARITY_OPTIONS[rarityIndex]
                     local wantedFallback = math.max(
                         0,
                         math.floor(tonumber(aggregateFallbackRequests[fallbackRarity]) or 0)
                     )
-                    if wantedFallback > 0 then
+                    if wantedFallback > 0 and commitSlotsLeft > 0 then
                         local reserved = reserveFallbackAO(
                             fallbackRarity,
                             wantedFallback,
-                            fallbackSlotsLeft
+                            commitSlotsLeft
                         )
-                        fallbackSlotsLeft -= reserved
-                        if fallbackSlotsLeft <= 0 then break end
+                        commitSlotsLeft -= reserved
                     end
+                    if commitSlotsLeft <= 0 then break end
                 end
+            end
+            if forceAllTokensAO then
+                aggregateTokens = tokenBalanceAO()
+                tokenRuleAuthoritative = true
             end
             if not hasEnabledSource and not autoOfferOwnsAO then
                 lastAppliedSignature = nil
@@ -20159,21 +20717,11 @@ if MINIGAME_MODE then
                 targetSignature[#targetSignature + 1] = "SPEC=" .. tostring(id)
                 requestedSlots += 1
             end
-            local specificFallbackIdsAO = {}
-            local fallbackSpecificSeenAO = {}
-            if fallbackEnabled and utilityAO.FallbackToSpecificBrainrotItem == true then
-                for _, sourceRarity in ipairs(BRAINROT_RARITY_OPTIONS) do
-                    if specificFallbackSourceRequests[sourceRarity] == true then
-                        for _, valid in ipairs(selectedSpecificFallbackIdsAO(sourceRarity)) do
-                            if not specificPrimarySeenAO[valid] and not fallbackSpecificSeenAO[valid] and requestedSlots < 6 then
-                                fallbackSpecificSeenAO[valid] = true
-                                specificFallbackIdsAO[#specificFallbackIdsAO + 1] = valid
-                                targetSignature[#targetSignature + 1] = "FB-SPEC-" .. sourceRarity .. "=" .. valid
-                                requestedSlots += 1
-                            end
-                        end
-                    end
-                end
+            local specificFallbackIdsAO = plannedSpecificFallbackIdsAO
+            for _, valid in ipairs(specificFallbackIdsAO) do
+                if requestedSlots >= 6 then break end
+                targetSignature[#targetSignature + 1] = "FB-SPEC=" .. tostring(valid)
+                requestedSlots += 1
             end
             if requestedSlots <= 0 and aggregateTokens <= 0
                 and not tokenRuleAuthoritative
@@ -20293,6 +20841,7 @@ if MINIGAME_MODE then
 			local anyEnabled = false
 			if autoServerHopState.Utility.PauseScript ~= true
 			and autoServerHopState.Utility.PauseMinigameFeatures ~= true
+				and autoServerHopState.RuntimeServerHopPending ~= true
 				and autoServerHopState.Utility.AutoAcceptMaster == true
 			then
 				for _, entry in pairs(autoAcceptState or {}) do
@@ -20568,6 +21117,7 @@ if MINIGAME_MODE then
 			if rawget(_G, "__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID") ~= nil then task.wait(0.15) continue end
 			if utilityAAC.PauseScript == true
 			or utilityAAC.PauseMinigameFeatures == true
+				or autoServerHopState.RuntimeServerHopPending == true
 				or utilityAAC.AutoAcceptMaster ~= true
 			then
 				if lastReadySignatureAAC then
@@ -20801,22 +21351,24 @@ if MINIGAME_MODE then
 				end
 			end
 		end
-		local function mountAE()
+		local function rideActionAE(action)
 			if autoServerHopState.Utility.PauseScript == true
 				or autoServerHopState.Utility.PauseMinigameFeatures == true
+				or autoServerHopState.RuntimeServerHopPending == true
 			then return false end
 			if not RideActionAE or os.clock() < nextRideAtAE then return false end
-			nextRideAtAE = os.clock() + 0.75
+			nextRideAtAE = os.clock() + 0.30
 			local ok, result = pcall(function()
-				return RideActionAE:InvokeServer("mount")
+				return RideActionAE:InvokeServer(action)
 			end)
 			return ok and result ~= false
 		end
 		while screenGui.Parent do
-			task.wait(1.50)
+			task.wait(0.25)
 			local state = autoServerHopState.Utility
 			if state.PauseScript == true
 			or state.PauseMinigameFeatures == true
+				or autoServerHopState.RuntimeServerHopPending == true
 				or state.AutoEquipBestBrainrot ~= true
 				or (state.AutoEquipModeHold ~= true
 					and state.AutoEquipModeMount ~= true
@@ -20899,7 +21451,7 @@ if MINIGAME_MODE then
 			if modeHold or modeBoth then
 				if useSpecific then
 					holdId, holdItem = validBrainrotIdAE(state.HoldSpecificBrainrotId)
-					if not holdId then state.HoldSpecificBrainrotId = nil end
+					-- Keep the configured selection and retry after transient replication/state changes.
 				elseif useBest then
 					holdId, holdItem = validBrainrotIdAE(bestId)
 				end
@@ -20908,7 +21460,7 @@ if MINIGAME_MODE then
 			if modeMount or modeBoth then
 				if useSpecific then
 					mountId, mountItem = validBrainrotIdAE(state.MountSpecificBrainrotId)
-					if not mountId then state.MountSpecificBrainrotId = nil end
+					-- Keep the configured selection and retry after transient replication/state changes.
 				elseif useBest then
 					mountId, mountItem = validBrainrotIdAE(bestRideableId)
 				end
@@ -20919,9 +21471,7 @@ if MINIGAME_MODE then
 						pcall(function() rideable = RideableAE.isRideable(mountName) == true end)
 					end
 					if not rideable then
-						if useSpecific then
-							state.MountSpecificBrainrotId = nil
-						end
+						-- Keep the configured mount selection and retry after transient replication/state changes.
 						mountId, mountItem, mountName = nil, nil, nil
 					end
 				end
@@ -20930,15 +21480,25 @@ if MINIGAME_MODE then
 			local mountedName = LocalPlayerAE:GetAttribute("RideableBrainrotName")
 			local mountedCorrectly = mounted and mountId ~= nil
 				and (mountName == nil or mountedName == mountName)
-			if (modeMount or modeBoth) and mountId and not mountedCorrectly then
-				if not mounted then
-					local tool = equipIdAE(mountId)
-					if tool and tool:IsA("Tool") and mountAE() then
-						task.wait(0.12)
-						mounted = LocalPlayerAE:GetAttribute("RideableBrainrotActive") == true
-						mountedName = LocalPlayerAE:GetAttribute("RideableBrainrotName")
-						mountedCorrectly = mounted and (mountName == nil or mountedName == mountName)
-					end
+			-- The game's own ride controller uses explicit "mount"/"unmount" actions.
+			-- If a stale/wrong mount survives a trade transition or settings change,
+			-- unmount it first so the configured mount can actually be equipped.
+			if mounted and (modeHold or ((modeMount or modeBoth) and mountId ~= nil and not mountedCorrectly)) then
+				if rideActionAE("unmount") then
+					task.wait(0.10)
+					mounted = LocalPlayerAE:GetAttribute("RideableBrainrotActive") == true
+					mountedName = LocalPlayerAE:GetAttribute("RideableBrainrotName")
+					mountedCorrectly = mounted and mountId ~= nil
+						and (mountName == nil or mountedName == mountName)
+				end
+			end
+			if (modeMount or modeBoth) and mountId and not mountedCorrectly and not mounted then
+				local tool = equipIdAE(mountId)
+				if tool and tool:IsA("Tool") and rideActionAE("mount") then
+					task.wait(0.10)
+					mounted = LocalPlayerAE:GetAttribute("RideableBrainrotActive") == true
+					mountedName = LocalPlayerAE:GetAttribute("RideableBrainrotName")
+					mountedCorrectly = mounted and (mountName == nil or mountedName == mountName)
 				end
 			end
 			if modeMount and not modeBoth then
@@ -20965,6 +21525,7 @@ if MINIGAME_MODE then
 			if state
 				and state.PauseScript ~= true
 				and state.PauseMinigameFeatures ~= true
+				and autoServerHopState.RuntimeServerHopPending ~= true
 				and (
 					state.AutoshowBestBrainrots == true
 					or state.AutoshowAllTokens == true
@@ -21051,7 +21612,10 @@ if MINIGAME_MODE then
 				and tostring(utility._AutoOfferReactiveGuid or "") == tostring(expectedGuid)
 		end
 		local function openingStillActiveAO2(expectedGuid)
-			if autoServerHopState.Utility.PauseScript == true or autoServerHopState.Utility.PauseMinigameFeatures == true then return false end
+			if autoServerHopState.Utility.PauseScript == true
+				or autoServerHopState.Utility.PauseMinigameFeatures == true
+				or autoServerHopState.RuntimeServerHopPending == true
+			then return false end
 			if guidAO2() ~= expectedGuid then return false end
 			if tryAO2(NegotiationAO2, {"player1", "ready"}) == true then return false end
 			return not autoOfferOwnsWagerAO2(expectedGuid)
@@ -21059,6 +21623,7 @@ if MINIGAME_MODE then
 		local function invokeAO2(remote, ...)
 			if autoServerHopState.Utility.PauseScript == true
 				or autoServerHopState.Utility.PauseMinigameFeatures == true
+				or autoServerHopState.RuntimeServerHopPending == true
 			then return false, nil end
 			if not remote then return false, nil end
 			local args = table.pack(...)
@@ -21277,6 +21842,7 @@ if MINIGAME_MODE then
 			local showTokens = state.AutoshowAllTokens == true or customTokens
 			local openingEnabled = state.PauseScript ~= true
 				and state.PauseMinigameFeatures ~= true
+				and autoServerHopState.RuntimeServerHopPending ~= true
 				and (showItems or showTokens)
 			task.wait(openingEnabled and 0.10 or 0.75)
 			if rawget(_G, "__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID") ~= nil then continue end
@@ -21368,6 +21934,7 @@ if MINIGAME_MODE then
 			if state
 				and state.PauseScript ~= true
 				and state.PauseMinigameFeatures ~= true
+				and autoServerHopState.RuntimeServerHopPending ~= true
 				and (
 					state.AutoChooseGame == true
 					or state.AutoChooseRounds == true
@@ -21429,6 +21996,7 @@ if MINIGAME_MODE then
 		local function fireVoteVC(gameId, bestOf)
 			if autoServerHopState.Utility.PauseScript == true
 				or autoServerHopState.Utility.PauseMinigameFeatures == true
+				or autoServerHopState.RuntimeServerHopPending == true
 			then return false end
 			if not VoteRemoteVC then return false end
 			return pcall(function()
@@ -21604,6 +22172,7 @@ if MINIGAME_MODE then
 			local state = autoServerHopState.Utility
 			local votingEnabled = state.PauseScript ~= true
 				and state.PauseMinigameFeatures ~= true
+				and autoServerHopState.RuntimeServerHopPending ~= true
 				and (state.AutoChooseGame == true or state.AutoChooseRounds == true)
 			task.wait(votingEnabled and 0.18 or 0.75)
 			if not votingEnabled then
@@ -21947,6 +22516,7 @@ if MINIGAME_MODE then
 		local function boothMutationAllowedAB()
 			if autoServerHopState.Utility.PauseScript == true
 			or autoServerHopState.Utility.PauseMinigameFeatures == true
+				or autoServerHopState.RuntimeServerHopPending == true
 				or autoServerHopState.Utility.AutoBooth ~= true
 				or LocalPlayerAB:GetAttribute("Seated") == true
 			then
@@ -22595,6 +23165,7 @@ if MINIGAME_MODE then
 				local utility = autoServerHopState.Utility
 				if screenGui.Parent
 					and utility.PauseScript ~= true
+					and autoServerHopState.RuntimeServerHopPending ~= true
 					and utility.AutoBooth == true
 					and (guardKey == nil or utility[guardKey] == true)
 				then
@@ -22747,6 +23318,7 @@ if MINIGAME_MODE then
 		while screenGui.Parent do
 			if autoServerHopState.Utility.PauseScript ~= true
 			and autoServerHopState.Utility.PauseMinigameFeatures ~= true
+				and autoServerHopState.RuntimeServerHopPending ~= true
 				and autoServerHopState.Utility.AutoBooth == true
 			then
 				local ok = pcall(maintainBoothAB)
@@ -22774,6 +23346,7 @@ while screenGui.Parent do
     if type(utility) == "table"
         and utility.PauseScript ~= true
         and utility.PauseMinigameFeatures ~= true
+        and autoServerHopState.RuntimeServerHopPending ~= true
         and utility.AutoPlayMaster == true
         and type(flags) == "table"
     then
@@ -22816,6 +23389,7 @@ local function minigameAutoplayEnabled(id)
     return type(utility) == "table"
         and utility.PauseScript ~= true
         and utility.PauseMinigameFeatures ~= true
+        and autoServerHopState.RuntimeServerHopPending ~= true
         and utility.AutoPlayMaster == true
         and type(flags) == "table"
         and flags[id] == true
@@ -23017,6 +23591,7 @@ local function fireAction(action, ...)
     if type(utility) ~= "table"
         or utility.PauseScript == true
         or utility.PauseMinigameFeatures == true
+        or autoServerHopState.RuntimeServerHopPending == true
     then
         return false
     end
@@ -30632,7 +31207,7 @@ local function getRequestFunction()
 end
 local function fetchServerPage(requestFn, cursor)
     local url = "https://games.roblox.com/v1/games/"
-        .. tostring(game.PlaceId)
+        .. tostring(TUFFHUB_HOP_PLACE_ID)
         .. "/servers/Public?sortOrder=Desc&limit="
         .. tostring(SERVER_PAGE_LIMIT)
         .. "&excludeFullGames=true"
@@ -30894,7 +31469,7 @@ local function performDisconnectAndTeleport(destinationServerId, reason)
         end
         teleportAccepted = pcall(function()
             TeleportService:TeleportToPlaceInstance(
-                game.PlaceId,
+                TUFFHUB_HOP_PLACE_ID,
                 destinationServerId,
                 LocalPlayer
             )
