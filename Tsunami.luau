@@ -104,7 +104,11 @@ local px = (function()
 	local startupPhoneLayout = UserInputService.TouchEnabled
 		and math.min(viewportSize.X, viewportSize.Y) < 700
 	local scale = startupPhoneLayout
-		and (0.72 * (math.min(viewportSize.X, viewportSize.Y) / 390))
+		and math.clamp(
+			0.90 * (math.min(viewportSize.X, viewportSize.Y) / 390),
+			0.82,
+			1.00
+		)
 		or (viewportSize.Y / 768)
 	return function(value)
 		if value == 0 then return 0 end
@@ -117,7 +121,9 @@ local responsiveTextSize = (function()
 	local startupPhoneLayout = UserInputService.TouchEnabled
 		and math.min(viewportSize.X, viewportSize.Y) < 700
 	local referenceHeight = startupPhoneLayout and 844 or 768
-	local scale = FONT_SIZE_SCALE * (viewportSize.Y / referenceHeight)
+	local scale = startupPhoneLayout
+		and math.clamp(1.02 * (viewportSize.Y / referenceHeight), 0.96, 1.08)
+		or (FONT_SIZE_SCALE * (viewportSize.Y / referenceHeight))
 	return function(baseSize)
 		return math.max(
 			1,
@@ -217,7 +223,7 @@ local MUTED_TEXT_COLOR = RGB(
 	)
 local SEARCH_TEXT_COLOR = RGB(226, 229, 235)
 local SEARCH_PLACEHOLDER_COLOR = RGB(119, 123, 132)
-local SEARCH_ICON_SIZE = px(isPhonePanelLayout() and 13.5 or 15)
+local SEARCH_ICON_SIZE = px(15)
 local MENU_TOP_GAP = px(10)
 local MENU_ITEM_HEIGHT = px(36)
 local MENU_ITEM_GAP = px(5)
@@ -231,7 +237,7 @@ local MENU_TEXT_SELECTED = RGB(234, 236, 241)
 local MENU_TEXT_HOVER = RGB(205, 208, 215)
 local MENU_ACTIVE_LINE_WIDTH = px(3)
 local MENU_ACTIVE_LINE_HEIGHT = px(22)
-local MENU_ICON_SIZE = px(isPhonePanelLayout() and 18 or 20)
+local MENU_ICON_SIZE = px(20)
 local MENU_ICON_X = px(10)
 local MENU_TEXT_X = px(39)
 local CONTENT_SIDE_PADDING = px(10)
@@ -472,14 +478,14 @@ if MINIGAME_MODE then
 		AutoAcceptTradesAcceptTokens = 1,
 		-- Delays dedicated to normal player-to-player trades.
 		AutoAcceptTradesCustomDelays = false,
-		AutoAcceptTradesInitialDelay = 0,
-		AutoAcceptTradesDelayAfterTradeMessage = 0.75,
-		AutoAcceptTradesReactionDelay = 0,
-		AutoAcceptTradesAddBrainrotDelay = 0.03,
-		AutoAcceptTradesRemoveBrainrotDelay = 0.03,
-		AutoAcceptTradesAddTokenDelay = 0,
-		AutoAcceptTradesRemoveTokenDelay = 0,
-		AutoAcceptTradesAcceptDelay = 0,
+		AutoAcceptTradesInitialDelay = 0.65,
+		AutoAcceptTradesDelayAfterTradeMessage = 0.90,
+		AutoAcceptTradesReactionDelay = 0.80,
+		AutoAcceptTradesAddBrainrotDelay = 0.18,
+		AutoAcceptTradesRemoveBrainrotDelay = 0.14,
+		AutoAcceptTradesAddTokenDelay = 0.10,
+		AutoAcceptTradesRemoveTokenDelay = 0.10,
+		AutoAcceptTradesAcceptDelay = 0.45,
 
 		-- Regular-trade opening offer. Separate from the minigame/wager opening offer.
 		RegularOpeningAutoshowBestBrainrots = false,
@@ -648,22 +654,22 @@ if MINIGAME_MODE then
 		OpeningOfferSpecificSignatures = {},
 		OpeningOfferSpecificSizes = {},
 		OpeningOfferSpecificLevels = {},
-		InitialJoinDelay = 1.125,
-		DelayAfterTradeMessage = 0.75,
-		ReactionDelay = 1.6875,
-		AddBrainrotDelay = 0.234375,
-		RemoveBrainrotDelay = 0.1125,
-		AddTokenDelay = 0,
-		RemoveTokenDelay = 0,
-		AcceptOfferDelay = 0.1875,
+		InitialJoinDelay = 0.85,
+		DelayAfterTradeMessage = 0.80,
+		ReactionDelay = 0.95,
+		AddBrainrotDelay = 0.22,
+		RemoveBrainrotDelay = 0.18,
+		AddTokenDelay = 0.10,
+		RemoveTokenDelay = 0.10,
+		AcceptOfferDelay = 0.45,
 		AutoChooseGame = false,
 		GameToChoose = "Popcorn Burst",
 		MatchOpponentGame = false,
 		FallbackGameChoices = {},
-		AutoChooseRound1Delay = 0,
+		AutoChooseRound1Delay = 1.0,
 		AutoChooseRound2Delay = 2.5,
 		AutoChooseRound3Delay = 5,
-		AutoChooseRoundsRound1Delay = 0,
+		AutoChooseRoundsRound1Delay = 1.0,
 		AutoChooseRoundsRound2Delay = 2.5,
 		AutoChooseRoundsRound3Delay = 5,
 		AutoChooseRounds = false,
@@ -677,12 +683,12 @@ if MINIGAME_MODE then
 		PrintPurchasedBoothListingsToTerminal = false,
 		AutoReconnect = false,
 		PauseMinigameFeatures = false,
-		MoveDelayConnectFour = 0,
-		MoveDelayFootballDraft = 0,
-		MoveDelayCandyBomb = 0,
-		MoveDelayBattleship = 0,
-		MoveDelayNumberGuess = 0,
-		MoveDelayKnockout = 0,
+		MoveDelayConnectFour = 1.2,
+		MoveDelayFootballDraft = 1.2,
+		MoveDelayCandyBomb = 1.2,
+		MoveDelayBattleship = 1.2,
+		MoveDelayNumberGuess = 1.2,
+		MoveDelayKnockout = 1.2,
 		TempBlacklistPlayersAfterCanceledTrade = false,
 		TempBlacklistAfterCanceledTrades = 1,
 		PermanentBlacklistPlayersAfterCanceledTrade = false,
@@ -3905,11 +3911,11 @@ local function logicalPixelsForRenderedMinimum(renderedPixels)
 end
 local MIN_WIDTH = roundEvenPixel(
 		viewportSize.X
-			* DEFAULT_WIDTH_SCALE
+			* (isPhonePanelLayout() and 0.92 or DEFAULT_WIDTH_SCALE)
 	)
 local MIN_HEIGHT = roundEvenPixel(
 		viewportSize.Y
-			* DEFAULT_HEIGHT_SCALE
+			* (isPhonePanelLayout() and 0.88 or DEFAULT_HEIGHT_SCALE)
 	)
 local FIXED_SIDEBAR_WIDTH = roundPixel(
 		MIN_WIDTH
@@ -3974,8 +3980,12 @@ local function applyDeviceWindowSize(
 	local responsiveWindowScale = window:FindFirstChild("ResponsiveWindowScale")
 	local viewportX = math.max(320, tonumber(currentViewport.X) or 1920)
 	local viewportY = math.max(240, tonumber(currentViewport.Y) or 1080)
-	local renderedWidth = math.min(viewportX * DEFAULT_WIDTH_SCALE, viewportX * 0.92)
-	local renderedHeight = math.min(viewportY * DEFAULT_HEIGHT_SCALE, viewportY * 0.92)
+	local phoneLayout = UserInputService.TouchEnabled
+		and math.min(viewportX, viewportY) < 700
+	local renderedWidth = viewportX * (phoneLayout and 0.92 or DEFAULT_WIDTH_SCALE)
+	local renderedHeight = viewportY * (phoneLayout and 0.88 or DEFAULT_HEIGHT_SCALE)
+	renderedWidth = math.min(renderedWidth, viewportX * 0.94)
+	renderedHeight = math.min(renderedHeight, viewportY * 0.92)
 	-- Keep UI controls/text at their established logical size while Roblox is
 	-- resized. Scaling the entire Window a second time made every child shrink
 	-- on smaller desktop windows even though the Window itself was already being
@@ -6008,7 +6018,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		activeSliderTouch = input.UserInputType == Enum.UserInputType.Touch
 			and input
 			or nil
-		updateSlider(input.Position.X)
+		-- Grabbing the knob alone must not change the value. Only actual pointer
+		-- movement updates the slider, preventing accidental taps from jumping it.
 		sliderChangedConnection = UserInputService.InputChanged:Connect(function(changed)
 			if not activeSliderUpdate then return end
 			if activeSliderTouch then
@@ -7403,7 +7414,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				track.Size = U2(1, 0, 0, px(5))
 				track.BackgroundColor3 = FEATURE_OFF_COLOR
 				track.BorderSizePixel = 0
-				track.Active = true
+				track.Active = false
 				track.Parent = frame
 				ensureCorner(track, px(3))
 				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(track)
@@ -7414,9 +7425,10 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				ensureCorner(fill, px(3))
 				local knob = New("Frame")
 				knob.AnchorPoint = V2(0.5, 0.5)
-				knob.Size = U2O(px(11), px(11))
+				knob.Size = U2O(px(isPhonePanelLayout() and 21 or 11), px(isPhonePanelLayout() and 21 or 11))
 				knob.BackgroundColor3 = MENU_TEXT_SELECTED
 				knob.BorderSizePixel = 0
+				knob.Active = true
 				knob.Parent = track
 				ensureCorner(knob, px(6))
 				local function setValue(v)
@@ -7430,7 +7442,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				end
 				setValue(initial)
 				value.FocusLost:Connect(function() setValue(value.Text) end)
-				track.InputBegan:Connect(function(input)
+				knob.InputBegan:Connect(function(input)
 					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 						beginSliderDrag(input, function(x)
 							local alpha = math.clamp((x - track.AbsolutePosition.X) / math.max(1, track.AbsoluteSize.X), 0, 1)
@@ -7576,19 +7588,19 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					local row=New("Frame") row.Position=U2O(0,yPos) row.Size=U2(1,0,0,featureRowHeight) row.BackgroundTransparency=1 row.ZIndex=45014 row.Parent=secondaryContainer
 					local label=New("TextLabel") label.AnchorPoint=V2(0,0.5) label.Position=U2(0,0,0.5,0) label.Size=U2(1,-(toggleWidth+componentLabelGap),1,0) label.BackgroundTransparency=1 label.Text=capitalizeUiWords(text) label.TextColor3=getter() and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR label.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(label,14) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.None label.Parent=row
 					local track=New("TextButton") track.AnchorPoint=V2(1,0.5) track.Position=U2(1,0,0.5,0) track.Size=U2O(toggleWidth,toggleHeight) track.BackgroundColor3=getter() and PINK or FEATURE_OFF_COLOR track.BorderSizePixel=0 track.AutoButtonColor=false track.Text="" track.ZIndex=45015 track.Parent=row ensureCorner(track,toggleHeight*0.5) rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(track)
-					local knob=New("Frame") knob.Size=U2O(toggleHeight-knobInset*2,toggleHeight-knobInset*2) knob.Position=getter() and U2(0,toggleWidth-toggleHeight+knobInset,0,knobInset) or U2O(knobInset,knobInset) knob.BackgroundColor3=MENU_TEXT_SELECTED knob.BorderSizePixel=0 knob.Parent=track ensureCorner(knob,(toggleHeight-knobInset*2)*0.5)
+					local knob=New("Frame") knob.Size=U2O(toggleHeight-knobInset*2,toggleHeight-knobInset*2) knob.Position=getter() and U2(0,toggleWidth-toggleHeight+knobInset,0,knobInset) or U2O(knobInset,knobInset) knob.BackgroundColor3=MENU_TEXT_SELECTED knob.BorderSizePixel=0 knob.Active=true knob.Parent=track ensureCorner(knob,(toggleHeight-knobInset*2)*0.5)
 					track.MouseButton1Click:Connect(function() setter(not getter()) task.defer(rebuildTradeChatOffers) end)
 				end
 				local function makeOfferSlider(labelText, initialValue, minValue, maxValue, yPos, onCommit)
 					local frame=New("Frame") frame.Position=U2O(0,yPos) frame.Size=U2(1,0,0,amountControlsHeight) frame.BackgroundTransparency=1 frame.ZIndex=45015 frame.Parent=secondaryContainer
 					local label=New("TextLabel") label.Size=U2(1,-amountValueWidth-componentLabelGap,0,px(15)) label.BackgroundTransparency=1 label.Text=capitalizeUiWords(labelText) label.TextColor3=MENU_TEXT_SELECTED label.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(label,13) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.None label.Parent=frame
 					local value=New("TextBox") value.AnchorPoint=V2(1,0) value.Position=U2(1,0,0,0) value.Size=U2O(amountValueWidth,px(20)) value.BackgroundColor3=FEATURE_OFF_COLOR value.BorderSizePixel=0 value.ClearTextOnFocus=false value.TextColor3=MENU_TEXT_SELECTED value.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(value,13) value.TextTruncate=Enum.TextTruncate.None value.ClipsDescendants=true value.Parent=frame ensureCorner(value,px(5)) rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(value)
-					local track=New("Frame") track.Position=U2O(0,px(27)) track.Size=U2(1,0,0,px(5)) track.BackgroundColor3=FEATURE_OFF_COLOR track.BorderSizePixel=0 track.Active=true track.Parent=frame ensureCorner(track,px(3)) rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(track)
+					local track=New("Frame") track.Position=U2O(0,px(27)) track.Size=U2(1,0,0,px(5)) track.BackgroundColor3=FEATURE_OFF_COLOR track.BorderSizePixel=0 track.Active=false track.Parent=frame ensureCorner(track,px(3)) rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(track)
 					local fill=New("Frame") fill.BackgroundColor3=PINK fill.BorderSizePixel=0 fill.Parent=track ensureCorner(fill,px(3))
-					local knob=New("Frame") knob.AnchorPoint=V2(0.5,0.5) knob.Size=U2O(px(11),px(11)) knob.BackgroundColor3=MENU_TEXT_SELECTED knob.BorderSizePixel=0 knob.Parent=track ensureCorner(knob,px(6))
+					local knob=New("Frame") knob.AnchorPoint=V2(0.5,0.5) knob.Size=U2O(px(isPhonePanelLayout() and 21 or 11),px(isPhonePanelLayout() and 21 or 11)) knob.BackgroundColor3=MENU_TEXT_SELECTED knob.BorderSizePixel=0 knob.Active=true knob.Parent=track ensureCorner(knob,px(6))
 					local function setValue(v) v=math.clamp(math.floor(tonumber(v) or minValue),minValue,maxValue) local adjusted=onCommit(v) if adjusted~=nil then v=math.clamp(math.floor(tonumber(adjusted) or v),minValue,maxValue) end value.Text=tostring(v) local a=maxValue==minValue and 0 or ((v-minValue)/(maxValue-minValue)) fill.Size=U2S(a,1) knob.Position=U2(a,0,0.5,0) end
 					setValue(initialValue) value.FocusLost:Connect(function() setValue(value.Text) end)
-					track.InputBegan:Connect(function(input) if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then beginSliderDrag(input,function(x) local a=math.clamp((x-track.AbsolutePosition.X)/math.max(1,track.AbsoluteSize.X),0,1) setValue(minValue+math.floor(a*(maxValue-minValue)+0.5)) end) end end)
+					knob.InputBegan:Connect(function(input) if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then beginSliderDrag(input,function(x) local a=math.clamp((x-track.AbsolutePosition.X)/math.max(1,track.AbsoluteSize.X),0,1) setValue(minValue+math.floor(a*(maxValue-minValue)+0.5)) end) end end)
 				end
 				for entryIndex, rawEntry in ipairs(entries) do
 					local entry=normalizeTradeChatEntry(rawEntry) entries[entryIndex]=entry
@@ -8040,13 +8052,13 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 						track.Size = U2(1,0,0,px(5))
 						track.BackgroundColor3 = FEATURE_OFF_COLOR
 						track.BorderSizePixel = 0
-						track.Active = true
+						track.Active = false
 						track.Parent = amountFrame
 						ensureCorner(track,px(3))
 						local fill = New("Frame")
 						fill.BackgroundColor3=PINK fill.BorderSizePixel=0 fill.Parent=track ensureCorner(fill,px(3))
 						local knob = New("Frame")
-						knob.AnchorPoint=V2(0.5,0.5) knob.Size=U2O(px(11),px(11)) knob.BackgroundColor3=MENU_TEXT_SELECTED knob.BorderSizePixel=0 knob.Parent=track ensureCorner(knob,px(6))
+						knob.AnchorPoint=V2(0.5,0.5) knob.Size=U2O(px(isPhonePanelLayout() and 21 or 11),px(isPhonePanelLayout() and 21 or 11)) knob.BackgroundColor3=MENU_TEXT_SELECTED knob.BorderSizePixel=0 knob.Active=true knob.Parent=track ensureCorner(knob,px(6))
 						local function setAmount(value, updateBox)
 							entry.Amount=math.clamp(math.floor(tonumber(value) or 1),1,maxAmount)
 							if updateBox then valueBox.Text=tostring(entry.Amount) end
@@ -8055,7 +8067,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 						end
 						setAmount(entry.Amount,true)
 						valueBox.FocusLost:Connect(function() setAmount(valueBox.Text,true) end)
-						track.InputBegan:Connect(function(input)
+						knob.InputBegan:Connect(function(input)
 							if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
 								beginSliderDrag(input,function(pointX)
 									local alpha=math.clamp((pointX-track.AbsolutePosition.X)/math.max(1,track.AbsoluteSize.X),0,1)
@@ -8694,7 +8706,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				sliderTrack.Size = U2(1, 0, 0, px(5))
 				sliderTrack.BackgroundColor3 = FEATURE_OFF_COLOR
 				sliderTrack.BorderSizePixel = 0
-				sliderTrack.Active = true
+				sliderTrack.Active = false
 				sliderTrack.ZIndex = 45014
 				sliderTrack.Parent = frame
 				ensureCorner(sliderTrack, px(3))
@@ -8709,9 +8721,10 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				local sliderKnob = New("Frame")
 				sliderKnob.Name = "Knob"
 				sliderKnob.AnchorPoint = V2(0.5, 0.5)
-				sliderKnob.Size = U2O(px(11), px(11))
+				sliderKnob.Size = U2O(px(isPhonePanelLayout() and 21 or 11), px(isPhonePanelLayout() and 21 or 11))
 				sliderKnob.BackgroundColor3 = MENU_TEXT_SELECTED
 				sliderKnob.BorderSizePixel = 0
+				sliderKnob.Active = true
 				sliderKnob.ZIndex = 45016
 				sliderKnob.Parent = sliderTrack
 				ensureCorner(sliderKnob, px(6))
@@ -8782,7 +8795,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 						true
 					)
 				end
-				sliderTrack.InputBegan:Connect(function(input)
+				sliderKnob.InputBegan:Connect(function(input)
 					if input.UserInputType == Enum.UserInputType.MouseButton1
 						or input.UserInputType == Enum.UserInputType.Touch
 					then
@@ -9217,7 +9230,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			sliderTrack.Size = U2(1, 0, 0, px(5))
 			sliderTrack.BackgroundColor3 = FEATURE_OFF_COLOR
 			sliderTrack.BorderSizePixel = 0
-			sliderTrack.Active = true
+			sliderTrack.Active = false
 			sliderTrack.ZIndex = 45014
 			sliderTrack.Parent = sliderFrame
 			ensureCorner(sliderTrack, px(3))
@@ -9230,9 +9243,10 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			ensureCorner(sliderFill, px(3))
 			local sliderKnob = New("Frame")
 			sliderKnob.AnchorPoint = V2(0.5, 0.5)
-			sliderKnob.Size = U2O(px(11), px(11))
+			sliderKnob.Size = U2O(px(isPhonePanelLayout() and 21 or 11), px(isPhonePanelLayout() and 21 or 11))
 			sliderKnob.BackgroundColor3 = MENU_TEXT_SELECTED
 			sliderKnob.BorderSizePixel = 0
+			sliderKnob.Active = true
 			sliderKnob.ZIndex = 45016
 			sliderKnob.Parent = sliderTrack
 			ensureCorner(sliderKnob, px(6))
@@ -9294,7 +9308,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				local maxValue = resolvedMaxValue()
 				setValue(minValue + alpha * (maxValue - minValue), true)
 			end
-			sliderTrack.InputBegan:Connect(function(input)
+			sliderKnob.InputBegan:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1
 					or input.UserInputType == Enum.UserInputType.Touch
 				then
@@ -9366,7 +9380,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			sliderTrack.Size = U2(1, 0, 0, px(5))
 			sliderTrack.BackgroundColor3 = FEATURE_OFF_COLOR
 			sliderTrack.BorderSizePixel = 0
-			sliderTrack.Active = true
+			sliderTrack.Active = false
 			sliderTrack.ZIndex = 45014
 			sliderTrack.Parent = amountFrame
 			ensureCorner(sliderTrack, px(3))
@@ -9381,9 +9395,10 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			local sliderKnob = New("Frame")
 			sliderKnob.Name = "Knob"
 			sliderKnob.AnchorPoint = V2(0.5, 0.5)
-			sliderKnob.Size = U2O(px(11), px(11))
+			sliderKnob.Size = U2O(px(isPhonePanelLayout() and 21 or 11), px(isPhonePanelLayout() and 21 or 11))
 			sliderKnob.BackgroundColor3 = MENU_TEXT_SELECTED
 			sliderKnob.BorderSizePixel = 0
+			sliderKnob.Active = true
 			sliderKnob.ZIndex = 45016
 			sliderKnob.Parent = sliderTrack
 			ensureCorner(sliderKnob, px(6))
@@ -9411,7 +9426,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				local alpha = math.clamp((pointX - sliderTrack.AbsolutePosition.X) / width, 0, 1)
 				setAcceptAmount(1 + math.floor(alpha * (maxAmount - 1) + 0.5), true)
 			end
-			sliderTrack.InputBegan:Connect(function(input)
+			sliderKnob.InputBegan:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1
 					or input.UserInputType == Enum.UserInputType.Touch
 				then
@@ -9471,12 +9486,12 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			track.Size = U2(1, 0, 0, px(5))
 			track.BackgroundColor3 = FEATURE_OFF_COLOR
 			track.BorderSizePixel = 0
-			track.Active = true
+			track.Active = false
 			track.Parent = frame
 			ensureCorner(track, px(3))
 			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(track)
 			local fill = New("Frame") fill.BackgroundColor3 = PINK fill.BorderSizePixel = 0 fill.Parent = track ensureCorner(fill, px(3))
-			local knob = New("Frame") knob.AnchorPoint = V2(0.5,0.5) knob.Size = U2O(px(11),px(11)) knob.BackgroundColor3 = MENU_TEXT_SELECTED knob.BorderSizePixel = 0 knob.Parent = track ensureCorner(knob,px(6))
+			local knob = New("Frame") knob.AnchorPoint = V2(0.5,0.5) knob.Size = U2O(px(isPhonePanelLayout() and 21 or 11),px(isPhonePanelLayout() and 21 or 11)) knob.BackgroundColor3 = MENU_TEXT_SELECTED knob.BorderSizePixel = 0 knob.Active = true knob.Parent = track ensureCorner(knob,px(6))
 			local function setAmount(v, update)
 				v = math.clamp(math.floor(tonumber(v) or 1), 1, maxAmount)
 				if isTokenCriterion then stateEntry.Tokens = v else stateEntry.Amounts[criterionKey] = v end
@@ -9486,7 +9501,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			end
 			setAmount(isTokenCriterion and stateEntry.Tokens or stateEntry.Amounts[criterionKey], true)
 			value.FocusLost:Connect(function() setAmount(value.Text, true) end)
-			track.InputBegan:Connect(function(input)
+			knob.InputBegan:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 					beginSliderDrag(input, function(x)
 						local alpha = math.clamp((x-track.AbsolutePosition.X)/math.max(1,track.AbsoluteSize.X),0,1)
@@ -12854,6 +12869,7 @@ autoServerHopState.ConnectPersistent(UserInputService.InputBegan,
 		Start = nil,
 		StartPosition = nil,
 		TouchInput = nil,
+		RightContentScrolling = nil,
 	}
 	local function belongsToWindow(object)
 		return object == window
@@ -12888,6 +12904,9 @@ autoServerHopState.ConnectPersistent(UserInputService.InputBegan,
 		if isInsidePanel(object) then
 			return true
 		end
+		if object == rightContent then
+			return false
+		end
 		if object == selectedTabTitle and point then
 			local bounds = object.TextBounds
 			local position = object.AbsolutePosition
@@ -12903,10 +12922,7 @@ autoServerHopState.ConnectPersistent(UserInputService.InputBegan,
 		end
 		return object:IsA("GuiButton")
 			or object:IsA("TextBox")
-			or object:IsA("TextLabel")
-			or object:IsA("ImageLabel")
-			or object:IsA("ImageButton")
-			or object.BackgroundTransparency < 0.999
+			or object:IsA("ScrollingFrame")
 	end
 	local function pointIsEmptyBlackBackground(point)
 		local hits
@@ -12954,11 +12970,9 @@ autoServerHopState.ConnectPersistent(UserInputService.InputBegan,
 		if pointInsideGui(menuHolder, point) then
 			return true
 		end
-		if inputType == Enum.UserInputType.Touch
-			and pointInsideGui(rightContent, point)
-		then
-			return true
-		end
+		-- On touch, actual panels/interactables are rejected by objectBlocksDrag.
+		-- The unused black/background area of rightContent stays available as a
+		-- large, easy window-drag surface instead of swallowing the whole region.
 		return false
 	end
 	local function beginDrag(input)
@@ -12974,12 +12988,18 @@ autoServerHopState.ConnectPersistent(UserInputService.InputBegan,
 		dragState.TouchInput = input.UserInputType == Enum.UserInputType.Touch
 			and input
 			or nil
+		dragState.RightContentScrolling = rightContent.ScrollingEnabled
+		rightContent.ScrollingEnabled = false
 	end
 	local function endDrag()
 		dragging = false
+		if dragState.RightContentScrolling ~= nil then
+			rightContent.ScrollingEnabled = dragState.RightContentScrolling
+		end
 		dragState.Start = nil
 		dragState.StartPosition = nil
 		dragState.TouchInput = nil
+		dragState.RightContentScrolling = nil
 	end
 	local function updateDrag(position)
 		if not dragging
@@ -12989,15 +13009,34 @@ autoServerHopState.ConnectPersistent(UserInputService.InputBegan,
 			return
 		end
 		local delta = position - dragState.Start
+		local liveCamera = workspace.CurrentCamera or camera
+		local liveViewport = liveCamera and liveCamera.ViewportSize or viewportSize
+		local absoluteSize = window.AbsoluteSize
+		local visibleEdge = math.min(
+			math.max(px(36), 36),
+			math.max(1, math.min(absoluteSize.X, absoluteSize.Y) * 0.35)
+		)
+		local scaleX = dragState.StartPosition.X.Scale
+		local scaleY = dragState.StartPosition.Y.Scale
+		local desiredCenterX = (scaleX * liveViewport.X)
+			+ dragState.StartPosition.X.Offset + delta.X
+		local desiredCenterY = (scaleY * liveViewport.Y)
+			+ dragState.StartPosition.Y.Offset + delta.Y
+		desiredCenterX = math.clamp(
+			desiredCenterX,
+			(-absoluteSize.X * 0.5) + visibleEdge,
+			liveViewport.X + (absoluteSize.X * 0.5) - visibleEdge
+		)
+		desiredCenterY = math.clamp(
+			desiredCenterY,
+			(-absoluteSize.Y * 0.5) + visibleEdge,
+			liveViewport.Y + (absoluteSize.Y * 0.5) - visibleEdge
+		)
 		window.Position = UDim2.new(
-			dragState.StartPosition.X.Scale,
-			roundPixel(
-				dragState.StartPosition.X.Offset + delta.X
-			),
-			dragState.StartPosition.Y.Scale,
-			roundPixel(
-				dragState.StartPosition.Y.Offset + delta.Y
-			)
+			scaleX,
+			roundPixel(desiredCenterX - (scaleX * liveViewport.X)),
+			scaleY,
+			roundPixel(desiredCenterY - (scaleY * liveViewport.Y))
 		)
 	end
 	autoServerHopState.ConnectPersistent(UserInputService.InputBegan, function(input)
@@ -14579,6 +14618,7 @@ if MINIGAME_MODE then
 			if routeBusyAS and (
 				utility.PauseScript == true
 				or utility.PauseMinigameFeatures == true
+				or autoServerHopState.RuntimeServerHopPending == true
 				or (minigamePlayingAS() or negotiationActiveAS())
 			) then
 				stopMovementAS()
@@ -16189,6 +16229,9 @@ if MINIGAME_MODE then
 		)
 		local boothBlockRemainingHP = 0
 		local hopNotBeforeHP = 0
+		local wagerNotBeforeHP = 0
+		local postWagerSettleUntilHP = 0
+		local standstillActiveHP = false
 		local previousBoothOffersHP = {}
 		local pendingBoothChecksHP = {}
 		local nextBoothScanAtHP = 0
@@ -16278,11 +16321,21 @@ if MINIGAME_MODE then
 			return tryIndexHP(active, {"phase"}) == "Playing"
 				and tryIndexHP(active, {"session", "gameId"}) ~= nil
 		end
+		local function stopForServerHopHP()
+			local character = LocalPlayerHP and LocalPlayerHP.Character
+			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+			local root = character and character:FindFirstChild("HumanoidRootPart")
+			if humanoid then
+				humanoid:Move(Vector3.zero, false)
+				if root then pcall(function() humanoid:MoveTo(root.Position) end) end
+			end
+		end
 		local function hopPreparationBlockedHP(active)
 			if autoServerHopState.Utility.PauseScript == true
 				or autoServerHopState.Utility.PauseMinigameFeatures == true
 				or autoServerHopState.RuntimeAutoSitBusy == true
 				or autoServerHopState.RuntimeBoothMutationBusy == true
+				or os.clock() < postWagerSettleUntilHP
 			then
 				return true
 			end
@@ -16453,6 +16506,10 @@ if MINIGAME_MODE then
 				.. ":" .. tostring(result.round or result.roundIndex or result.bestOf or "")
 			if signature == lastResultSignatureHP then return end
 			lastResultSignatureHP = signature
+			-- A replicated result resolves the short post-wager settlement guard.
+			-- Keep the configured post-win delay separate from that guard so an
+			-- already-due hop can never beat the time extension.
+			postWagerSettleUntilHP = 0
 			if autoServerHopState.Enabled ~= true then return end
 			if winner == 1 then
 				local addedSeconds = math.clamp(
@@ -16460,7 +16517,9 @@ if MINIGAME_MODE then
 					0, 60
 				) * 60
 				if addedSeconds > 0 then
-					hopNotBeforeHP = math.max(hopNotBeforeHP, os.clock() + addedSeconds)
+					local extendedUntil = os.clock() + addedSeconds
+					wagerNotBeforeHP = math.max(wagerNotBeforeHP, extendedUntil)
+					hopNotBeforeHP = math.max(hopNotBeforeHP, extendedUntil)
 					noGameElapsedHP = 0
 					if autoServerHopState.ServerTimeEnabled == true then
 						serverElapsedHP = math.max(0, serverElapsedHP - addedSeconds)
@@ -16468,21 +16527,19 @@ if MINIGAME_MODE then
 				end
 			end
 		end
-		-- Observe match results directly as well as polling them in the hop
-		-- loop. This closes the frame where a just-won wager and an already-due
-		-- server timer could otherwise become visible at nearly the same time.
-		do
-			local activeResultSourceHP = activeMinigameHP()
-			if activeResultSourceHP then
-				pcall(function()
-					activeResultSourceHP:Listen({"matchResult"}, function()
-						if screenGui.Parent then
-							processMatchResultHP(activeResultSourceHP, false)
-						end
-					end)
+		-- ActiveMinigame may be replaced across sessions. Rebind the direct result
+		-- observer whenever that happens; polling remains as a second safety path.
+		local observedResultSourceHP
+		local function bindMatchResultObserverHP(source)
+			if not source or source == observedResultSourceHP then return end
+			local ok = pcall(function()
+				source:Listen({"matchResult"}, function()
+					if screenGui.Parent then processMatchResultHP(source, false) end
 				end)
-			end
+			end)
+			if ok then observedResultSourceHP = source end
 		end
+		bindMatchResultObserverHP(activeMinigameHP())
 		local function requestFunctionHP()
 			local env
 			pcall(function()
@@ -16624,6 +16681,8 @@ if MINIGAME_MODE then
 		end
 		local function hopDifferentHP()
 			local collisionDueHP = presenceDueHP()
+			local manualDueHP = autoServerHopState.RuntimeManualServerHopRequested == true
+			if not manualDueHP and os.clock() < wagerNotBeforeHP then return end
 			if hopPreparationBlockedHP(activeMinigameHP()) then return end
 			local presenceWarmHP = true
 			if not collisionDueHP and autoServerHopState.LeaveIfScriptUserInServer == true then
@@ -16649,10 +16708,8 @@ if MINIGAME_MODE then
 			local activeBeforeTeleport = activeMinigameHP()
 			local checkServerDueHP =
 				autoServerHopState.RuntimeCheckServerHopRequested == true
-			local manualDueHP =
-				autoServerHopState.RuntimeManualServerHopRequested == true
 			if not scheduledDueHP()
-				or (not collisionDueHP and os.clock() < hopNotBeforeHP)
+				or (not manualDueHP and os.clock() < hopNotBeforeHP)
 				or (
 					not collisionDueHP
 					and not checkServerDueHP
@@ -16734,15 +16791,23 @@ if MINIGAME_MODE then
 				hoppingHP = false
 				lastTimerTickHP = os.clock()
 				wasPresenceDueHP = false
+				standstillActiveHP = false
 				continue
 			end
 			local active = activeMinigameHP()
+			bindMatchResultObserverHP(active)
 			local nowPlaying = playingHP(active)
+			if wasPlayingHP and not nowPlaying and lastResultSignatureHP == nil then
+				local settleUntil = os.clock() + 8.00
+				postWagerSettleUntilHP = math.max(postWagerSettleUntilHP, settleUntil)
+				hopNotBeforeHP = math.max(hopNotBeforeHP, settleUntil)
+			end
 			local lifecycleBlocked = lifecycleBlockedHP(active)
 			local pausedHP = autoServerHopState.Utility.PauseScript == true
 				or autoServerHopState.Utility.PauseMinigameFeatures == true
 			local preparationBlockedHP = pausedHP
 				or lifecycleBlocked
+				or os.clock() < postWagerSettleUntilHP
 				or autoServerHopState.RuntimeAutoSitBusy == true
 				or autoServerHopState.RuntimeBoothMutationBusy == true
 			if preparationBlockedHP then
@@ -16770,6 +16835,9 @@ if MINIGAME_MODE then
 				noGameElapsedHP = 0
 				boothBlockRemainingHP = 0
 				hopNotBeforeHP = 0
+				wagerNotBeforeHP = 0
+				postWagerSettleUntilHP = 0
+				standstillActiveHP = false
 				lastTimerTickHP = nowHP
 			end
 			local deltaHP = math.max(0, nowHP - lastTimerTickHP)
@@ -16805,18 +16873,27 @@ if MINIGAME_MODE then
 				end
 			end
 			wasPresenceDueHP = presenceNowHP
-			local hopDueHP = scheduledDueHP()
+			local rawHopDueHP = scheduledDueHP()
+			local manualHopDueHP = autoServerHopState.RuntimeManualServerHopRequested == true
+			local wagerDelayActiveHP = not manualHopDueHP and nowHP < wagerNotBeforeHP
+			local hopDueHP = rawHopDueHP and not wagerDelayActiveHP
 			local preparedHopReadyHP = hopDueHP and (
 				(presenceNowHP and presenceChoiceHP() ~= nil)
 				or (not presenceNowHP and cachedChoiceHP() ~= nil)
 			)
-			autoServerHopState.RuntimeServerHopPending = not preparationBlockedHP and (
-				presenceNowHP
-				or autoServerHopState.RuntimeCheckServerHopRequested == true
-				or autoServerHopState.RuntimeManualServerHopRequested == true
-				or preparedHopReadyHP
-				or hoppingHP
-			)
+			local pendingHopHP = not pausedHP
+				and not lifecycleBlocked
+				and not wagerDelayActiveHP
+				and (hopDueHP or hoppingHP)
+			autoServerHopState.RuntimeServerHopPending = pendingHopHP
+			if pendingHopHP then
+				if not standstillActiveHP then
+					standstillActiveHP = true
+					stopForServerHopHP()
+				end
+			elseif standstillActiveHP then
+				standstillActiveHP = false
+			end
 			if not preparationBlockedHP and not cacheRefreshingHP then
 				local shouldRefreshHP = false
 				local requestedNowHP = presenceNowHP
@@ -16850,7 +16927,7 @@ if MINIGAME_MODE then
 			end
 			if hopDueHP
 				and not preparationBlockedHP
-				and (presenceNowHP or nowHP >= hopNotBeforeHP)
+				and (manualHopDueHP or nowHP >= hopNotBeforeHP)
 				and (
 					presenceNowHP
 					or autoServerHopState.RuntimeCheckServerHopRequested == true
@@ -18434,22 +18511,90 @@ if MINIGAME_MODE then
 		end
 		local function syncOwnOffer(u, desired, tokens)
 			if u.PauseScript == true then return false end
-			for slot=1,6 do
-				if u.PauseScript == true then return false end
-				local current=try(Negotiation,{"player1","slots",tostring(slot)}); local currentId=type(current)=="table" and current.id or current
-				local wanted=desired[slot]
-				if tostring(currentId or "")~=tostring(wanted or "") then
-					if u.PauseScript == true then return false end
-					pcall(SetSlot.InvokeServer,SetSlot,tostring(slot),wanted)
-					task.wait(wanted and tradeDelay(u,"AutoAcceptTradesAddBrainrotDelay",0.03) or tradeDelay(u,"AutoAcceptTradesRemoveBrainrotDelay",0.03))
+			desired = type(desired) == "table" and desired or {}
+			local expectedGuid = isNormalTrade()
+			if expectedGuid == nil then return false end
+			tokens = math.max(0, math.floor(tonumber(tokens) or 0))
+			local function stillSameTrade()
+				local liveGuid = isNormalTrade()
+				return u.PauseScript ~= true
+					and liveGuid ~= nil
+					and tostring(liveGuid) == tostring(expectedGuid)
+			end
+			local function slotId(slot)
+				local current = try(Negotiation, {"player1", "slots", tostring(slot)})
+				return type(current) == "table" and current.id or current
+			end
+			local function sameId(a, b)
+				if a == b then return true end
+				return a ~= nil and b ~= nil and tostring(a) == tostring(b)
+			end
+			for attempt = 1, 3 do
+				if not stillSameTrade() then return false end
+				-- Never mutate a finalized/ready offer. If this script was the one that
+				-- readied it, release that ready state first and let replication settle.
+				if try(Negotiation, {"player1", "ready"}) == true then
+					if autoReadyGuid ~= nil
+						and tostring(autoReadyGuid) == tostring(expectedGuid)
+					then
+						releaseAutomatedReady()
+						task.wait(0.05)
+					end
+					if try(Negotiation, {"player1", "ready"}) == true then return false end
 				end
+				-- Remove every mismatched slot first. This avoids duplicate-item/server
+				-- rejections when two existing slots need to swap positions.
+				for slot = 1, 6 do
+					if not stillSameTrade() then return false end
+					local currentId = slotId(slot)
+					local wanted = desired[slot]
+					if currentId ~= nil and not sameId(currentId, wanted) then
+						pcall(SetSlot.InvokeServer, SetSlot, tostring(slot), nil)
+						task.wait(tradeDelay(u, "AutoAcceptTradesRemoveBrainrotDelay", 0.14))
+					end
+				end
+				for slot = 1, 6 do
+					if not stillSameTrade() then return false end
+					local wanted = desired[slot]
+					if wanted ~= nil and not sameId(slotId(slot), wanted) then
+						pcall(SetSlot.InvokeServer, SetSlot, tostring(slot), wanted)
+						task.wait(tradeDelay(u, "AutoAcceptTradesAddBrainrotDelay", 0.18))
+					end
+				end
+				if not stillSameTrade() then return false end
+				local currentTokens = math.max(
+					0,
+					math.floor(tonumber(try(Negotiation, {"player1", "currency"})) or 0)
+				)
+				if currentTokens ~= tokens then
+					pcall(OfferCurrency.InvokeServer, OfferCurrency, tokens)
+					task.wait(
+						tokens > currentTokens
+							and tradeDelay(u, "AutoAcceptTradesAddTokenDelay", 0.10)
+							or tradeDelay(u, "AutoAcceptTradesRemoveTokenDelay", 0.10)
+					)
+				end
+				local verifyUntil = os.clock() + 0.40
+				repeat
+					if not stillSameTrade() then return false end
+					local verified = math.max(
+						0,
+						math.floor(tonumber(try(Negotiation, {"player1", "currency"})) or 0)
+					) == tokens
+					if verified then
+						for slot = 1, 6 do
+							if not sameId(slotId(slot), desired[slot]) then
+								verified = false
+								break
+							end
+						end
+					end
+					if verified then return true end
+					task.wait(0.02)
+				until os.clock() >= verifyUntil
+				task.wait(0.04 * attempt)
 			end
-			local currentTokens=tonumber(try(Negotiation,{"player1","currency"})) or 0
-			if currentTokens~=tokens then
-				if u.PauseScript == true then return false end
-				pcall(OfferCurrency.InvokeServer,OfferCurrency,tokens)
-				task.wait(tokens>currentTokens and tradeDelay(u,"AutoAcceptTradesAddTokenDelay",0) or tradeDelay(u,"AutoAcceptTradesRemoveTokenDelay",0))
-			end
+			return false
 		end
 		local function inventoryContext()
 			local root=try(PlayerData,{}) or {}; local inv=root.Inventory or try(PlayerData,{"Inventory"}) or {}
@@ -18480,7 +18625,7 @@ if MINIGAME_MODE then
 				for _,id in ipairs(sorted) do add(id); if #desired>=6 then break end end
 			end
 			local tokens=showAll and balance or (customTokens and math.min(balance,math.max(0,math.floor(tonumber(u.RegularOpeningTokenAmount) or 0))) or 0)
-			syncOwnOffer(u,desired,tokens); return true
+			return syncOwnOffer(u,desired,tokens)
 		end
 		local function normalizeRegularOfferChat(value)
 			value=string.lower(tostring(value or "")); value=string.gsub(value,"[%p%c]+"," "); value=string.gsub(value,"%s+"," ")
@@ -18637,12 +18782,17 @@ if MINIGAME_MODE then
 			if not reactiveMatched then
 				-- Opening Offer is the only baseline. When a reactive rule stops matching,
 				-- return to that baseline instead of retaining a stale reactive offer.
-				if applyOpeningOffer(u) then return true end
-				syncOwnOffer(u,{},0)
-				return true
+				if u.RegularOpeningAutoshowBestBrainrots==true
+					or u.RegularOpeningCustomBrainrots==true
+					or u.RegularOpeningAutoshowAllTokens==true
+					or u.RegularOpeningCustomTokens==true
+				then
+					return applyOpeningOffer(u)
+				end
+				return syncOwnOffer(u,{},0)
 			end
 			tokens=forceAllTokens and balance or math.min(balance,math.max(0,math.floor(tokens)))
-			syncOwnOffer(u,desired,tokens); return true
+			return syncOwnOffer(u,desired,tokens)
 		end
 		local function regularOfferAutomationEnabled(u)
 			return u.RegularAutoOfferMaster==true
@@ -18701,7 +18851,7 @@ if MINIGAME_MODE then
 						local requestOK,configured=tradeRequestRequirements(u,opponent)
 						if configured and requestOK then
 							handledRequests[requestKey]=true
-							local delay=tradeDelay(u,"AutoAcceptTradesInitialDelay",0)
+							local delay=tradeDelay(u,"AutoAcceptTradesInitialDelay",0.65)
 							if delay>0 then task.wait(delay) end
 							if u.PauseScript == true then break end
 							pcall(Respond.InvokeServer,Respond,key,true)
@@ -18726,19 +18876,31 @@ if MINIGAME_MODE then
 				openingAppliedGuid=nil
 				autoReadyGuid=nil
 				table.clear(opponentItemCache)
-				tradeReactionAt=os.clock()+tradeDelay(u,"AutoAcceptTradesReactionDelay",0)
+				tradeReactionAt=os.clock()+tradeDelay(u,"AutoAcceptTradesReactionDelay",0.80)
 			end
 
 			local offerAutomationEnabled=regularOfferAutomationEnabled(u)
 			local tradeMessageDelaySatisfied=true
 			if tostring(u._LastTradeMessageGuid or "")==tostring(guid) then
 				local sentAt=tonumber(u._LastTradeMessageSentAt) or 0
-				tradeMessageDelaySatisfied=os.clock()-sentAt>=tradeDelay(u,"AutoAcceptTradesDelayAfterTradeMessage",0.75)
+				tradeMessageDelaySatisfied=os.clock()-sentAt>=tradeDelay(u,"AutoAcceptTradesDelayAfterTradeMessage",0.90)
 			end
 			if offerAutomationEnabled then
 				if tradeMessageDelaySatisfied and tostring(openingAppliedGuid)~=tostring(guid) then
-					applyOpeningOffer(u)
-					openingAppliedGuid=guid
+					if not (u.RegularOpeningAutoshowBestBrainrots==true
+						or u.RegularOpeningCustomBrainrots==true
+						or u.RegularOpeningAutoshowAllTokens==true
+						or u.RegularOpeningCustomTokens==true)
+					then
+						openingAppliedGuid=guid
+					elseif applyOpeningOffer(u) then
+						openingAppliedGuid=guid
+					else
+						-- Do not let a reactive offer race an opening offer that has not
+						-- replicated yet; retry the verified opening state first.
+						task.wait(0.10)
+						continue
+					end
 				end
 				if tradeMessageDelaySatisfied and os.clock()>=tradeReactionAt then applyOwnOffer(u) end
 			else
@@ -18749,7 +18911,7 @@ if MINIGAME_MODE then
 			if u.AutoAcceptTradesAcceptOffers==true then
 				local requirementsOK,configured=acceptRequirements(u)
 				if configured and requirementsOK then
-					local due=(tonumber(try(Negotiation,{"timers","lastUpdate"})) or -1)+3+tradeDelay(u,"AutoAcceptTradesAcceptDelay",0)
+					local due=(tonumber(try(Negotiation,{"timers","lastUpdate"})) or -1)+3+tradeDelay(u,"AutoAcceptTradesAcceptDelay",0.45)
 					if not ready and workspace:GetServerTimeNow()>=due then
 						if u.PauseScript == true then task.wait(0.10); continue end
 						local version=tonumber(try(Negotiation,{"timers","version"})) or 0
@@ -18912,6 +19074,7 @@ if MINIGAME_MODE then
             local slots = tryIndexAO(negotiationAO, {"player2", "slots"})
             if type(slots) ~= "table" then slots = {} end
             local sourceCounts = {}
+            local offeredItems = {}
             local signature = {}
             for slotIndex = 1, 6 do
                 local value = slots[tostring(slotIndex)]
@@ -18919,13 +19082,16 @@ if MINIGAME_MODE then
                 local id = type(value) == "table" and value.id or value
                 local item = type(value) == "table" and value.item or nil
                 local cacheKey = tostring(slotIndex)
-                if type(item) == "table" and rarityAO(item) then
+                if type(item) == "table" then
                     opponentItemCache[cacheKey] = {id = tostring(id or ""), item = item}
                 elseif id ~= nil then
                     local cached = opponentItemCache[cacheKey]
                     if cached and cached.id == tostring(id) then item = cached.item end
                 else
                     opponentItemCache[cacheKey] = nil
+                end
+                if type(item) == "table" then
+                    offeredItems[#offeredItems + 1] = item
                 end
                 local rarity = rarityAO(item)
                 if rarity then
@@ -18937,7 +19103,103 @@ if MINIGAME_MODE then
                 tryIndexAO(negotiationAO, {"player2", "currency"})
             ) or 0))
             signature[#signature + 1] = "T=" .. tostring(tokens)
-            return sourceCounts, tokens, table.concat(signature, "|")
+            return sourceCounts, tokens, table.concat(signature, "|"), offeredItems
+        end
+        autoServerHopState.SimpleTradeMatchesAcceptCriteriaAO = function(offeredItems, opponentTokens)
+            local utility = autoServerHopState.Utility
+            local enabled, matched = 0, 0
+            local filteredCounts = {}
+            for _, item in ipairs(type(offeredItems) == "table" and offeredItems or {}) do
+                local itemRarity = rarityAO(item)
+                if itemRarity and autoServerHopState.ItemMatchesSpecificFilters(
+                    item,
+                    utility["AutoAccept" .. itemRarity .. "Mutations"],
+                    utility["AutoAccept" .. itemRarity .. "Traits"],
+                    {
+                        Signatures = utility["AutoAccept" .. itemRarity .. "Signatures"],
+                        Sizes = utility["AutoAccept" .. itemRarity .. "Sizes"],
+                        Levels = utility["AutoAccept" .. itemRarity .. "Levels"],
+                    }
+                ) then
+                    filteredCounts[itemRarity] = (filteredCounts[itemRarity] or 0) + 1
+                end
+            end
+            for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+                local config = autoAcceptState[rarity]
+                if type(config) == "table" and config.Enabled == true then
+                    enabled += 1
+                    if (filteredCounts[rarity] or 0) >= math.clamp(
+                        math.floor(tonumber(config.Amount) or 1),
+                        1,
+                        6
+                    ) then
+                        matched += 1
+                    end
+                end
+            end
+            local tokenConfig = autoAcceptState.Tokens
+            if type(tokenConfig) == "table" and tokenConfig.Enabled == true then
+                enabled += 1
+                if opponentTokens >= math.clamp(
+                    math.floor(tonumber(tokenConfig.Amount) or 1),
+                    1,
+                    1000000
+                ) then
+                    matched += 1
+                end
+            end
+            local function specificNameMatches(item, rule)
+                if type(item) ~= "table" or type(rule) ~= "table" or rule.Item == nil then
+                    return false
+                end
+                local sub = type(item.sub) == "table" and item.sub or {}
+                local kind = autoServerHopState.ItemKind(item)
+                local candidates = {
+                    item.name,
+                    sub.name,
+                    item.displayName,
+                    item.DisplayName,
+                    sub.gearType,
+                    sub.GearType,
+                }
+                if kind == "LuckyBlock" then
+                    local luckyType = tostring(sub.luckyBlockType or sub.LuckyBlockType or "Default")
+                    candidates[#candidates + 1] = luckyType == "Default"
+                        and "Lucky Block"
+                        or (luckyType .. " Lucky Block")
+                end
+                for _, candidate in ipairs(candidates) do
+                    if candidate ~= nil
+                        and autoServerHopState.SpecificItemNamesEquivalent(candidate, rule.Item)
+                    then
+                        return autoServerHopState.ItemMatchesSpecificRule(item, rule)
+                    end
+                end
+                return false
+            end
+            for _, rule in ipairs(
+                type(utility.AutoAcceptSpecificItems) == "table"
+                    and utility.AutoAcceptSpecificItems
+                    or {}
+            ) do
+                if type(rule) == "table"
+                    and rule.Item ~= nil
+                    and tostring(rule.Item) ~= ""
+                then
+                    enabled += 1
+                    local hit = false
+                    for _, item in ipairs(type(offeredItems) == "table" and offeredItems or {}) do
+                        if specificNameMatches(item, rule) then
+                            hit = true
+                            break
+                        end
+                    end
+                    if hit then matched += 1 end
+                end
+            end
+            if enabled == 0 then return false end
+            if utility.AutoAcceptMustHaveAll == true then return matched == enabled end
+            return utility.AutoAcceptMustHaveOne == true and matched > 0
         end
         local function inventoryAO()
             local inv = tryIndexAO(playerDataAO, {"Inventory"})
@@ -19263,7 +19525,7 @@ if MINIGAME_MODE then
                                 and autoServerHopState.Utility.AddTokenDelay
                                 or autoServerHopState.Utility.RemoveTokenDelay
                         ))
-                        or 0,
+                        or 0.10,
                     0,
                     5
                 ))
@@ -19302,7 +19564,7 @@ if MINIGAME_MODE then
                         task.wait(math.clamp(
                             (autoServerHopState.Utility.CustomDelays == true
                                 and tonumber(autoServerHopState.Utility.RemoveBrainrotDelay))
-                                or 0.1125,
+                                or 0.18,
                             0,
                             5
                         ))
@@ -19319,7 +19581,7 @@ if MINIGAME_MODE then
                         task.wait(math.clamp(
                             (autoServerHopState.Utility.CustomDelays == true
                                 and tonumber(autoServerHopState.Utility.AddBrainrotDelay))
-                                or 0.234375,
+                                or 0.22,
                             0,
                             5
                         ))
@@ -19371,7 +19633,7 @@ if MINIGAME_MODE then
             end
             local autoOfferAlreadyOwnsAO =
                 tostring(utilityAO._AutoOfferReactiveGuid or "") == tostring(guid)
-            local sourceCounts, opponentTokens, offerSignature = opponentSourcesAO()
+            local sourceCounts, opponentTokens, offerSignature, opponentItemsAO = opponentSourcesAO()
             local aggregateTargets = {}
             local aggregateFallbackTargets = {}
             local aggregateFallbackRequests = {}
@@ -19443,24 +19705,15 @@ if MINIGAME_MODE then
                 specificPrimaryIdsAO[#specificPrimaryIdsAO + 1] = valid
                 return true
             end
-            -- Simple Autofarm only reacts to a Brainrot rarity that is outside its
-            -- current accept pool when the same opponent offer also contains at least
-            -- one Brainrot rarity that Autofarm is currently willing to accept. This
-            -- keeps lower/unwanted Brainrots from starting an offer by themselves,
-            -- while still matching them as part of a qualifying mixed-rarity offer.
+            -- Extra Brainrots/items are secondary matches: they never start a
+            -- Simple Autofarm response by themselves, but they are included when the
+            -- opponent's complete offer already satisfies the configured Accept Offer
+            -- criteria. The existing criteria therefore remain the single professional
+            -- place to customize what makes a mixed offer valid (rarity, tokens, or
+            -- specific items, including filters).
             autoServerHopState.RuntimeSimpleAutofarmTradeHasAcceptedBrainrot =
                 utilityAO.SimpleAutofarmEnabled ~= true
-            if autoServerHopState.RuntimeSimpleAutofarmTradeHasAcceptedBrainrot ~= true then
-                for _, acceptedRarityAO in ipairs(BRAINROT_RARITY_OPTIONS) do
-                    if type(autoAcceptState[acceptedRarityAO]) == "table"
-                        and autoAcceptState[acceptedRarityAO].Enabled == true
-                        and math.max(0, math.floor(tonumber(sourceCounts[acceptedRarityAO]) or 0)) > 0
-                    then
-                        autoServerHopState.RuntimeSimpleAutofarmTradeHasAcceptedBrainrot = true
-                        break
-                    end
-                end
-            end
+                or autoServerHopState.SimpleTradeMatchesAcceptCriteriaAO(opponentItemsAO, opponentTokens)
             for _, sourceRarity in ipairs(BRAINROT_RARITY_OPTIONS) do
                 local sourceCount = math.max(0, math.floor(tonumber(sourceCounts[sourceRarity]) or 0))
                 local config = autoOfferState[sourceRarity]
@@ -19951,7 +20204,7 @@ if MINIGAME_MODE then
                 pendingSignature = desiredSignature
                 reactionDueAt = os.clock() + math.clamp(
                     (autoServerHopState.Utility.CustomDelays == true
-                        and tonumber(autoServerHopState.Utility.ReactionDelay)) or 1.6875, 0, 5
+                        and tonumber(autoServerHopState.Utility.ReactionDelay)) or 0.95, 0, 5
                 )
             elseif pendingSignature ~= desiredSignature then
                 pendingSignature = desiredSignature
@@ -20391,7 +20644,7 @@ if MINIGAME_MODE then
 					pendingReadySignatureAAC = readySignature
 					readyDueAtAAC = os.clock() + math.clamp(
 						(autoServerHopState.Utility.CustomDelays == true
-							and tonumber(autoServerHopState.Utility.AcceptOfferDelay)) or 0.1875,
+							and tonumber(autoServerHopState.Utility.AcceptOfferDelay)) or 0.45,
 						0,
 						5
 					)
@@ -20950,7 +21203,7 @@ if MINIGAME_MODE then
 								and autoServerHopState.Utility.AddTokenDelay
 								or autoServerHopState.Utility.RemoveTokenDelay
 						))
-						or 0,
+						or 0.10,
 					0,
 					5
 				))
@@ -20981,7 +21234,7 @@ if MINIGAME_MODE then
 						task.wait(math.clamp(
 							(autoServerHopState.Utility.CustomDelays == true
 								and tonumber(autoServerHopState.Utility.RemoveBrainrotDelay))
-								or 0.1125,
+								or 0.18,
 							0,
 							5
 						))
@@ -20997,7 +21250,7 @@ if MINIGAME_MODE then
 						task.wait(math.clamp(
 							(autoServerHopState.Utility.CustomDelays == true
 								and tonumber(autoServerHopState.Utility.AddBrainrotDelay))
-								or 0.234375,
+								or 0.22,
 							0,
 							5
 						))
@@ -21063,7 +21316,7 @@ if MINIGAME_MODE then
 				scheduleStartedAtAO2 = os.clock()
 			end
 			local initialDelay = math.clamp(
-				(state.CustomDelays == true and tonumber(state.InitialJoinDelay)) or 1.125,
+				(state.CustomDelays == true and tonumber(state.InitialJoinDelay)) or 0.85,
 				0,
 				5
 			)
@@ -21074,7 +21327,7 @@ if MINIGAME_MODE then
 				if tostring(state._LastTradeMessageGuid or "") == tostring(guid) then
 					local sentAt = tonumber(state._LastTradeMessageSentAt) or 0
 					local postDelay = math.clamp(
-						(state.CustomDelays == true and tonumber(state.DelayAfterTradeMessage)) or 0.75,
+						(state.CustomDelays == true and tonumber(state.DelayAfterTradeMessage)) or 0.80,
 						0,
 						5
 					)
