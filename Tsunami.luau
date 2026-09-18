@@ -4933,8 +4933,14 @@ menuHolder.BorderSizePixel = 0
 menuHolder.ClipsDescendants = true
 menuHolder.Active = true
 menuHolder.ScrollingDirection = Enum.ScrollingDirection.Y
-menuHolder.ScrollBarThickness = 0
-menuHolder.ScrollBarImageTransparency = 0.22
+-- Keep a very thin scrollbar as a clean overflow cue. It stays unobtrusive
+
+-- while still showing that more sidebar tabs are available below.
+
+menuHolder.ScrollBarThickness = px(2)
+
+menuHolder.ScrollBarImageTransparency = 0.42
+
 menuHolder.ScrollBarImageColor3 = MUTED_TEXT_COLOR
 menuHolder.VerticalScrollBarInset = Enum.ScrollBarInset.None
 menuHolder.AutomaticCanvasSize = Enum.AutomaticSize.None
@@ -6147,7 +6153,9 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 	panel.BackgroundTransparency = 0
 	panel.BorderSizePixel = 0
 	panel.ClipsDescendants = true
-	panel.Active = true
+	-- On mobile the panel shell stays passive so vertical touch drags reach
+	-- the parent ScrollingFrame immediately; interactive descendants still work.
+	panel.Active = not isPhonePanelLayout()
 	panel.Visible = false
 	panel.ZIndex = 45010
 	panel.Parent = rightContent
@@ -10545,7 +10553,9 @@ end
 		panel.BackgroundTransparency = 0
 		panel.BorderSizePixel = 0
 		panel.ClipsDescendants = true
-		panel.Active = true
+		-- On mobile the panel shell stays passive so vertical touch drags reach
+		-- the parent ScrollingFrame immediately; interactive descendants still work.
+		panel.Active = not isPhonePanelLayout()
 		panel.Visible = false
 		panel.ZIndex = 45010
 		panel.Parent = rightContent
