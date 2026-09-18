@@ -204,12 +204,12 @@ local TOGGLE_KEY = Enum.KeyCode.LeftControl
 local SIDEBAR_PADDING = px(10)
 local SIDEBAR_WIDTH_SCALE = 0.205
 local COLLAPSED_SIDEBAR_WIDTH = px(58)
-local LOGO_WIDTH = px(110)
-local LOGO_HEIGHT = px(36)
-local LOGO_TEXT_SIZE = 33.8
-local LOGO_SEARCH_GAP = px(10)
-local SEARCH_TOP_GAP = LOGO_SEARCH_GAP
-local SEARCH_HEIGHT = px(34)
+local LOGO_WIDTH = px(isPhonePanelLayout() and 110 or 124)
+local LOGO_HEIGHT = px(isPhonePanelLayout() and 36 or 40)
+local LOGO_TEXT_SIZE = isPhonePanelLayout() and 33.8 or 37.5
+local LOGO_SEARCH_GAP = px(isPhonePanelLayout() and 8 or 3)
+local SEARCH_TOP_GAP = px(10)
+local SEARCH_HEIGHT = px(30)
 local SEARCH_CORNER_RADIUS = px(7)
 local SEARCH_BACKGROUND = RGB(
 		18,
@@ -308,6 +308,10 @@ if MINIGAME_MODE then
 		local function newOfferConfig()
 			return {
 				Enabled = false,
+				-- When true, this source is valued only after another qualifying
+				-- source/token rule has started the reactive offer. It never starts
+				-- an offer by itself.
+				AlongsideOnly = false,
 				OfferModeRarity = true,
 				OfferModeSpecific = false,
 				Targets = {},
@@ -816,6 +820,23 @@ if MINIGAME_MODE then
 		autoServerHopState.Utility["RegularOpeningBrainrot" .. tostring(slotIndex)] = nil
 	end
 	rawset(_G, "__TUFFHUB_UTILITY_FEATURES", autoServerHopState.Utility)
+	autoServerHopState.AutoOfferConfigHasResponse = function(config)
+		if type(config) ~= "table" then return false end
+		if config.OfferModeRarity ~= false then
+			if config.OfferAllTokens == true or math.max(0, math.floor(tonumber(config.Tokens) or 0)) > 0 then
+				return true
+			end
+			for _, selected in pairs(type(config.Targets) == "table" and config.Targets or {}) do
+				if selected == true then return true end
+			end
+		end
+		if config.OfferModeSpecific == true then
+			for _, selected in pairs(type(config.SpecificTargets) == "table" and config.SpecificTargets or {}) do
+				if selected == true then return true end
+			end
+		end
+		return false
+	end
 	do
 		for index = 1, 14 do
 			local prefix = "AutoBoothListing" .. tostring(index)
@@ -4328,7 +4349,7 @@ sidebar.Size = U2(
 	)
 sidebar.BackgroundTransparency = 1
 sidebar.BorderSizePixel = 0
-sidebar.ClipsDescendants = true
+sidebar.ClipsDescendants = false
 sidebar.ZIndex = 35000
 sidebar.Parent = window
 local sidebarSeparator = New("Frame")
@@ -4434,8 +4455,8 @@ compactTLabel.Position = U2(
 		0
 	)
 compactTLabel.Size = U2O(
-		px(18),
-		px(30)
+		px(26),
+		px(36)
 	)
 compactTLabel.BackgroundTransparency = 1
 compactTLabel.BorderSizePixel = 0
@@ -4444,7 +4465,7 @@ compactTLabel.TextColor3 = BLACK
 compactTLabel.TextStrokeColor3 = PINK
 compactTLabel.TextStrokeTransparency = 0
 compactTLabel.FontFace = LOGO_FONT_FACE
-setResponsiveTextSize(compactTLabel, 27.3)
+setResponsiveTextSize(compactTLabel, 30.5)
 compactTLabel.TextXAlignment = Enum.TextXAlignment.Right
 compactTLabel.TextYAlignment = Enum.TextYAlignment.Center
 compactTLabel.Visible = false
@@ -4463,15 +4484,15 @@ compactHLabel.Position = U2(
 		0
 	)
 compactHLabel.Size = U2O(
-		px(18),
-		px(30)
+		px(26),
+		px(36)
 	)
 compactHLabel.BackgroundTransparency = 1
 compactHLabel.BorderSizePixel = 0
 compactHLabel.Text = "H"
 compactHLabel.TextColor3 = PINK
 compactHLabel.FontFace = LOGO_FONT_FACE
-setResponsiveTextSize(compactHLabel, 27.3)
+setResponsiveTextSize(compactHLabel, 30.5)
 compactHLabel.TextXAlignment = Enum.TextXAlignment.Left
 compactHLabel.TextYAlignment = Enum.TextYAlignment.Center
 compactHLabel.Visible = false
@@ -4489,7 +4510,7 @@ logoToggleButton.AutoButtonColor = false
 logoToggleButton.Text = ""
 logoToggleButton.ZIndex = 45003
 logoToggleButton.Parent = sidebarLogoHolder
-local LOGO_TOP_PADDING = px(12)
+local LOGO_TOP_PADDING = px(isPhonePanelLayout() and 8 or 4)
 local searchY = LOGO_TOP_PADDING
 	+ LOGO_HEIGHT
 	+ LOGO_SEARCH_GAP
@@ -5022,7 +5043,83 @@ selectedTabTitle.TextYAlignment = Enum.TextYAlignment.Center
 selectedTabTitle.TextTruncate = Enum.TextTruncate.None
 selectedTabTitle.ZIndex = 54000
 selectedTabTitle.Parent = nil
+-- Keep complete UI copy visible. Primary feature/panel labels already grow
+-- their rows dynamically. Fixed-height secondary labels/buttons wrap first and
+-- only reduce text size as a last resort, so words are never clipped or elided.
+autoServerHopState.RuntimeTextVisibilityBindings = setmetatable({}, {__mode = "k"})
+autoServerHopState.FitVisibleUiText = function(object)
+	if typeof(object) ~= "Instance"
+		or not (object:IsA("TextLabel") or object:IsA("TextButton"))
+	then
+		return
+	end
+	if object.Name == "Tuff" or object.Name == "Hub"
+		or object.Name == "CompactT" or object.Name == "CompactH"
+		or object.Name == "PlayerName" or object.Name == "WelcomeLabel"
+	then
+		return
+	end
+	object.TextTruncate = Enum.TextTruncate.None
+	object.TextWrapped = true
+	if object:GetAttribute("TuffHubAutoGrowText") == true then return end
+	local text = tostring(object.Text or "")
+	local width = math.floor(object.AbsoluteSize.X + 0.5)
+	local height = math.floor(object.AbsoluteSize.Y + 0.5)
+	if text == "" or width <= 2 or height <= 2 then return end
+	local currentSize = math.max(1, math.floor(tonumber(object.TextSize) or 14))
+	local storedBase = tonumber(object:GetAttribute("TuffHubBaseTextSize"))
+	local baseSize = math.max(currentSize, storedBase or 0)
+	if storedBase == nil or currentSize > storedBase then
+		object:SetAttribute("TuffHubBaseTextSize", currentSize)
+		baseSize = currentSize
+	end
+	local availableWidth = math.max(1, width - px(4))
+	local availableHeight = math.max(1, height - px(2))
+	local minimumSize = isPhonePanelLayout() and 7 or 8
+	local chosen = baseSize
+	while chosen > minimumSize do
+		local measured = TextService:GetTextSize(
+			text,
+			chosen,
+			MENU_FONT,
+			V2(availableWidth, 10000)
+		)
+		if measured.Y <= availableHeight then break end
+		chosen -= 1
+	end
+	object.TextSize = math.max(minimumSize, chosen)
+end
+autoServerHopState.BindVisibleUiText = function(object)
+	if typeof(object) ~= "Instance"
+		or not (object:IsA("TextLabel") or object:IsA("TextButton"))
+	then
+		return
+	end
+	local bindings = autoServerHopState.RuntimeTextVisibilityBindings
+	if bindings[object] then return end
+	bindings[object] = true
+	task.defer(autoServerHopState.FitVisibleUiText, object)
+	object:GetPropertyChangedSignal("Text"):Connect(function()
+		task.defer(autoServerHopState.FitVisibleUiText, object)
+	end)
+	object:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		task.defer(autoServerHopState.FitVisibleUiText, object)
+	end)
+end
+autoServerHopState.RefreshVisibleUiText = function()
+	for _, object in ipairs(screenGui:GetDescendants()) do
+		if object:IsA("TextLabel") or object:IsA("TextButton") then
+			autoServerHopState.BindVisibleUiText(object)
+			autoServerHopState.FitVisibleUiText(object)
+		end
+	end
+end
+screenGui.DescendantAdded:Connect(function(object)
+	autoServerHopState.BindVisibleUiText(object)
+end)
+task.defer(autoServerHopState.RefreshVisibleUiText)
 local function syncPixelSnappedGeometry()
+	sidebar.ClipsDescendants = false
 	local panelHeight = roundPixel(
 			window.Size.Y.Offset
 		)
@@ -5042,11 +5139,15 @@ local function syncPixelSnappedGeometry()
 			visibleDividerThickness,
 			panelHeight
 		)
+	local collapsedLogoDividerY = math.max(
+		px(1),
+		SIDEBAR_PADDING + searchY - px(isPhonePanelLayout() and 5 or 9)
+	)
 	logoDivider.Position = U2O(
 			sidebarVisualCenterX,
 			roundPixel(
 				sidebarCollapsed
-					and (SIDEBAR_PADDING + searchY)
+					and collapsedLogoDividerY
 					or logoDividerY
 			)
 		)
@@ -5071,9 +5172,19 @@ local function syncPixelSnappedGeometry()
 			)
 		)
 	local logoAreaWidth = math.max(1, dividerX)
-	local logoAreaHeight = math.max(1, SIDEBAR_PADDING + searchY)
-	local logoBaseWidth = sidebarCollapsed and px(36) or LOGO_WIDTH
-	local logoBaseHeight = sidebarCollapsed and px(30) or LOGO_HEIGHT
+	-- Collapsed TH geometry is fixed. Using live TextBounds here caused a
+	-- UIScale/TextBounds feedback loop that made TH pulse and kept the
+	-- collapsed sidebar doing layout work every frame.
+	local logoAreaHeight = math.max(
+		1,
+		sidebarCollapsed and collapsedLogoDividerY or (SIDEBAR_PADDING + searchY)
+	)
+	local logoBaseWidth = sidebarCollapsed
+		and px(isPhonePanelLayout() and 44 or 46)
+		or LOGO_WIDTH
+	local logoBaseHeight = sidebarCollapsed
+		and px(isPhonePanelLayout() and 34 or 32)
+		or LOGO_HEIGHT
 	sidebarLogoHolder.Position = U2O(
 			sidebarVisualCenterX - SIDEBAR_PADDING,
 			roundPixel((logoAreaHeight * 0.5) - SIDEBAR_PADDING)
@@ -5085,27 +5196,28 @@ local function syncPixelSnappedGeometry()
 	do
 		local areaLogoScale = sidebarLogoHolder:FindFirstChild("AreaLogoScale")
 		if areaLogoScale then
-			local logoFill = isPhonePanelLayout()
-				and (sidebarCollapsed and 0.88 or 0.72)
-				or 0.60
-			areaLogoScale.Scale = math.max(
-				0.01,
-				math.min(
-					(logoAreaWidth * logoFill) / logoBaseWidth,
-					(logoAreaHeight * logoFill) / logoBaseHeight
+			if sidebarCollapsed then
+				areaLogoScale.Scale = 1
+			else
+				local logoFill = isPhonePanelLayout() and 0.72 or 0.90
+				areaLogoScale.Scale = math.max(
+					0.01,
+					math.min(
+						(logoAreaWidth * logoFill) / logoBaseWidth,
+						(logoAreaHeight * logoFill) / logoBaseHeight
+					)
 				)
-			)
+			end
 		end
 		local expandedSplit = roundPixel(
 			(tuffLabel.TextBounds.X - hubLabel.TextBounds.X) * 0.5
 		)
-		local compactSplit = roundPixel(
-			(compactTLabel.TextBounds.X - compactHLabel.TextBounds.X) * 0.5
-		)
 		tuffLabel.Position = U2(0.5, expandedSplit, 0.5, 0)
 		hubLabel.Position = U2(0.5, expandedSplit, 0.5, 0)
-		compactTLabel.Position = U2(0.5, compactSplit, 0.5, 0)
-		compactHLabel.Position = U2(0.5, compactSplit, 0.5, 0)
+		-- Equal-size T/H label boxes meet at the center. Keeping this static
+		-- removes the collapsed-only TextBounds feedback path completely.
+		compactTLabel.Position = U2(0.5, 0, 0.5, 0)
+		compactHLabel.Position = U2(0.5, 0, 0.5, 0)
 	end
 	tuffLabel.Visible = not sidebarCollapsed
 	hubLabel.Visible = not sidebarCollapsed
@@ -5297,7 +5409,7 @@ local function syncPixelSnappedGeometry()
 		playerName.Text = autoServerHopState.FormatProfileTracking(startupPlayer.Name or "PLAYER")
 		playerName.TextColor3 = MENU_TEXT_SELECTED
 		playerName.FontFace = MENU_FONT_SEMIBOLD_FACE
-		setResponsiveTextSize(playerName, 15)
+		setResponsiveTextSize(playerName, 14)
 		playerName.TextScaled = false
 		playerName.TextWrapped = false
 		playerName.TextTruncate = Enum.TextTruncate.None
@@ -5347,7 +5459,7 @@ local function syncPixelSnappedGeometry()
 		else
 			local footerHeight = math.max(px(44), MENU_ITEM_HEIGHT)
 			local quickSize = math.max(px(28), math.min(px(34), roundPixel(dividerX * 0.16)))
-			local footerY = panelHeight - SIDEBAR_PADDING - (footerHeight * 0.5)
+			local footerY = roundPixel(panelHeight - SIDEBAR_PADDING - (footerHeight * 0.5))
 			local sideInset = math.max(px(10), roundPixel(dividerX * 0.05))
 			local settingsX = dividerX - sideInset - (quickSize * 0.5)
 			quick.Settings.Position = U2O(settingsX, footerY)
@@ -5361,6 +5473,10 @@ local function syncPixelSnappedGeometry()
 			quick.Profile.Size = U2O(profileWidth, footerHeight)
 
 			local avatarSize = math.max(px(30), math.min(px(36), footerHeight - px(6)))
+			-- Use the same square footprint and exact Y center for Settings and the
+			-- Roblox headshot so their visual centers cannot drift by a pixel.
+			quick.Settings.Position = U2O(settingsX, footerY)
+			quick.Settings.Size = U2O(avatarSize, avatarSize)
 			quick.Avatar.AnchorPoint = V2(0, 0.5)
 			quick.Avatar.Position = U2O(0, roundPixel(footerHeight * 0.5))
 			quick.Avatar.Size = U2O(avatarSize, avatarSize)
@@ -5383,13 +5499,13 @@ local function syncPixelSnappedGeometry()
 			footerDividerY = roundPixel(panelHeight - SIDEBAR_PADDING - footerHeight - MENU_TOP_GAP)
 		end
 		quick.Divider.Position = U2O(sidebarVisualCenterX, footerDividerY)
-		quick.Divider.Size = U2O(roundPixel(dividerX * 0.85), visibleDividerThickness)
+		quick.Divider.Size = U2O(roundPixel(dividerX), visibleDividerThickness)
 		quick.Divider.Visible = true
 	end
 	footerDividerY = footerDividerY or (panelHeight - SIDEBAR_PADDING)
 	local menuTop = roundPixel(
 		sidebarCollapsed
-			and (SIDEBAR_PADDING + searchY + LINE_THICKNESS)
+			and (collapsedLogoDividerY + LINE_THICKNESS)
 			or (logoDividerY + LINE_THICKNESS)
 		)
 	local menuAvailableHeight = math.max(
@@ -5596,8 +5712,7 @@ window:GetPropertyChangedSignal(
 )
 tuffLabel:GetPropertyChangedSignal("TextBounds"):Connect(syncPixelSnappedGeometry)
 hubLabel:GetPropertyChangedSignal("TextBounds"):Connect(syncPixelSnappedGeometry)
-compactTLabel:GetPropertyChangedSignal("TextBounds"):Connect(syncPixelSnappedGeometry)
-compactHLabel:GetPropertyChangedSignal("TextBounds"):Connect(syncPixelSnappedGeometry)
+-- Compact TH is intentionally excluded: its geometry is fixed while collapsed.
 local selectedMenuItem = nil
 local refreshUnsupportedPanels
 local menuTweenInfo = TI(
@@ -6064,6 +6179,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 	header.Parent = panel
 	local headerTitle = New("TextLabel")
 	headerTitle.Name = "Title"
+	headerTitle:SetAttribute("TuffHubAutoGrowText", true)
 	headerTitle.AnchorPoint = V2(
 			0,
 			0
@@ -6970,6 +7086,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		local dynamicBaseHeight
 		local featureLabel = New("TextLabel")
 		featureLabel.Name = "Label"
+		featureLabel:SetAttribute("TuffHubAutoGrowText", true)
 		featureLabel.AnchorPoint = V2(0, 0.5)
 		featureLabel.Position = U2(0, childTextIndent, 0, featureRowHeight * 0.5)
 		featureLabel.Size = U2(
@@ -7450,6 +7567,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			secondaryContainer.Visible = featureEnabled
 			secondaryContainer.ZIndex = 45013
 			secondaryContainer.Parent = featureRow
+			stateEntry.AlongsideOnly = stateEntry.AlongsideOnly == true
 			stateEntry.OfferModeRarity = stateEntry.OfferModeRarity ~= false
 			stateEntry.OfferModeSpecific = stateEntry.OfferModeSpecific == true
 			stateEntry.Targets = type(stateEntry.Targets) == "table" and stateEntry.Targets or {}
@@ -7645,6 +7763,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				autoServerHopState.CloseActivePanelDropdown()
 				for _, child in ipairs(secondaryContainer:GetChildren()) do child:Destroy() end
 				local y = px(2)
+				makeToggleRow("Only Offer Alongside Qualifying Offers", y, function() return stateEntry.AlongsideOnly == true end, function(v) stateEntry.AlongsideOnly = v end)
+				y += featureRowHeight
 				makeToggleRow("Offer Brainrots / Items By Rarity", y, function() return stateEntry.OfferModeRarity == true end, function(v) stateEntry.OfferModeRarity = v end)
 				y += featureRowHeight
 				if stateEntry.OfferModeRarity == true then
@@ -12192,12 +12312,12 @@ local function syncRightPanelGeometry(
 		window.Size.Y.Offset
 		)
 	local dividerX = getSidebarWidth()
-	local contentLeft = dividerX
+	local contentLeft = dividerX + px(6)
 	local contentTop = 0
 	local contentWidth = math.max(
 		px(2),
 		panelWidth
-			- dividerX
+			- contentLeft
 		)
 	local contentHeight = math.max(
 		px(2),
@@ -12659,14 +12779,9 @@ local function setSidebarCollapsed(
 		searchBox:ReleaseFocus()
 	end
 	syncPixelSnappedGeometry()
-	syncRightPanelGeometry(
-		true
-	)
-	for _, data in ipairs(allUnsupportedPanels) do
-		if type(data.RelayoutRows) == "function" then
-			pcall(data.RelayoutRows)
-		end
-	end
+	-- syncRightPanelGeometry already relayouts every visible panel in the active
+	-- tab. Running a second all-panel pass here made collapse/expand needlessly
+	-- expensive and caused the visible hitch.
 	syncRightPanelGeometry(true)
 end
 logoToggleButton.MouseButton1Click:Connect(function()
@@ -19258,10 +19373,32 @@ if MINIGAME_MODE then
 			else
 				local opponent=offeredItems("player2"); local sourceCounts={}
 				for _,item in ipairs(opponent) do local r=rarity(item); if r then sourceCounts[r]=(sourceCounts[r] or 0)+1 end end
+				local opponentTokens=math.max(0,math.floor(tonumber(try(Negotiation,{"player2","currency"})) or 0))
+				local primaryQualified=false
+				if u.RegularAutoOfferMaster==true then
+					for _,sourceRarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+						local config=regularAutoOfferState[sourceRarity]
+						if (sourceCounts[sourceRarity] or 0)>0 and type(config)=="table" and config.Enabled==true
+							and config.AlongsideOnly~=true and autoServerHopState.AutoOfferConfigHasResponse(config)
+						then primaryQualified=true break end
+					end
+				end
+				if u.RegularAutoOfferTokensEnabled==true then
+					if u.RegularAutoOfferMatchTokensWithTokens==true then
+						local minimum=math.clamp(math.floor(tonumber(u.RegularAutoOfferLowestTokensToMatch) or 1),1,1000000)
+						if opponentTokens>=minimum then primaryQualified=true end
+					end
+					local tokenTarget=u.RegularAutoOfferTokenRarity; local tokenUnit=math.clamp(math.floor(tonumber(u.RegularAutoOfferTokenAmount) or 0),0,1000000)
+					if u.RegularAutoOfferMatchTokensWithBrainrots==true and tokenUnit>0 and table.find(OUTGOING_BRAINROT_RARITY_OPTIONS,tokenTarget)
+						and math.floor(opponentTokens/tokenUnit)>0
+					then primaryQualified=true end
+				end
 				if u.RegularAutoOfferMaster==true then
 					for _,sourceRarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 						local sourceCount=sourceCounts[sourceRarity] or 0; local config=regularAutoOfferState[sourceRarity]
-						if sourceCount>0 and type(config)=="table" and config.Enabled==true then
+						if sourceCount>0 and type(config)=="table" and config.Enabled==true
+							and (config.AlongsideOnly~=true or primaryQualified)
+						then
 							local sourceConfigured=false
 							if config.OfferModeRarity~=false then
 								local perItemTokens=math.clamp(math.floor(tonumber(config.Tokens) or 0),0,1000000)
@@ -19284,7 +19421,6 @@ if MINIGAME_MODE then
 					end
 				end
 				if u.RegularAutoOfferTokensEnabled==true then
-					local opponentTokens=math.max(0,math.floor(tonumber(try(Negotiation,{"player2","currency"})) or 0))
 					if u.RegularAutoOfferMatchTokensWithTokens==true then
 						local minimum=math.clamp(math.floor(tonumber(u.RegularAutoOfferLowestTokensToMatch) or 1),1,1000000)
 						if opponentTokens>=minimum then tokens+=opponentTokens*math.clamp(math.floor(tonumber(u.RegularAutoOfferTokenAddRatio) or 1),1,10); reactiveMatched=true end
@@ -20225,15 +20361,60 @@ if MINIGAME_MODE then
                 specificPrimaryIdsAO[#specificPrimaryIdsAO + 1] = valid
                 return true
             end
-            -- Extra Brainrots/items are secondary matches: they never start a
-            -- Simple Autofarm response by themselves, but they are included when the
-            -- opponent's complete offer already satisfies the configured Accept Offer
-            -- criteria. The existing criteria therefore remain the single professional
-            -- place to customize what makes a mixed offer valid (rarity, tokens, or
-            -- specific items, including filters).
-            autoServerHopState.RuntimeSimpleAutofarmTradeHasAcceptedBrainrot =
-                utilityAO.SimpleAutofarmEnabled ~= true
-                or autoServerHopState.SimpleTradeMatchesAcceptCriteriaAO(opponentItemsAO, opponentTokens)
+            -- Offer Alongside uses a two-layer decision:
+            -- 1) a normal source/token rule must qualify the opponent's offer;
+            -- 2) sources marked AlongsideOnly may then contribute their configured
+            --    response, but can never start a response by themselves.
+            -- Simple Autofarm keeps its stronger Accept Offer gate so extra items are
+            -- valued only after the configured acceptance criteria make the mixed wager valid.
+            local primaryQualifiedAO = false
+            if utilityAO.SimpleAutofarmEnabled == true then
+                primaryQualifiedAO = autoServerHopState.SimpleTradeMatchesAcceptCriteriaAO(
+                    opponentItemsAO,
+                    opponentTokens
+                )
+                autoServerHopState.RuntimeSimpleAutofarmTradeHasAcceptedBrainrot = primaryQualifiedAO
+            else
+                autoServerHopState.RuntimeSimpleAutofarmTradeHasAcceptedBrainrot = true
+                if utilityAO.AutoOfferMaster == true then
+                    for _, primaryRarityAO in ipairs(BRAINROT_RARITY_OPTIONS) do
+                        local primaryConfigAO = autoOfferState[primaryRarityAO]
+                        if math.max(0, math.floor(tonumber(sourceCounts[primaryRarityAO]) or 0)) > 0
+                            and type(primaryConfigAO) == "table"
+                            and primaryConfigAO.Enabled == true
+                            and primaryConfigAO.AlongsideOnly ~= true
+                            and autoServerHopState.AutoOfferConfigHasResponse(primaryConfigAO)
+                        then
+                            primaryQualifiedAO = true
+                            break
+                        end
+                    end
+                end
+                if utilityAO.AutoOfferTokensEnabled == true then
+                    if utilityAO.AutoOfferMatchTokensWithTokens == true
+                        and opponentTokens >= math.clamp(
+                            math.floor(tonumber(utilityAO.AutoOfferLowestTokensToMatch) or 1),
+                            1,
+                            1000000
+                        )
+                    then
+                        primaryQualifiedAO = true
+                    end
+                    local alongsideTokenUnitAO = math.clamp(
+                        math.floor(tonumber(utilityAO.AutoOfferTokenAmount) or 0),
+                        0,
+                        1000000
+                    )
+                    local alongsideTokenRarityAO = utilityAO.AutoOfferTokenRarity
+                    if utilityAO.AutoOfferMatchTokensWithBrainrots == true
+                        and alongsideTokenUnitAO > 0
+                        and table.find(BRAINROT_RARITY_OPTIONS, alongsideTokenRarityAO) ~= nil
+                        and math.floor(math.max(0, opponentTokens) / alongsideTokenUnitAO) > 0
+                    then
+                        primaryQualifiedAO = true
+                    end
+                end
+            end
             for _, sourceRarity in ipairs(BRAINROT_RARITY_OPTIONS) do
                 local sourceCount = math.max(0, math.floor(tonumber(sourceCounts[sourceRarity]) or 0))
                 local config = autoOfferState[sourceRarity]
@@ -20242,12 +20423,20 @@ if MINIGAME_MODE then
                     and type(config) == "table"
                     and config.Enabled == true
                     and (
-                        utilityAO.SimpleAutofarmEnabled ~= true
-                        or (
-                            type(autoAcceptState[sourceRarity]) == "table"
-                            and autoAcceptState[sourceRarity].Enabled == true
+                        (
+                            utilityAO.SimpleAutofarmEnabled == true
+                            and (
+                                (
+                                    type(autoAcceptState[sourceRarity]) == "table"
+                                    and autoAcceptState[sourceRarity].Enabled == true
+                                )
+                                or autoServerHopState.RuntimeSimpleAutofarmTradeHasAcceptedBrainrot == true
+                            )
                         )
-                        or autoServerHopState.RuntimeSimpleAutofarmTradeHasAcceptedBrainrot == true
+                        or (
+                            utilityAO.SimpleAutofarmEnabled ~= true
+                            and (config.AlongsideOnly ~= true or primaryQualifiedAO == true)
+                        )
                     )
                 then
                     hasEnabledSource = true
