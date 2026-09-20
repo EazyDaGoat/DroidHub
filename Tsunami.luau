@@ -1,3 +1,25 @@
+--[[
+    TUFFHUB
+    =======
+    Navigation (search these section tags):
+      [01] Bootstrap & Shared Services
+      [02] Settings, Profiles & Persistence
+      [03] GUI Framework & Theme
+      [04] Tabs, Panels & Feature Definitions
+      [05] Trading / Inventory / Booth Automation
+      [06] Server Hop / Runtime Lifecycle
+      [07] Minigame Logging & Shared Match Context
+      [08] Minigame Autoplay Controllers
+      [09] Hot Potato Handoff Controller
+      [10] Loss / Disconnect Protection
+
+    Refactor rules:
+      - Feature behavior is preserved unless explicitly improved.
+      - Existing theme, spacing, sizing, and panel construction remain unchanged.
+      - Legacy config keys remain supported for compatibility.
+]]
+
+-- [01] Bootstrap & Shared Services --------------------------------------------
 -- Automatic settings persistence was removed. Configs are now the only
 -- file-backed settings mechanism. Clean up legacy autosave state/files once.
 do
@@ -243,10 +265,10 @@ local MENU_ACTIVE_LINE_HEIGHT = px(22)
 local MENU_ICON_SIZE = px(20)
 local MENU_ICON_X = px(10)
 local MENU_TEXT_X = px(39)
-local CONTENT_SIDE_PADDING = px(10)
+local CONTENT_SIDE_PADDING = px(12)
 local CONTENT_TOP_PADDING = px(52)
-local CONTENT_COLUMN_GAP = px(10)
-local CONTENT_ROW_GAP = px(8)
+local CONTENT_COLUMN_GAP = px(12)
+local CONTENT_ROW_GAP = px(10)
 local PANEL_SCROLL_EDGE_INSET = px(2)
 local PANEL_HEADER_HEIGHT = px(38)
 local PANEL_EXPANDED_HEIGHT = px(128)
@@ -259,6 +281,7 @@ local PANEL_BACKGROUND = RGB(
 	)
 local PANEL_CHEVRON_COLOR = RGB(145, 149, 158)
 local FEATURE_OFF_COLOR=RGB(19,20,24)
+-- [02] Settings, Profiles & Persistence -------------------------------------
 -- Standalone minigames build: always initialize, regardless of PlaceId/GameId.
 local MINIGAME_MODE = true
 local MINIGAME_AUTOPLAY_KEY = "__TUFFHUB_MINIGAME_AUTOPLAY"
@@ -297,6 +320,7 @@ if MINIGAME_MODE then
 		"Battleship",
 		"NumberGuess",
 		"Knockout",
+		"HotPotato",
 	}) do
 		minigameAutoplayState[id] = false
 	end
@@ -405,8 +429,16 @@ if MINIGAME_MODE then
 		RuntimeUtilityToggleRows = {},
 		-- Freeze all automation until the initial server stay/hop decision is complete.
 		RuntimeServerHopPending = true,
+		-- Latched only after an actual server-hop departure has been committed.
+		-- Unlike the startup pending bit, this may never be bypassed by an active
+		-- trade/minigame; all automation and movement stay frozen until teleport.
+		RuntimeServerHopHardFreeze = false,
+		RuntimeServerHopFreezeCFrame = nil,
 		RuntimeStartupServerDecisionResolved = false,
 		RuntimePresenceStartupResolved = false,
+		RuntimeActiveSessionGraceUntil = 0,
+		RuntimeActiveSessionBypass = false,
+		RuntimeActiveSessionReplicator = nil,
 		RuntimeScriptUserHopRequested = false,
 		RuntimeScriptUserIds = {},
 		RuntimeScriptUserServerIds = {},
@@ -430,6 +462,7 @@ if MINIGAME_MODE then
 		RecentServerIds = {},
 	}
 	rawset(_G, AUTO_SERVER_HOP_KEY, autoServerHopState)
+	autoServerHopState.RuntimeStatsService = game:GetService("Stats")
 	autoServerHopState.Utility = {
 		SimpleAutofarmEnabled = false,
 		AutoPlayMaster = false,
@@ -697,8 +730,12 @@ if MINIGAME_MODE then
 		MatchOpponentRounds = false,
 		FallbackRoundChoices = {},
 		LeaveWhenAboutToLose = false,
+		HotPotatoAutoGiveBack = false,
+		HotPotatoPressButtonToGiveBack = true,
+		HotPotatoGiveBackKey = "Q",
 		PrintWinsLossesToTerminal = false,
 		PrintKicksToTerminal = false,
+		PrintDisconnectsToTerminal = false,
 		PrintAutoDeletesToTerminal = false,
 		PrintPurchasedBoothListingsToTerminal = false,
 		AutoReconnect = false,
@@ -2403,8 +2440,12 @@ if MINIGAME_MODE then
 			"MatchOpponentRounds",
 			"FallbackRoundChoices",
 			"LeaveWhenAboutToLose",
+			"HotPotatoAutoGiveBack",
+			"HotPotatoPressButtonToGiveBack",
+			"HotPotatoGiveBackKey",
 			"PrintWinsLossesToTerminal",
 			"PrintKicksToTerminal",
+			"PrintDisconnectsToTerminal",
 			"PrintAutoDeletesToTerminal",
 			"PrintPurchasedBoothListingsToTerminal",
 			"AutoReconnect",
@@ -2596,7 +2637,7 @@ if MINIGAME_MODE then
 			}
 			for _, id in ipairs({
 				"ConnectFour", "FootballDraft", "CandyBomb", "Battleship",
-				"NumberGuess", "Knockout", "PopcornBurst",
+				"NumberGuess", "Knockout", "PopcornBurst", "HotPotato",
 			}) do
 				snapshot.MinigameAutoplay[id] = true
 			end
@@ -2704,6 +2745,7 @@ if MINIGAME_MODE then
 				["Battle Ship"] = true,
 				["Knockout"] = true,
 				["Football Draft"] = true,
+				["Hot Potato"] = true,
 			}
 			utility.AutoChooseRound1Delay = 1
 			utility.AutoChooseRound2Delay = 2.5
@@ -2741,9 +2783,15 @@ if MINIGAME_MODE then
 			utility.PermanentBlacklistPlayersAfterCanceledTrade = true
 			utility.PermanentBlacklistAfterCanceledTrades = 3
 			utility.LeaveWhenAboutToLose = true
+			utility.HotPotatoAutoGiveBack = false
+			utility.HotPotatoPressButtonToGiveBack = true
+			utility.HotPotatoGiveBackKey = "Q"
 			utility.AutoReconnect = true
 			utility.PrintWinsLossesToTerminal = true
 			utility.PrintKicksToTerminal = true
+			utility.PrintDisconnectsToTerminal = true
+			utility.PrintAutoDeletesToTerminal = true
+			utility.PrintPurchasedBoothListingsToTerminal = true
 			utility.PauseMinigameFeatures = false
 			utility.MoveDelayConnectFour = 1.5
 			utility.MoveDelayFootballDraft = 1.5
@@ -2903,6 +2951,10 @@ if MINIGAME_MODE then
 							end
 						end
 					end
+					if savedUtility.PrintDisconnectsToTerminal == nil then
+						autoServerHopState.Utility.PrintDisconnectsToTerminal =
+							autoServerHopState.Utility.PrintWinsLossesToTerminal == true
+					end
 					if savedUtility.CustomDelays == nil then
 						autoServerHopState.Utility.CustomDelays = true
 					end
@@ -2998,6 +3050,8 @@ if MINIGAME_MODE then
 			autoServerHopState.RuntimeCanceledTradeLastCountAt = {}
 			autoServerHopState.RuntimeUtilityToggleRows = {}
 			autoServerHopState.RuntimeServerHopPending = true
+			autoServerHopState.RuntimeServerHopHardFreeze = false
+			autoServerHopState.RuntimeServerHopFreezeCFrame = nil
 			autoServerHopState.RuntimeStartupServerDecisionResolved = false
 			autoServerHopState.RuntimePresenceStartupResolved = false
 			autoServerHopState.RuntimeScriptUserHopRequested = false
@@ -3505,7 +3559,7 @@ if MINIGAME_MODE then
 			end
 			return ok
 		end
-		local SIMPLE_AUTOFARM_PROFILE_VERSION = 11
+		local SIMPLE_AUTOFARM_PROFILE_VERSION = 15
 		local function migrateSimpleAutofarmProfile(simple)
 			if type(simple) ~= "table" or type(simple.Profile) ~= "table" then return end
 			local version = math.floor(tonumber(simple.Version) or 1)
@@ -3519,22 +3573,31 @@ if MINIGAME_MODE then
 			serverHop.TimeSinceLastGameEnabled=true; serverHop.TimeSinceLastGame=3
 			serverHop.WinWagerTimeAdded=3; serverHop.BoothPurchaseTimeAdded=1
 			serverHop.LeaveIfScriptUserInServer=true; serverHop.ServerBlacklistMinutes=30
-			utility.AutoReconnect=true; utility.PrintWinsLossesToTerminal=true; utility.PrintKicksToTerminal=true
+			local autoplay=type(profile.MinigameAutoplay)=="table" and profile.MinigameAutoplay or {}
+			profile.MinigameAutoplay=autoplay
+			for _,id in ipairs({"ConnectFour","FootballDraft","CandyBomb","Battleship","NumberGuess","Knockout","PopcornBurst","HotPotato"}) do autoplay[id]=true end
+			utility.AutoPlayMaster=true
+			utility.AutoReconnect=true; utility.PrintWinsLossesToTerminal=true; utility.PrintKicksToTerminal=true; utility.PrintAutoDeletesToTerminal=true; utility.PrintPurchasedBoothListingsToTerminal=true
 			utility.AutoCancelTradeTimeoutEnabled=true; utility.AutoCancelTradeTimeout=30
 			utility.AutoCancelNoValueTimeoutEnabled=true; utility.AutoCancelNoValueTimeout=15; utility.AutoCancelBrainrotConditionDelay=0
 			utility.AutoOfferMaster=true; utility.AutoOfferTokensEnabled=true; utility.AutoOfferMatchTokensWithTokens=true
 			utility.AutoOfferTokenAddRatio=1; utility.AutoOfferLowestTokensToMatch=10; utility.AutoOfferMatchTokensWithBrainrots=false; utility.AutoOfferBasedOnTradeChat=false
 			utility.AutoAcceptMaster=true; utility.AutoAcceptMustHaveOne=true; utility.AutoAcceptMustHaveAll=false
+			utility.AutoAcceptSpecificItems={{Item=nil,Mutations={},Traits={}}}
 			utility.AutoSitMustOwnAllSelected=false; utility.AutoSitMustOwnOneSelected=true
+			utility.AutoSitSpecificItems={{Item=nil,Mutations={},Traits={}}}
 			utility.AutoCancelMaster=true; utility.AutoCancelCheckOpponentsBrainrots=true
 			utility.AutoCancelPlayerMustOwnAllSelected=false; utility.AutoCancelPlayerMustOwnAtLeastOneSelected=true
+			utility.AutoCancelSpecificItems={{Item=nil,Mutations={},Traits={}}}
+			utility.CheckServerHopNobodyServer=false; utility.CheckServerHopPlayedEveryoneServer=false
 			utility.CheckServerHopNobodyMinigamesArea=true; utility.CheckServerHopPlayedEveryoneMinigamesArea=true
 			utility.CheckServerMustOwnAll=false; utility.CheckServerMustOwnOne=true
 			utility.AutoDeleteWorstInventory=true; utility.DeleteNonBrainrotsFirst=true; utility.DeleteWorstBrainrotsFirst=false
 			utility.DeleteInventoryThreshold=95; utility.AvoidDeletingSignedBrainrots=true; utility.AvoidDeletingLockedItems=true
 			utility.AutoshowBestBrainrots=true; utility.CustomOpeningOffer=false; utility.AutoshowAllTokens=true; utility.CustomOpeningTokens=false
+			utility.AutoEquipBestBrainrot=true; utility.AutoEquipModeHold=false; utility.AutoEquipModeMount=false; utility.AutoEquipModeHoldMount=true; utility.AutoEquipUseBestBrainrot=true; utility.AutoEquipUseSpecificBrainrot=false
 			utility.AutoChooseGame=true; utility.GameToChoose="Popcorn Burst"; utility.MatchOpponentGame=true
-			utility.FallbackGameChoices={["Candy Bomb"]=true,["Higher Or Lower"]=true,["Connect 4"]=true,["Battle Ship"]=true,["Knockout"]=true,["Football Draft"]=true}
+			utility.FallbackGameChoices={["Candy Bomb"]=true,["Higher Or Lower"]=true,["Connect 4"]=true,["Battle Ship"]=true,["Knockout"]=true,["Football Draft"]=true,["Hot Potato"]=true}
 			utility.AutoChooseRound1Delay=1; utility.AutoChooseRound2Delay=2.5; utility.AutoChooseRound3Delay=5
 			utility.AutoChooseRounds=true; utility.RoundsToChoose="1"; utility.MatchOpponentRounds=true; utility.FallbackRoundChoices={["3"]=true,["5"]=true}
 			utility.AutoChooseRoundsRound1Delay=1; utility.AutoChooseRoundsRound2Delay=2.5; utility.AutoChooseRoundsRound3Delay=5
@@ -3543,11 +3606,12 @@ if MINIGAME_MODE then
 			utility.AutoBooth=true; utility.AutoBoothName="hurry up n buy"; utility.AutoBoothListBestFirst=false; utility.AutoBoothListWorstFirst=true; utility.AutoBoothAvoidSignedBrainrots=true
 			for index=1,14 do
 				local prefix="AutoBoothListing"..tostring(index)
-				if utility[prefix.."InventoryThreshold"] == nil then
-					utility[prefix.."InventoryThreshold"]=91
-				end
+				utility[prefix.."Enabled"]=false
+				utility[prefix.."InventoryThreshold"]=91
 			end
-			utility.LeaveWhenAboutToLose=true; utility.PauseMinigameFeatures=false
+			utility.TempBlacklistPlayersAfterCanceledTrade=true; utility.TempBlacklistAfterCanceledTrades=1
+			utility.PermanentBlacklistPlayersAfterCanceledTrade=true; utility.PermanentBlacklistAfterCanceledTrades=3
+			utility.LeaveWhenAboutToLose=true; utility.HotPotatoAutoGiveBack=false; utility.HotPotatoPressButtonToGiveBack=true; utility.HotPotatoGiveBackKey="Q"; utility.PrintDisconnectsToTerminal=true; utility.PauseMinigameFeatures=false
 			utility.MoveDelayConnectFour=1.5; utility.MoveDelayFootballDraft=1.5; utility.MoveDelayCandyBomb=1.5
 			utility.MoveDelayBattleship=1.5; utility.MoveDelayNumberGuess=1.5; utility.MoveDelayKnockout=1.5
 			local autoOffer=type(profile.AutoOffer)=="table" and profile.AutoOffer or nil
@@ -3555,7 +3619,7 @@ if MINIGAME_MODE then
 				for _,rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 					local config=autoOffer[rarity]
 					if type(config)=="table" then
-						config.Enabled=true; config.OfferModeRarity=true; config.OfferModeSpecific=false; config.SpecificTargets={}; config.OfferAllTokens=false; config.Tokens=responseTokens[rarity] or 100
+						config.Enabled=true; config.AlongsideOnly=false; config.OfferModeRarity=true; config.OfferModeSpecific=false; config.SpecificTargets={}; config.OfferAllTokens=false; config.Tokens=responseTokens[rarity] or 100
 						if rarity=="Eternal" then config.Targets={Paradox=true}; config.Amounts={Paradox=6} else config.Targets={[rarity]=true}; config.Amounts={[rarity]=1} end
 					end
 				end
@@ -3642,6 +3706,8 @@ if MINIGAME_MODE then
 			task.defer(function()
 				local refresh = rawget(_G, "__TUFFHUB_REFRESH_ALL_SETTINGS_UI")
 				if type(refresh) == "function" then pcall(refresh) end
+				local refreshBanner = rawget(_G, "__TUFFHUB_REFRESH_SIMPLE_AUTOFARM_MODE_BANNER")
+				if type(refreshBanner) == "function" then pcall(refreshBanner) end
 			end)
 		end
 		local function showSimpleAutofarmWarning()
@@ -3673,9 +3739,13 @@ if MINIGAME_MODE then
 			autoServerHopState.RuntimeSimpleAutofarmTargetRarity = nil
 			autoServerHopState.RuntimePlayedMinigameUserIds = {}
 			autoServerHopState.RuntimeServerHopPending = true
+			autoServerHopState.RuntimeServerHopHardFreeze = false
+			autoServerHopState.RuntimeServerHopFreezeCFrame = nil
 			autoServerHopState.RuntimeStartupServerDecisionResolved = false
 			autoServerHopState.RuntimePresenceStartupResolved = false
 			autoServerHopState.RuntimeCheckServerStartupResolved = false
+			local refreshDecision = autoServerHopState.RefreshStartupServerDecision
+			if type(refreshDecision) == "function" then pcall(refreshDecision) end
 			refreshSettingsUiSoon()
 			return true
 		end
@@ -3731,6 +3801,8 @@ if MINIGAME_MODE then
 			autoServerHopState.RuntimeCanceledTradeCounts = {}
 			autoServerHopState.RuntimeCanceledTradeLastCountAt = {}
 			autoServerHopState.RuntimeServerHopPending = true
+			autoServerHopState.RuntimeServerHopHardFreeze = false
+			autoServerHopState.RuntimeServerHopFreezeCFrame = nil
 			autoServerHopState.RuntimeStartupServerDecisionResolved = false
 			autoServerHopState.RuntimePresenceStartupResolved = false
 			autoServerHopState.RuntimeCheckServerStartupResolved = false
@@ -3752,6 +3824,80 @@ if MINIGAME_MODE then
 			return true
 		end
 		rawset(_G, "__TUFFHUB_RESET_ALL_SETTINGS_STATE", resetAllSettingsState)
+		local function clearAllSettingsSelections()
+			-- Undo All is intentionally stronger than Reset TuffHub: every selectable
+			-- boolean is cleared, including hidden child choices and Simple Autofarm.
+			-- Scalar defaults (theme colors, slider baselines, text defaults) still come
+			-- from the normal reset so the UI remains structurally valid.
+			autoServerHopState.Utility.SimpleAutofarmEnabled = false
+			resetAllSettingsState()
+
+			local function disableBooleans(value, seen)
+				if type(value) ~= "table" then return end
+				seen = seen or {}
+				if seen[value] then return end
+				seen[value] = true
+				for key, child in pairs(value) do
+					if type(child) == "boolean" then
+						value[key] = false
+					elseif type(child) == "table" then
+						disableBooleans(child, seen)
+					end
+				end
+			end
+
+			disableBooleans(minigameAutoplayState)
+			disableBooleans(autoOfferState)
+			disableBooleans(regularAutoOfferState)
+			disableBooleans(autoAcceptState)
+			disableBooleans(tradeRequestCriteriaState)
+			disableBooleans(autoSitState)
+			disableBooleans(autoCancelState)
+			disableBooleans(autoServerHopState.Utility)
+
+			-- Auto Sit has nested state plus a movement worker. Clear both explicit
+			-- modes and their selections so Undo All cannot leave either path active.
+			if type(autoSitState) == "table" then
+				if type(autoSitState.EmptyTables) == "table" then
+					autoSitState.EmptyTables.Enabled = false
+				end
+				if type(autoSitState.OneOfTwo) == "table" then
+					autoSitState.OneOfTwo.Enabled = false
+					autoSitState.OneOfTwo.Targets = {}
+					autoSitState.OneOfTwo.Amounts = {}
+				end
+			end
+			autoServerHopState.RuntimeAutoSitBusy = false
+			autoServerHopState.Enabled = false
+			autoServerHopState.ServerTimeEnabled = false
+			autoServerHopState.TimeSinceLastGameEnabled = false
+			autoServerHopState.LeaveIfScriptUserInServer = false
+			autoServerHopState.Utility.SimpleAutofarmEnabled = false
+			autoServerHopState.Utility.UndoAllSettings = false
+			autoServerHopState.RuntimePlayedMinigameUserIds = {}
+			autoServerHopState.RuntimeServerHopPending = true
+			autoServerHopState.RuntimeServerHopHardFreeze = false
+			autoServerHopState.RuntimeStartupServerDecisionResolved = false
+			autoServerHopState.RuntimePresenceStartupResolved = false
+			autoServerHopState.RuntimeCheckServerStartupResolved = false
+			-- Stop an Auto Sit movement command that was already in progress. The
+			-- worker also sees both Auto Sit modes disabled on its next Heartbeat.
+			pcall(function()
+				local player = Players.LocalPlayer
+				local character = player and player.Character
+				local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+				local root = character and character:FindFirstChild("HumanoidRootPart")
+				if humanoid then
+					humanoid:Move(Vector3.zero, false)
+					if root then humanoid:MoveTo(root.Position) end
+				end
+			end)
+			local refreshDecision = autoServerHopState.RefreshStartupServerDecision
+			if type(refreshDecision) == "function" then pcall(refreshDecision) end
+			refreshSettingsUiSoon()
+			return true
+		end
+		rawset(_G, "__TUFFHUB_CLEAR_ALL_SETTINGS_STATE", clearAllSettingsSelections)
 		rawset(_G, "__TUFFHUB_EXPORT_SETTINGS", function()
 			return copyJsonSafe(settingsEnvelopeForConfig())
 		end)
@@ -3789,6 +3935,8 @@ if MINIGAME_MODE then
 		-- A global pause must cancel pending script actions immediately, not only
 		-- prevent the next scheduler tick. Keep user configuration untouched.
 		autoServerHopState.RuntimeServerHopPending = false
+		autoServerHopState.RuntimeServerHopHardFreeze = false
+			autoServerHopState.RuntimeServerHopFreezeCFrame = nil
 		autoServerHopState.RuntimeScriptUserHopRequested = false
 		autoServerHopState.RuntimeCheckServerHopRequested = false
 		autoServerHopState.RuntimeManualServerHopRequested = false
@@ -3811,6 +3959,10 @@ if MINIGAME_MODE then
 	-- One authoritative startup gate: no automation acts until every enabled
 	-- server-level stay/hop decision has completed.
 	autoServerHopState.RefreshStartupServerDecision = function()
+		if autoServerHopState.RuntimeServerHopHardFreeze == true then
+			autoServerHopState.RuntimeServerHopPending = true
+			return false
+		end
 		if autoServerHopState.RuntimeStartupServerDecisionResolved == true then return true end
 		local utility = autoServerHopState.Utility
 		local checkEnabled = utility.CheckServerHopNobodyServer == true
@@ -3834,16 +3986,97 @@ if MINIGAME_MODE then
 		if utility.PauseScript ~= true then autoServerHopState.RuntimeServerHopPending = true end
 		return false
 	end
+	-- Executing the hub after a trade/minigame has already started must adopt the
+	-- live lifecycle instead of freezing the character until startup server checks
+	-- finish. The server checks still run; only the startup hold is bypassed while
+	-- the existing session (plus a short transition grace window) is active.
+	autoServerHopState.ActiveSessionNow = function()
+		local now = os.clock()
+		local active = false
+		pcall(function()
+			local replicator = autoServerHopState.RuntimeActiveSessionReplicator
+			if not replicator then
+				replicator = require(
+					ReplicatedStorage:WaitForChild("Client")
+						:WaitForChild("Modules")
+						:WaitForChild("ReplicatorClient")
+				)
+				autoServerHopState.RuntimeActiveSessionReplicator = replicator
+			end
+			local minigame = safeRepGet(replicator, "ActiveMinigame")
+			local negotiation = safeRepGet(replicator, "ActiveNegotiation")
+			active = safeTryIndex(negotiation, {"guid"}) ~= nil
+				or safeTryIndex(minigame, {"queued"}) == true
+				or safeTryIndex(minigame, {"phase"}) ~= nil
+				or safeTryIndex(minigame, {"session", "gameId"}) ~= nil
+				or type(safeTryIndex(minigame, {"voting"})) == "table"
+				or (Players.LocalPlayer and Players.LocalPlayer:GetAttribute("InArena") == true)
+		end)
+		if active then
+			autoServerHopState.RuntimeActiveSessionGraceUntil = now + 1.75
+			return true
+		end
+		return now < (tonumber(autoServerHopState.RuntimeActiveSessionGraceUntil) or 0)
+	end
+	autoServerHopState.RefreshActiveSessionStartupBypass = function()
+		if autoServerHopState.RuntimeServerHopHardFreeze == true then
+			autoServerHopState.RuntimeActiveSessionBypass = false
+			return false
+		end
+		-- A normal/automatic hop request is only a queued condition while a trade,
+		-- vote, queue or minigame is already active. Only Manual Kick is an
+		-- intentional immediate interruption. This must remain true even AFTER the
+		-- startup server decision has resolved: a script executed during voting can
+		-- resolve startup before the arena finishes spawning, and the old early return
+		-- permanently blocked Hot Potato once RuntimeServerHopPending became true.
+		local explicitHop = autoServerHopState.RuntimeManualKickRequested == true
+		if explicitHop or autoServerHopState.Utility.PauseScript == true then
+			autoServerHopState.RuntimeActiveSessionBypass = false
+			return false
+		end
+		local active = autoServerHopState.ActiveSessionNow() == true
+		autoServerHopState.RuntimeActiveSessionBypass = active
+		if active then
+			-- Before startup is resolved, clear the temporary startup hold so legacy
+			-- loops that still read RuntimeServerHopPending can adopt the live session.
+			-- After startup is resolved, preserve a queued normal hop request;
+			-- AutomationBlocked() ignores it only for the duration of this live session
+			-- and the hop controller can re-evaluate it when the session ends.
+			if autoServerHopState.RuntimeStartupServerDecisionResolved ~= true then
+				autoServerHopState.RuntimeServerHopPending = false
+			end
+			return true
+		end
+		if autoServerHopState.RuntimeStartupServerDecisionResolved ~= true then
+			autoServerHopState.RefreshStartupServerDecision()
+		end
+		return false
+	end
 	autoServerHopState.AutomationBlocked = function()
-		return autoServerHopState.Utility.PauseScript == true
-			or autoServerHopState.RuntimeStartupServerDecisionResolved ~= true
+		if autoServerHopState.RuntimeServerHopHardFreeze == true then return true end
+		if autoServerHopState.Utility.PauseScript == true then return true end
+		if autoServerHopState.RefreshActiveSessionStartupBypass() then return false end
+		return autoServerHopState.RuntimeStartupServerDecisionResolved ~= true
 			or autoServerHopState.RuntimeServerHopPending == true
 	end
 	if autoServerHopState.Utility.PauseScript == true then
 		task.defer(autoServerHopState.ApplyPauseState, true)
 	else
 		autoServerHopState.RefreshStartupServerDecision()
+		autoServerHopState.RefreshActiveSessionStartupBypass()
 	end
+	-- Keep the startup-session adoption state synchronized through negotiation ->
+	-- queue -> voting -> arena transitions. This task only controls the initial
+	-- startup hold and exits once the normal startup server decision is resolved.
+	task.spawn(function()
+		while autoServerHopState.RuntimeStartupServerDecisionResolved ~= true do
+			if autoServerHopState.Utility.PauseScript ~= true then
+				autoServerHopState.RefreshActiveSessionStartupBypass()
+			end
+			task.wait(0.10)
+		end
+		autoServerHopState.RuntimeActiveSessionBypass = false
+	end)
 	autoServerHopState.RequestManualHop = function(requireActiveMinigame)
 		if autoServerHopState.Utility.PauseScript == true then return false end
 		if requireActiveMinigame == true then
@@ -3862,14 +4095,30 @@ if MINIGAME_MODE then
 		end
 		autoServerHopState.RuntimeManualKickRequested = requireActiveMinigame == true
 		autoServerHopState.RuntimeManualServerHopRequested = true
-		autoServerHopState.RuntimeServerHopPending = true
+		autoServerHopState.RuntimeServerHopFreezeCFrame = nil
 		if requireActiveMinigame == true then
+			-- Manual Kick is the only request that intentionally interrupts a live
+			-- lifecycle. Normal Manual Server Hop remains queued until the lifecycle
+			-- is clear; the hop controller latches the hard freeze at commit time.
+			autoServerHopState.RuntimeServerHopHardFreeze = true
+			autoServerHopState.RuntimeServerHopPending = true
 			-- Manual Kick is intentionally different from Manual Server Hop: disconnect
 			-- immediately, then let the hop controller teleport to its top-10 random pick.
+			if autoServerHopState.Utility.PrintKicksToTerminal == true
+				and autoServerHopState.Utility.PauseMinigameFeatures ~= true
+			then
+				local logContext = rawget(_G, "__TUFFHUB_MINIGAME_LOG_CONTEXT")
+				if type(logContext) == "table" and type(logContext.PrintEvent) == "function" then
+					pcall(logContext.PrintEvent, "KICKED", false, nil, nil)
+				end
+			end
 			pcall(function()
 				local player = Players.LocalPlayer
 				if player then player:Kick("Manual Kick") end
 			end)
+		else
+			autoServerHopState.RuntimeServerHopHardFreeze = false
+			autoServerHopState.RuntimeServerHopPending = false
 		end
 		local wake = autoServerHopState.RuntimeServerHopWake
 		if type(wake) == "function" then
@@ -3913,6 +4162,7 @@ local CONTROL_ICON_HOVER_COLOR = RGB(
 		224,
 		230
 	)
+-- [03] GUI Framework & Theme -------------------------------------------------
 local oldGui = guiParent:FindFirstChild(
 		"TuffHubGUI"
 	)
@@ -3938,15 +4188,35 @@ do
 		Enum.RenderPriority.Character.Value + 200,
 		function()
 			if not screenGui.Parent then return end
-			if autoServerHopState.Utility.PauseScript == true
-				or autoServerHopState.RuntimeServerHopPending ~= true
-			then return end
+			local hardFreeze = autoServerHopState.RuntimeServerHopHardFreeze == true
+			if autoServerHopState.Utility.PauseScript == true then return end
+			if not hardFreeze then
+				if autoServerHopState.RuntimeServerHopPending ~= true
+					or autoServerHopState.RefreshActiveSessionStartupBypass() == true
+				then return end
+			end
 			local character = localPlayerFreeze and localPlayerFreeze.Character
 			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 			local root = character and character:FindFirstChild("HumanoidRootPart")
 			if humanoid then
 				humanoid.Sit = false
-				if root then pcall(function() humanoid:MoveTo(root.Position) end) end
+				if root then
+					pcall(function() humanoid:MoveTo(root.Position) end)
+					if hardFreeze then
+						pcall(function()
+							local locked = autoServerHopState.RuntimeServerHopFreezeCFrame
+							if typeof(locked) ~= "CFrame" then
+								locked = root.CFrame
+								autoServerHopState.RuntimeServerHopFreezeCFrame = locked
+							end
+							-- A committed hop is a true hard stop: cancel horizontal/vertical
+							-- momentum and hold the exact transform until teleport wins.
+							root.CFrame = locked
+							root.AssemblyLinearVelocity = Vector3.zero
+							root.AssemblyAngularVelocity = Vector3.zero
+						end)
+					end
+				end
 				humanoid:Move(Vector3.zero, false)
 			end
 		end
@@ -4568,25 +4838,15 @@ ensureCorner(
 rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(searchHolder)
 local EMBEDDED_ICONS={
 	Home=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAADc0lEQVR4nO2by28NURzHvz/UgtJYIBEEkZII0YaF/6AhHonHQiIhHgubNrGQIGElttgg8Q+QkqAeG1bSDSIeiYUQj5K0EmmVTcvHYm6J68zcuTNz7mnT+SQ3uTmP3/n+fnPO78ycuVcqmdxYiEGBaZLWSFpSKXor6ZmZ/Qyhp2EALcAZYID/6QdOAy2hdXoBaAfeOxyv5h3QHlpvoQAdwGAK58cYBraG1l0IQBcwWofzY4wCXaH1ZwaYCpzL4Hg1l4iS5sQBmAX01Li6x4DZlc8JkmdJDzArtF+pABYAjxOcca5vaueJZ8DiED6lBlhDcqb/BKzz1T8oRV1BMs6goACdJK/he9RxgwM0AzcS7P0CTnl0KbXQNJk+Uxavw3aTD9/SCGwGbiaIGwWOFjDOIWAkYZy6Zlch0OB1ynjaIQiUqUONWy2iAxgKdSUIuUOQLtPP9jL4vzoau0PgMdM3QFO+HaIS7dsJgwR9YqP2k2YP0JzVeBPwIMH4MLClYJ+y6NxS0RLH/UwzATiZYLSPcXRqQ3Ta1Jeg93i9BluAbzHGngILPfmSGWBhRZuLQepJ0MCeGEN3GMfP5UTnEHdjtO+ux9B5h4HPwAyP+gsBmEl0wlzNWVf7KTF25jnKes3sR3FS/WBm3yU9dFTNd7WPC4DrhcloVlEBGHGUOX2NC8CkwfvdG9EDyg5JS5X+VRyS3ki6amZPfGmTPAYAmC7poqS9OcwcBS5LOmxmrmmdG58z4ILyOS9FM+ZA5fvBnLaceMkBwHpJ+wo0uR9oK9DeH3wlwe0F2zNFeaRwfC2BJY6yj5J6U/bfIKn6dntZHkFx+AqAa2b1mtmuNJ2BK5J2VhVPza3KwaS/DygDEFpAaMoAhBYQmjIAoQWEpgxAaAGhKQMQWkBoygCEFhCaMgB1tA3y34KMpNYaF4BhR9nybFqCsMJRNuRqGBeAl46ytUBnZkkNAjgiabWj6oWrvXOqAK2SXsXUP6/UJeE60sp7JJam/0q5nUdSq5m9rq6IXSvAdUnbagw4Ueg2M+ehalIAFkl6LGmuL1UNol9Su5n1uSpjdwEz+yBpo6QvnoQ1ggFJm+Kcl2psg2b2SFK7pGuK1tFEAUndktoqPsSSer8ElkvaLGmVpDQ/N5mjv2f5byR9TTtWjv5DirL9LVfCKykpKSmp4jcmJq1CdrrMbwAAAABJRU5ErkJggg==]],
-	Main=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAD70lEQVR4nO2bT6gVVRzHv0eflVmEoqYkRAVvo0/QdeHVQpC3yKXmQqKVL6i2uc3auHBn4EIIKqhFK99Cwv4Ltmhh/nmRUNGrCHkUZfog431azBm4XeY3c2bmzMy70/vu7r2/f59zzj3nzm/mSiv6f8t1XcCogJ2S9kh6RNKfkr6S9JFz7m6nhTUtYDvwKdn6CXiu6xobEzAAbhnww3qj61qjy8PfDoBPdajrmqOpAjzAj8BE17XXVkX4VM/EqmNVrEBlBAwkzUq63zD5WslJ8Jbx+e4GympHATN/GdjobfcaNq/FqqfVFRA480875xb86wOG3S+RS2teZWbe268C5g3bHV2ylBbwFPnn/H/gvc/AsL3eFUclVYH3fmcM+1e74KikGvD3AAsZ9kvAY12wlFZVeO970PD5om2OSqoD7/3fM/xm2uSopAjwD5J9WtwFNrfJUlp14X2Mo4bvbFsclRQD3sc5b/gfaYOjkiLCbyZZ6qO6DTzQBktpxYL3sV4yYrzTNEclxYT38S4ZcaabYqjcFKX8hU1RvCck3cioaVHSPklFTdGfnXO/huSqLUpe2ATGfCUnXqjmgBma7Bg1Ae/jnogwAKk+B9aPDbyPfTjiAAB8RsyV0CS8j38f8F3kQTgWC35Pk/BDebYD30ccgGtFOQtPAWCrpKuSNhgmpXb7gHxrJR2UtEPS6kC3dZJekLQ247OHnXM36xR0uumZjyHgTaPGnXWCrgZ+HwP4jcC3Rp2P1wk8aQSdW2bwl406F4DczndRW9y6ALkQ6ztfR34SLkiylvnbzrmlvBi5myDJBpjVg1+UdFbSXwF1StKSpOuSPnDO3Qn0yVUA/E1JU7U2QJ9ozlheVfQDMFWrIBUue0iO7Cfr5kmTzUQcgHQQso6rmPCDKPA+4QTJz8qYqvS0R+vwQ4k3RB6EE2MDP1TABHAMuBZhAF4umbsx+EoNEZL29LYC/zVKdumshsmkc+5GYK6i3f6OpGnn3Cch8VoTMG3M1pclYmwKmPl9TXJUFvBuneU/7vDryG6W/gNsCfAfX3hJAo4YhZ8P8B1veEkCZo3ijxb49QJ+E/B3RvGLwEMFfuMNL0nAiwbA+zk+/YCXJOCiAfGsYd8r+EdJHmMZ1W/AvRn2/YGXJOC4AXImw7Zf8JIEXDFgBiN2vYSfMmDmGerL0fVVXVPCvrd/cshm2cHHfFbY+ol7Tlq+V3UxbyPfMt5/nuQm5SlJVj9weV7SlhGwP2dp52k8v/OjAtZgP93db/hUlLvH3y/4VMDrAfB/9BI+FXCI5N9dWfoQmOy6xlSN/XWWZOcfSNolab2keUkfO+e+aSrnilZUXv8C6X11gNREwPYAAAAASUVORK5CYII=]],
 	Settings=[[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]],
-	SettingsLucide=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAABf0lEQVR42u1ZyxLEIAgrTv//l9mTMx13rVrDY6fJuZUQAQWPgyAIgiCIt0IijKqqfhERCeFS3h4BFIACUAAKAK/okaeJqwCVQIQIKNsFpb6nCEjbgg5B6wsN2qZEELrbsbt/LQQXr115EqbXNayiDXIMtkQQzrf/jWykaIZUVUe7tityayNtN2hxKlgUWIlwfrXQWYpwug4fJshfQ/0ve4Ee8dWd632PFqZkdN5ThDMq7GfPdRERy3QIaYd7DkU0VcXSqV87OnIStQ4sBWYMzeb4LOmVy84uP06EoglEvQekESBypMYUmCmC0M5r8kxfsbnLr1jm8pMhBmqd1CnQIx9REOEDEbRjFmuaRQC6ebF23iQFUCJ4OO8+EKlO7UyE0tcAy4lOPUZTpkD7VocO1esdAjpt9miFt97ubiIqxcPIDDHESMxqJhDyOPr0bdAiEsTbeY+UC4mAVQK7TuzYhtWAajjkDg+yXVBEMjVVHIhQAApAASgABSAIgiAIYoAPcrcwc7e0+MMAAAAASUVORK5CYII=]],
 	Search=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAE00lEQVR4nO2bzW9VRRjGnyHYVsGIFi1sbZFQm+iG1GiVIm4a0pBoCMbAxn8AV25Uov8AC4O6cKU2TdzUj6CJMaFFF7AwYgohROPGBtoSiOWjl7Zc/bmYg1zKmTlzeuacW/H+km7uPed9nveduWfmzEylFi1a/J8xVYgAbZIel9QlaV3y96ekmqQpY8xUFT7SKKUAQKekIUk7JQ3IJr/Wc8t1SWckjUs6JmnCGFMvw1tpAAYYAr4AFinGNHAY6G52XkEAe4CfCyadRh0YAXqanWMqQDfwbQmJL+cG8C7Q0eyc/wV4BZirIPlGzgBPNjvxNcD7FSfeyFVgKFY+uUYB7HD2qaR9OW5bkHRS0mlJv0m6Kjv8bZDUKWmrpO2S8rTsTUmvG2NGctxTjKTlPw9spTowhn04Bv1ugc3AQWAyUOMvYG/ZeTcaDO32o8CWAjoGGAbOBmgtAIMR03Saei3AzBSwK6LmfcAh4GaG7gywKZZumpFu7IPHxwSwsST9HcDlDP3vgXKm9WSP819T8vgM9AIXMnwcKEN4T0DLVzI5AZ4Grni8zAAPxhb9ySM4RUnd3uNnGPjb4+nNmGJDGa0f7YGX09fHGb3g/lhCYx6h0SgiK/PVCVzyeMszSXOKPIIdY9OoA09EyKWIv7c9BTgaQ2C/R2AsQg5F/W0Aag5/i8ADobHWOD7f6bnnk3x242OMmZP0lePrNknPhcZyFWDA8fmCpO9Cg5fMl57vng8NclcBuL2AmcZJY8xCaPCSmfB8ty00SFoP6JZ7AfN0aOCyMcbMSpp1fL01NE5aAR71XP97aOCKcPnx5XAHaQXwTSfnQgNXhMtP8JQ4rQBtnusXQwNXhOt51B4aIK0ANc/160IDV4SrpedDA6QV4Jrn+sdCA1eEy8/V0ABpBfjDc31Tp8CNYBdAXBsmwXuNaQU4L7tXl8b20MAV0Cf3T/JcaJC7CmCMQe7xvhfYHBq8ZHyv48HzFddUeMLxuVG+PYEy8fkYLxQZ2OV5G5ykrAXIcH99uFeGZgFXwwYLrMVuUbsYjpTLSv2NerwdiSVy2CNyFvvSVDlAP3ZXyEV/LKEe7OqPi0NRhPJ5agd+8Xg6EVtwxCNWB3ZEFcz284HHD8Du2II92MMJLi4DvVFF3V4+zEj+OGU8nIH3MoQvAE9FF77Tw0cZHpaAvrLEO4BTGQauAC+XoN1OdrcHeCe29nIjW8jeIAW7adEZSbMf/wPvFnXAt4gbB+xO0VKAoUvAW8BDK9Tpw47zvqFuOfNUdE5gfw5jtSSRV4EuT0yTJP0GcCJH0lGKkPupiT2W8plyrLokXJT0q+y7+rykhyVtlH3FDt7IyKAmadgYcyxSvHSwhxZmCrRWEXyTM7A94cVSC5AUYRP2ZEZVLGGPzLwAXMu4trIiGOAA5feG4zSM88AAq6UIiaH12CNu5yMnfgrYS8oMb9UVITHVAewDjrLyE+MXgSPAMwF6hYtQ2sIGdot6IPnbJvu075K0Xrf/YeK67ALmOdllrHFJk8myXKjOoKRv5B9JapKGjDE/5E7kvwAwmLS0j2liHZ9ZjQQW4aXl9xVbO1tFGGMmJO2Wf2fr3sfTE+7tn0AjyegwvSz5Z9OuberydpkkrX3rqMyPxpgbzfTTokWL1ck/FJbYJ0STWJAAAAAASUVORK5CYII=]],
-	ChevronRight=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAA8ElEQVR4nO3aMU7DMACF4d8MnKfHAKmiQ+/AkTpwB7YehNsQWF6HRkIqEV1qx9T/t2WJ/Z7sDI5BkiRJkgZUar04yQZ4nR/fSikftcbqTpJNks/8mJJs155XM0kO+e2rxxIeGo71CLz3WMLNzVtgWlgF3a6Em0vydPEduCxht/Ycq7MELAGwBMASAEsALAGwBMASAEsALAGwBACSbOewS6acD1ju25USDjXGbHkeoL8MvQWSPF/5CL6sPcdqDG94wxve8IY3vOHvkuEHDj/2z9Es3w/oMnzL84BvYF9KOTYccx35R1dkvCQlSZIkSSM6AfHCWA0+H77KAAAAAElFTkSuQmCC]],
-	CircleChevronDown=[[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]],
-	ChevronsDown=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAACZUlEQVR42u2avY7TQBRG741DARKC3WfYHi3SPsrSQAPSPgXvADUL70C1ZUCCDsRTICpgC0BC+bEPBWMxWEnGP5NMMrlfNbHGnjnHjmdyFRGLxWKxWCwWi+UgozEuAoxEZOQ+lqrKpiYMjOumqpbJDTr45jHd0FgaGnurTwCgqgpwIiIPReSHiLxS1Z/ASFWriOCqqhXwSEROROSdqr6p55DkzgMK3Ae+8S8fgONYd8iNUbj2Jf/nsTtepBBQT+rKTeY3MPUkHA2VsAJ+5sapgK/AbddPk3z3gfdACczdBOcxJKyAr69dAQvglzeGpnoCHrhJLdzEBksIwNdPAcBzv2+yFQC4iCWhBXzdvvTfRSmXwXEsCXsHH1NCD/hiJ+BjSNh7+CESsoEfIOFGNvA9JNxx/V5mA99RwlvgRXbwLSWUHnCZHXwHCYts4VtKyBs+IKF0Imb7/sIr3JpeBLa6TQl+gvD1nqEea1fgR22OLZHwBPgMfAeehfb2u7rzq38NngMT4DVw2iherjvvFnDXu7sa6H/sls0J8DR03rbrAXWugbMWEopl7TXwR27z5CddPWBJRWjqvczaSlh791bAT92KMd+VitBVo0qz6CKhI/zc2z+krwl6VeHrBvwgCQH4yrt+uqpwY6JnsSR0gL+IVXqPtcEZLKEH/Fh2ITEk7C18DAl7Dz9EQjbwfSVkBd9Dwj3gJvAxG/iOEr4An7KDbymhWlISywe+g4R84QMS/EJovvABCTP33c8bPiCBg4BfIuHUVZAmwPlBwPetI24ymliCigjy9y9wpVgsFovFYrFYLJZt5Q8zO8ZV1T7qKwAAAABJRU5ErkJggg==]],
-	ArrowDown=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAB3UlEQVR4nO2aMU4CQRSG3xgKSzqDrQXxEBZUHsLexMojcAYLIya2NngCaw9AY0JM1N7EwopYmHw2s3Gz7sLMLMvbhfd1Swjv/795UEwQMQzDMAzDMHYTpzUY6InIiX98cs79aGXZOEAfmPHHDOhr59oYwJj/jDWy7GkMFZHjwNcaR0tA2VyVLFoCWoMJ0A6gjQnQDqCNCdAOoI0J0A6gjQnQDqCNCdAOoM3OC+jFvNnf2lyKyJGIPDrn7htJFQlwJiKnIvImIlfOua8mhvQK11gAt0D0vSIwLbkRmiZ8jvMZ8sz8feN6AUYloZMkrENARfmMUejnrOM34FxEJimbkIqfNfGzNza07CuQtAl1NmDFyUNTXwE//AB4XjL8Dli5VakCfPnrJfNfgMP1tK0OUVtCioBWlM+FqSUhVkCryudCJUuIEdDK8rlwSRJCBbS6fC5ktIQQAZ0onxErYZWATpXPiJGwTEAny2eESqgS0OnyGYESHioEdLt8RoCE95LXXreifEaAhFC6Vz4DGADzGuXnwEC7Ry1qbEJ3T75IwiZ0/+SLRGzC9px8kYBN2L6TL+I34aOk/OfWnnwRYAgscuUXwFAji+ZfZfdF5MI/3jjnvrWyGIZhGIZhGLvILwZ8+mkz9mDbAAAAAElFTkSuQmCC]],
-	SidebarCircleChevronDownV2=[[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]],
 	SidebarCircleChevronDownV6=[[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]],
-	MoveDown=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAABwklEQVR4nO2bIU4DURRF7ycVSBwBiyAsAoFiEXgSFEvoGhAESLAYWAGaBdSQEBLAkyBQDYLkYH4DGf6UgQ69nfYdN5OZ/+87703VrxQsNsm1MdCTtJ0vb1JK764sUwdYAQZ8MgBW3LmmBtDnO31HliXHppK2Gt77d1wCSvtasrgEzAwhwB3ATQhwB3ATAtwB3IQAdwA3IcAdwE0IcAdwEwLcAdyEAHcANyHAHcBNCHAHcBMC3AHchAB3ADchwB3ATQhwB3ATAtwB3IQAdwA3IcAdwE0IcAdws/ACem0ulk97HkrakHSdUrpoad09SbuSHiUdpZRe21i3VYBe5fgrwBnw7TwycFk4KXpZeC7lNb4yyOeMZwtgp1BUUUITATXFj9hpK/c0fgP2JZ2WJqGO/Oxpfrcb1HwCxUkYNwE/dB5m9ROQJGAVuB0T/hxYqhOQiz8e8/49sO6ucywNJVzVCOh28SMaSHgq3HuYi+JHNJDQlO4VPwJYA+4mKP4OWHPXMRETTEJ3O1/lD5PQ/c5X+cUkzE/nqzSYhPnrfJU8Cc+F4l/mtvNVgE1g+KX4IbDpyOL86+yypIN8eZJSenNlCRaZD8C66iyNBDwoAAAAAElFTkSuQmCC]],
 	Autofarm=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAADPElEQVR4nO2aO2gVQRSG/xPiA8TCJ6LiC2ziA0EQtbNLI4qghbY+KhvB2Ghhq4hYiBAEKxGSzlZBEAsFQZEkggoqKILGIhFBUPNZbIw3cZKZ3Z27Y3C+7s7OOfvPubtn5/57pUwmk8lkMpkIAHuAAWCMcD4B51Jrrw2wFBgtsfCpHEmhuyNirp2SFtaI744lpAwxC/C6Zvy8KCpKEq0AZjYo6WKsfE1hsRMCXZK6PLlPqbhlWuk3s0Ox9fyTAH2OJtiXQkvMHjAryQVILSA1nVWCAFPR6NZKWlAhxWrXGHCwQq4RSa/N7GWF2HIAC4HzwPsaO752MQScAEpd1cGPQWCLpNuS1pWsW9M8kLTfzD6HTA4qALBR0kNJi2sIa5IBSbvN7Itvovdyobjfb2n2LF6SNku6FjIx5H45IGl7LTlpOAzsqJ0F6Hc0nDHgLLAogtC6+lYCN6dpjL0xTvDWkfhGBO3RADqA+w6dL3yxIbfACsfY3fIy24eZjUlyfSlrfLEhBZjrGPseENc0Xx1jXo/hv98K5wKkFpCaXIB2JQbOUXj+lXz/uvHRmGaDMaN3BxxxxAT7/lXigUMuob5z/eUHEGZq+nB5/N2SbjYUPwF/PAYkDZnZUOvxzimTL0g6XfYkDlzP3zK+f934ViaZrcAFMzvz+3NHy4FNCl+8y9FJTaimnvGrXNLkJri+xMmWl5jbFGU0Tay1tQAPJXkNhHHa77+VJ1TTqIq1SmopgJkNS9onaVBFw5iJ0EI1iU/TmIq1TbLLJjVBM7unwk2ZIORR4mA4cKxd8ROY2YxPs3ZthHolfWv5/G18rKn4YCq9F/BhZk+BXZKOjw/1mtnTpuKjUmUnmIKqO8H8Yyi1gNTkAqQWkJqQAow4xrxuawKWOMZGa2cFHjua6wdgVe3kkQDmA08cOp/5YkP2Abf196uxFZIeAZckvaugOSbLJB2TtM1x7I4v2Gt6AMslvVK9P0Gm4KekrVMNkKl4e4CZfZTUE0tVg1z1Lb4UwOVpdoX/IneAOdEW31KEk8CXxIubiR/AFcD1Os9JaeOTovsflbRX0gZJqV+Rj0p6o+KF7XUze55WTiaTyWQymdnCL1MOZ6Tfnu5tAAAAAElFTkSuQmCC]],
 	Games=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAFMUlEQVR4nO2aTYiVVRjH/8/MOKMGMaJjalroJigzW/ShJEFl0EIm7MPCdSaBElHuJsGKQDfhIm2mDKM2bYIWggsxijaJZohKi2wcM8MZLSwcZ5yZX4tz7/DOe8+597z3vjNX8P3BwNznPuf5es857/m4UkFBQUFBQUFBwe2J1dsQMEkrSn+duUWUjb8l/S7pnJkxIx6BJ4DPgUFuHS4DB4C105n4KuC75uYZxRFgZd7JbwNGmpxYFm4Ab+SV/O5mZ9MAHzaa/I5mZ5ADb9Wb/FpgrIrhQ8CLwNKGqlwngAHLgE3A4Spx3gQezWq8BfglYPAi8NQ05VU3wHrgUiDmn4GWLMZeDhg6D9w7jXk0BLAcuBCIfWMWQ0c8BsYyd6UmAKwBxj3xH441MA//2D8wzbHnBnDQE/8ocGdM4+cCXajm0wc6gZ3AF8DmXLKpA9wE7mN9TOPtnobXqDGJAG24ySZJT25ZZQBoBf7z5LEtretL6h6PrN/MJmr4XSdpdUpW4XAmMLNxSb95vqqYwGMLcD7Cb1ekLBeAHtyGbAjYhdudJhnwNKvIrS1GKWCsaZTml10JUY+kfknJidoX87K0oO4CAG1y3X5BSfR4INiXyv9KOmNmZ3x6GXk2IEsW4IJHp3oBgA5JizwNB1J6nZKOqnLM+/g61XaPme2IaFeNcxGyPzw6i4FZZnbTaxVYEXh9rEvp7QzoxfJAfXlP+u9k6hvnFDA/pfNkwPeUiTA9BO4O+Ex3pxWNJCBpuaTT1RSA1ZK2yE3UfWZ2vPydmf0DPCI3BFskfe95qr4eIElLFZrUgVc9FRsH2lN6mxt4+teABd4AEskDw4k2I6WEowE6gAmP/01JvfRrcLHH1pCZjSYFZvaVpHclDWWJSe6pd5tZrXZbJM1OfG6XtDWDL5nZSCC+Kdv3dAF8e3tvVzKz98ysy0pI2hTQK9NiZivN7GhE/Hlx0SNbkvyQLsASVfJnbuHE0yvpRuLzqKT9ddjxxT6ll6cnQd8QiC2Ab6lca/nsxcxOAmsUmAQzkEsBLkU6Oxspi8LMTkpq9GTXF/uUHNNDwLcIiiqAmZ2WtCch+lfS9pi208hfHpkvRwmYE3htPZ/FI3A/sIHUwqQZAC8Ecuoo6ySHQGjnNpjFaWmtn8d6Pw8uB+RdKr3dkkMg9MSyvOtvNa4E5JO5JgswL6B8tR7PuDP7D3Br9uFAV6zGcKnt+0DFLi6SUOyVuQLdtcZLDLgLi3fqTLpaMd6m8tCjVixzA/Y2lHWSPaDdY6O8pIxOXm7BsltTl7KNMlvuDbMvYxGGA/LJh5osgFcZCA2NtJ5J+kRu8TJdvC5pf4YihOa16+V/kgXoDyg/XctLIvnXIgNrhC2KL8IzAXl/+Z9JI7gjrkFV/tzlhKTHzGzMZyki+QFJHym8Pw+xTNKb8hxjleiVtDX00xjcFv6YpFWpr65IWug95cb9zMTHQWCWR78V+LTK5HUW8K+8IgAWl2yE6MVzXwG0A18G2vRVc/gQ/ns1gBO4S9P5uNvjh6l+Ld1Q8hmKcKgUdwuwAHiF8M32GLWO44B9VZzFkkvyGYoQy94YZ3fgnvYtkXyORfgJmBPrbCFwvA4nJ4G78k4+Edci3AlwVo4B2W6pcKuojwnPCWm+Ieb6uUFwR+LfRsY0Duwl9skHHD4IfAZc9TiYAH4AunPMMTaujcCP+E9+h4A+Iu4fopeVQKuk++TO9OfKrRlOmVloxzUjlLr2SrkruutyN0S/RtxmFxQUFBQUFBQU3Nb8D/l/xMjiW4l4AAAAAElFTkSuQmCC]],
 	Matchmaking=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAFM0lEQVR4nO2b+4tVVRTHv9sxMTMzXyHjK2UKexkJiTBJOBmFZUIURWEg9AeUBGpBJUURgT1+EIsgCUvDQoUKwwoi7GEPHZkkUxwfjYyWk/ZDL2c+/XDu1HRnr3P2nnPuHcrz/emy7v6utb77ztl7n7XXSCVKlChxFsMV7RBoktQiqVHSpIr5iKQOSdudc/sH4HOspGZJByXtcc5RULrFABgOLAPayEYb8CAwPNB3C3C6D78dWAlcUGtdQQDuAA4FCK9GO3B7gP+9Bv84cG89NFqJOeCxAQivxvPAkJQ4f2TwXwaG1lN7r/jXChDfi3Upsd4N4G8CGuo5AQ9nJNRD8qy/UxHQVrGlYbkRayKwDejO4D9TL/FzU5L5BXgUaPTwGoHHK2N86AbmpMQdD6wAfjb4PcD1NRVfSeQjI4E9wMUB/OmVsT58HMCfDHxp8HeTsp7kBrDACPw9MCbCz1hgv+GrJYA/GnvLvSWfyvTAL3kCdgOzB+DrWvzrwtpA/izgjIe/KV5ZWMAhwLEiAwJve/x1EPhnDLzu4Z+iFjsCMNUTDAIOMyk+7zR8TspmS8BCg39ZaA4xC8ZEw/5FhI9qfGbY++0iBj437JmLcS9iJmCCYT8e4aManYb9ohCyc+5HSd2er0aFJhAzAacNe3AwD0Yb9lMhZOBcSb7n/ffQBGIm4JhhvzTCRyi3I5B/eU5+1AQclvSbx35bhI8Q7q9K6gchWOSxdUtqG3BGaSA521fjNGCtD2m+xlW2rGpsDeSPInklrsanMXnEHhs3e2znS3oRCK4uVcaukX/92BLoZrWk8R77xtA8ogGMAH4w9t7nCDiAAA3AC4aPo8CIDL4DnjT4XdS6UgTcbwQH+AC4KoU7C/tlCmBpRuwm/I9hLx6K1RNdFCX5ld+TtMAY0qPkgLNd0qGKbWpl/BzZj902SQudc//a10kel3skLZE0X/5tT0oORc3OuTNhSnIAuBDYl/JLxOI7wHsmIKzsdhhPDaLWkzCV5P07L74BpqTEOZnBPwDMqKf2vsmNBDbkEL8eOC8jRlcKfyswrl5605KcB+yIEL4DaA70/YSHvxtYXETuhd4MATOVnO56b4YmV746IumopA8lbXHO7Y3w6SQtlXRDxc9m59yOIvMuUaJEibMWUbsASbV2tqS5ki6RXSaLRaekfZI+kbQr9v6ff/oH2iW1Ft4/QHIR8QhwJGKvHygOklyBBZXa6N8/EMUPCbAEOFEH4dXoBO4OyM/qH+gE7soj/BzglXqpTcFaUu7/ye4fWJPGt5w2AG/VWlkENmLcFhHWP7DB4nsXQeBZSctS5qhbUquSRSfv+/dQSdMlXSH7XV+SnnbOrag2AhMlvarkqJxW4nvKObcyMxtgPnYzQxewnGTVLRTABJLGC1+hFJJL2Hk5+ddlJTEEaDUc7CTwzi4PgCnA10YOu8govmbwv0rlA7caxD3UsS2NpOL0rZHLzYF8a3e4KY3oW/j+BK4sVGEAgKvx3/8Hlb2Bawz+GxahAf/zs75QZRHAX23qIrx/4E0P/ycvH5jpGQywsHBlgQAWGTk1BfIXZ/H7zsQ0w8/OHBrywuo9CL3/t/oHpvV+6DsBI43BJwKD1QJW70HoOd/i/72g950A7/YwmJ3Zzrke46ugNaD6ksXHr11P3X8E5QQMdgKDjXIC+nzu8nzvs9UbefMK4wPD6P8itCoiUE0ArKrKqRUYVhTfVQ0eI+kBSTMkvS9p3WD/gxLJ29t9km6UdEDSaufcyXrxS5QoUeJ/jb8ADbKAq06uay8AAAAASUVORK5CYII=]],
 	Offers=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAEEElEQVR4nO2b24tVVRzHP2twKC9E0UXRIumODSZdiLGHKHsoyRBKo6LXiB58jAoJiqCnIJD6B3oINFK7MEFOFDTp9FBEMwUxeCEzKiMTxxRpPj3sGTidWWufvc9xzx51fx7XWr/v+v1+Z5+1f3vttaGhoaHhAib0KqAuBtYDdwMrgD7gN2AcGA4hTPSofyOwDlgFLAWmgF+AfcBQCGGyF/1eHFukvqb+bT4j6oYu9DeqeztoH1NfURdWEWOec9erP3Rwrp2P1asKaC9TPympPaZeNxexo16jHi7p4Aw/q7fmaK/uUXtF1cH3mV3SvfC7ektEe0A92qP2F2rP61peAp7Kmfyo+oG6Ux3v4OiEelmL7uXqgQ42Y9PaH6p/5ox7vMoE7EtM+oZ6cdvYgWlnU2xvGbsrZ9xudVWb9kL1zcT4kaqCX6pORSZ8p4PdiznBbVQ3Jfqm1Oc7aL+bsLvi7EafTbYu4ehAAdtXE7YH1EOJvq0FdNckbO87O1H/f7LHEpP1FbDtU/ck7GMMWWAxUxck7B8tGldH51s4lWi/spNhCGEKeCZHo5V/gGdDCBYYm6orThawBcolIFXSPl3EOISwH3i7wNBtIYRDBX1Kzd1T+R1FDWbFRjuT6r0FNZarp3Mu/VMWqBante5XT0Y0DpaJa0FRx4E1wChwdVv3ImBY/Qr4HjjdQe5X4NpE3xHgBc29+i8CVgNriV/Bo+qDwGgI4a8OvuSj3ql+13nNmpf8a1a13pwXY3KlVdcDuyl4lcxjTgAPhRC+jHVGE2BWpo4Byyt0bC6ZAG4LIcy6O6TuAo9w/gQPcAPwcKwjlYA7qvOlNgZjjakELIu07QhnCWBHxfrvRfTb7165CTjXmSo68HxNQGGaBNTtQN2kipwTkba16i7gJmAx2d7/wS7nja3Ig7bsEpVkJdk7g0ngJ+D2yJji7w/U52osYatiSyzW1F9giOy5/HzhDPBprCOagBDCAeDlKj2aY14PIfxYysLs+X+L2TP6ucoZs/3I/lScRfbdVgIPAE8Csc3GWFXXiUFmV2aHgb1daG2KtH0OvA/sKf3Lp1A3x1Lcpdb2iFRXd4DEL7+5qP0FXwc0CajbgbppElC3A3XTJKBuB+qmSUDdDtRNk4C6HaibJgF1O1A3TQJKjO3q0bdKTJ8jKuxrmQTEdopnTnPXRerd//GiAmUSMJ5of8vsyPycoi4BtiW6U77OotS5WvVbsqMy7fwBjJDtvhah1y2xfuAe4ifUvgkhVPN2W32ix03KuaDSs8LB7OzufGVnZcG3JGGJ+lndkUYYNlsXqkftV7eqx+uNWc0+2XlJ7eowV08fF6iXABuAuyh/puhSYOYzl/3AsZL2R4CvgY9CCIVvew0NDQ0NLfwHddtVC5Zr1ToAAAAASUVORK5CYII=]],
-	Accept=[[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]],
 	AutoAcceptTrades=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAE5klEQVR4nO2aTWhdRRTH/9O00SoibWoUFRFFd01TihVx4Tc0NrW1oZFKkW5EaYViXFjRigsXRUE3XfmxKtIqNC3iouBG/OqmGLqqdFkEk5BCSSvJS01+Lu5Lvb3M3Dt35t73En1/eJt758w55//OOXPmvCd10EEHHfyPYdptgCQBqyVtltQv6QFJvZK6JDUkTUi6IOmspHPGmPl22VkpgBXAduAk8Bd+mAI+Bx5tt/1RAIaB3z2dduGHWogADLAXOAPMRhpZNxaAL4E7Qv29oQYAqyQdl7QzlsgWY1rSj5JmLO8akn6T9JUxZjL7MkvAh5LercNCT8xKOi/poqQ5SaslPSjpYSVFMQZXJL1mjDlmfQvcBlxtQxjPAUeB54Buh223Ay8B30fqmge2uAh4JnLzEPwM3F/mawQeA85G6LwAXI/8lam91zp0DpcxMIVNkt7K6FjE35LeNsZ8UnZTY8wZkur/qqQPJN1ZcouHlPQbY1KqBgDDkr62KCzdLAGDkk5IsoX0nKQhY8x3Zfe16LlJ0oCkxyXdK3ud2GV5NmSMGc1uNmyLlwCjBoAZR/g1gBfK7hkDhx3Xo3pFxcoGJI1Kutnyek7SLmPMt1XqjEVlBCxH5yV7gSoN4FlJp1RzzteB6AggaUOPaRk6L1UTAQclrbM893YeWCOpT8k1WJImlVx9L1dgnx9CTgFgJXDJUe0HPWT3kDRD85Y95oGfgJeB4Da46BSIJWCjQ8EbBXL9wDmHrA1jQF8dBMTWgPscz4/mGLRV0i9KQt4X/ZJ+BZ4vIeOFWAJKNUokaTEq6ZYAXbdKOklBapVFLAEXHc/3Zh+Q3x77olvSiapJkBRVBKcsYg3gALAG6AFGms9smAc+I6knXc3PJuAL7MVxcX8vEopqQBQBTbmPHUp8kHs3IBmauojzIqEVBKwDJgKd93FgMIaEIgKiO0FjzJSk3Upmb75oyLNJaq4ZUtJYZVFdTQiNgJT8056RMA48GWBfUCQURUBlBDT36AE+AiYtW00AhwHX5Mln/9IktJSA1F5dQB+wrflZD1Ry9S5LQlsIqBvAFvKnTttTa3MJqHQiVAWADcCLQK9rjTHmtJJZn6swfgPsB2zzQMnWwQI7HWyFtK1BAD5N6b2aDWfL+rx0yMNTts02Oxa/XpvHN+rfYNHtc86XJWEa25cKdAOXQ4yoAsAOh8FVk3Aob6MjoUbEAujF/dOcDwkHPJw/Tt5wBbgL++WmVSQEt73AWofcDP9Olop/5CH5kTLqAhKDAhIWgPcccj0Oma0hRnifs3WggASANy0yI46160ONqIUEPM755rqiSBghCfu8ecMEMR1o1SQQds4vOPT74HCw8xkjomsC9nPemdMpuUOBzo8TcfGqnATc5zxYcjoje7qk87MEXLmLHIidzOSd8wvAjhzZV0o4Pw48UanzKUNiScjL6WsuefzSYJzIeYMXKiAhz5kGsC2z/h7gT8vaMWqYN3ihAhLycvoayZh8D/C+w3mAd1rlr8uJmLa1TE7bME3Ev0MrQygJhB9ti9jfal+d8CDBN6d9caRdvjpRQIJvTtsmyWlcAfa121cnCkgowjRwN7AbOAX80STuEskfKA6yFHK+CBEkLJ2cjkWTBNcFyoall9OxAB4Bzhc4vrRzOhbAKpZ7TnfQQQcd/NfxD3GPMj9hDqFhAAAAAElFTkSuQmCC]],
 	Cancel=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAFVUlEQVR4nO2bb2hWZRjGr2duc6sMbVFtVGD4Jyf9cxKykDAoMldL1IXRB0HIyqDPfYwCbQVBWESfE8uahRjUt1JLUQqVDCtTCcFCreZcbnN7f30459XXd8855znnPX8m7oJ92P2e+76u+36f55zned77SJO4tmGKIgbuknSP/+8hY8zxorTkCuA+YCfj8Q1wb9H6MgXwDDBoSb6MQWBl0TpTBzAVeAcohSRfRgl4G2gsWncqABYChxwSr8YB4IGi9ScGcAvwATCaIPkyRoFNwM1F5+MMoBXYCAxEJPcvsBRYBvRHXHsOeAO4tej8rACagW7gM2DE4Zs9BMyp8L8b+MnBbxj42C/a1DS0x1oHANMkLZI0XVKLpJmSOiR1Smp2CFGS9K6kV40xQ1WxmyW9KellR12Dkr6X9KOkE5LOSvpH0l5jzHkHf3cADf4QPO/wLQXhANDpwLXYcTQEYQB4DahPK3kD9NUg6CSwDpgSg7MeeBE4VQPvVqD2lS6wJqGA34D1eEM7Kfd1wCvAsYQankujAHtiEPYDHwGPAXU1k1/WUAc8AWwh+ulSid1RsSOHCHBBUpPlowFJpyT9KukHSbsk7TLGjMTMLxaAJkmL/b8FkmZLapU0zXL5f8aY62sltGFVTUEzALDKJjTKL+kwLWwbHYJEmlKbp1crJgtQtICiMVmArAmAduBJoCWGT4vv056lNlcxNvQ4+vZW+JwDljn4LPOvLaPXkasnyWPQJXCiAgDzLX7DQFeIT5d/TTXmO/AlKkCWU2CmxdYoqc9WBN/W51/jEisVZFmAvfKWy9UYV4SI5Af8WJkgswIYY85IWi3Jtje4VISI5EckrfZjFYOk94AK/8eBCwFxLgbM+fL94qkYPBPuHiBJMsZ8JWm5pCHLx/UK/uZXGWO2Z6lNymkhFFGEauSWvJTjSrCiCGHnBaPKMXkp/6Wwy5Y11612bgUAlkraJvucL6Ne0lagOx9VORWgInnb0Vo1GpVjEVwKMGaxxTniDkt+VMHrhLhFaLDYLkY5uRRg0GKzHUCOA97m5wvZkx+Rd1NcofAiRG6gfNxosdlWolfApQCnLbbWKCe87e8WBT/nVxhjdhhjdii8CFtw20q3WWxno5xcCnDSYpvl4LdI9pFyKfmyIaII5d8jozDbYvsjysmlAEcstg4Hv2MW27jky4gogi1WNWzNFL84+IUDeN6yxC4BLtNgY4VP0gORjQ4+twfsJ9a65hkWvD0g+DpH/3l4u764R2JdwDzH69cHaJwT7e1GcNwSfE8qwVMAsN+i76iLr+tCqM9iWwQ85C4zGwAPS1po+ejTNEnasbe4fUsav8En12WA7yy6SsDctMm+Dphna1IliqdpbYCmL7Mg6wwg6wdc1gVp65nLlU+Lym//waxItwYU4WfgpkxI7TpagCMBWjZnSdwG/B1AvA+YkRn5ZQ0zfC4bzgC3ZS1gZQA5wEHgjgy57yS47bYEPJ0Vd7WQ3gARAH8CSzLgXAL8FcK7IW3OMDF1eA1LQRgD3qKGDrEKrma/4GMhfJtJsSnLVVgDwTfFMn4HltfA0Q0cjeD4BLAdhmQPYArwXoRAgN3AozHiPoL9rZJqbCJGA2ZmwOvqHHIQvB94FkujM96I6sGtL3EIeKGIXAMBLAAOO4gHOI33Bsn9eJ3iG3Bviz3MRH2RAmgCXsdtNMTFMF7DtsvJcrEAZuG9O+DyjlAUSsA2wHbkNbEBdACfE/4IC0t8O2Db6l5dwJvn72PfvFRjEPgQh7aYqw7ADXhb2J2Mnx77gJeA6XlqKvIwo03e6XKdpIPGmBNFaZnEtYz/AbOqnJClBmeyAAAAAElFTkSuQmCC]],
-	SidebarCircleArrowDownV2=[[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]],
 	Fallbacks=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAC7UlEQVR4nO2aPWsVQRSGnyMxTYKFhSGCF0QkYiWChYhFhBgsLBMUG0EIQRCxVn+DiAomRLDxB4iNRkkjgk2IBCRGEEXBoIJIqoDia3Fzw2bZ2Tu7dzdz1XnKnZ1z3vPOxw67C5FIJBKJRCKRSCTyH2JFbpa0F7gPNIBZYNLMVKD/TuAKMFQkr4MvwEvgkZmtVhAvH0kNSWvazLwkLxMl9UpaVPWsSromqafO4gckfXAImJG0zSPGSA3FJ5mT1F9X8a/bJG9rwhYYIEkP5TkjfYsflLTkmXwqL7nqWwJpzhSpMU/wADAHHCwQ7x4wYWa/HTGr2gR7gGPAroy2BTM73FF0FRv5NLkzoSok9UmadWjY00lgnzXfDq+NsVMkDTnyj5YNWEXxW2aCJHPkHvONsSFQzefoY9xr/pnj+hvH9QvAVV8hZcg5hHkvweQIHQcOOe6bBmYcbSdwm3DJV0gofKboNDAJZLptZivkm9DVJA14DrxKtU/jcd7PMeFWxwprZuP8bGa/JA0Dl4F9wBMze+AbyMxWJB0t27/rkTSetd12ga4sxn371/6s7naiAaEFhCYaEFpAaKIBoQWEJhoQWkBo6nuVXCGSzgGjwDvgppn92Mr+rSBBjsKSrqdSLkkaTLQ7j8LrL0ymUm0LKvMNIaABXzPSbpjgMsBRfIvhVvy/dQ84AMwlZ0IKA+4CE5VlDDgD0ksgPROyeJrTp/QSGAtkgEm6k1NQEZYl7S4r5JQj6P6Ka87KXYUJ5YtfF9FwBJ6V1Fdhva78eZtaOzY9OZIU/T9ggew3x9+AF8DP4qVtYhm4YWbfHfkNuA1cLBDzLTBsZp871AaSzpYcgSIsSurN0VBkJjhHvqwBpuYn6LoZ8dDRzoRqi08k71fzZ4RgBiRMcG2Mn9TJhueRfLuav6Ws1lB87hLIMGE+1X9NUsO3lo4+Y0vaAZwGjgBVOJ67CTo0tE59J4GPwHkze1+BlkgkEolEIpFIJBL5d/kDUdV/DcuLxjwAAAAASUVORK5CYII=]],
 	Messages=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAD40lEQVR4nO2ZTYgURxTHf28VPZiI0WjwkIOIIAEVxUBAQc0hLgS/UPToKYuCIepBL0ogwYsHveqCYAiBEEIILAFZP3BvHlbETQ5B0MSLIohfieiuZv859OzQtlUz3T1d3TOz8zvNVFXXe+/fXa++oMf0xpo1kDQXWA0sCuTDa+BvYMzM/gtkIzuSVkn6RdKEyuGBpBM1wSsP/itJr0oKPMldSaurDP5gRYHHeSRpeRnxvpEDJK0CRoGZZRhvwg3g49B5oS/x/2vaI3iIEu/O0qxJmit3wrsvabOkGYHszpN0XNKkw/avIWz6HNngGY+bS7J/3mH7Xmi78SGw0NPmcmgnalx0lIVae9Tp8/yuY2avQztR45WjLMiwi+MMejrRE6BqB6qmJ0DVDlRNT4CqHaiangBVO1A17bLzy4yktcAAMM/T5AFwDRgys2dpOtzt2gkV53Jx9iWtlfTSs3lL8kzSMUnOl92pQ2AAmJ2y7bvAt8CwpHeSle0kwHuOsvEC+98E/CDpjVOwthBA0myit5rkL88jg+QTZyuwJ16QOwlKmgVswJ+E0jKfKPg1jrorrgfMbFTSevxJcCawDvd5whHgx7dKMyahxZLGUiahvEwqOqTNhaQ5koY9fX841S7zEJC0mOjNrMjrXErOmtnNvA+b2XPgS0/1R1M/MgkQCz70mf0IcLiAfm55yuu3T6kFKCn4SeAM0G9mL1rtzMx865j6TJAqCQYOfgK4U+t/sJXPPg9NBZD0AXAJf/DngAEzmyzSsbJIMwSuEksaCQaBLzo1eEgnQKM3v7/BOOsI8q4EO/qzj5NHgK4JHrIvhTMHr2jzsRf4DLgNnDazRxnthkeepXCMs0rspFL2+02inzFF+4hS8MSye6o+7RBoJeEdSPxfQbSJagviAjz2tGl1qnPt811llRAXYAT4PVE/COzr9KmuEfUkaGYTkjYCh4ClwDDwXTcHD4lZoJadjxds418geRa3rGAbuSnjSOwPR9khSaHPE1JRxr3AEPBJomwBcF3SCP7km5anRIcnoy32EwZJ70t60mSN0SrjkrZ47BeyDsiNmT3EfzRVFLOAn30iNKKUY3Ez+x44CoScUXKJUNq9gJmdBPqBPwOaySxC5rV9q0jqI1oKfwosIXI6DwZswX1FNgHsMrMhyXm0v8fMfsppt32Q1C/pRYPEuK1ZEux4JH0u/03xeOWzQGjM7DdgO/DSUd10eHW8AABmdgHYgVuEhnSFAJBfhK4RAOoi7CLD1XlXCQBNc8JbdJ0AkOpL6OozjjoNpsiVVftWGjUR/okFf6pqn0pH0kJJO6bVm++Rkv8ByBAlnNvdOJUAAAAASUVORK5CYII=]],
 	Inventory=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAFI0lEQVR4nO2bX4hVVRTGvzWTjESlYaiUPVhjMw7SlCIEgZoQlFngQ9GLvkjhWwRp9mZRD6MU1VtSPdSTA2k09Aciw0FIiiYHLE2tGBjkakXOODTONDO/Hva5dT2de8/e594z58bMB/Nyzz7f/tY6e6+9Z+21pXnMbVgRnQKtktZIWhlp+FnSKTObLkLPrAFYBLwCXOK/uAi8DCwqWmfDAbQCT0dGpuFi1La1aN0NAbAZOOlheByDwOai9WcG0A4cyWB4HEeA9qLt8QZunu8HJhpgfBkTwAGaOT4A1+EC3O8eBo0AuyNn3QzsAS57vNec8QHYAox5GDANvAcsS+BYArwBTHnw/AA8XIStcdHtQK+HYICjwD0enKuBTz05Pwe6ZsPWuMgbgH3AuIfIGeBj4KbAPh4FznvwT+JGTv7xAWgBdgAlzy9UiRLwFAHzF1gAPINffPgtaptPfAAeINt6Hsd3wKbAvouLD8DtwGFP404Axz3b9gF3BmrpxsUSHxwGVtRr/Hrc0ErDeWBbxXu5zl9gmyf/JWBdVuPvIj3IjeDW8LaE93Odv0Abbi+Rxj9Olp0kcK4G6RRwkIT1PIEnZP4OABsDdS4F3krhPxtqfEeK0H6gI5CzC/jMwwng4sMdgXr7Uzj9RwHwnIfISeA1YHGgI3zjwwRu5FTdPwCLIw2THnzPhoh814OwjF+BXWRb30c8+a+JD7j8wq7omS/eDnGA7/a2EqcJXH+BWwiLDxvIvh/prdcBFzw7yrK+rwWOZTCqGpIyT4kOaAnQeVzSg5K+T2m3VdJpAtZ3Mxsws42SHpf0S4CmOM5JekLSsTo4qo6A3ujZAtz/5D7zL8v6vhB4AbgS8MX/AJ4n2o/U0h9HyAiQJJnZX2Z2UFKHpDclTdVovkTS65K+ATZ48l+V9IWkHz2az0h6X1KHmfWY2YRPH6kI8SDQCXzi+aX6gJU1+l2BS5jMeHANAN316g8eAXGY2Rkz2yLpMUk/pTTfKukMLj7cWCH4emCfpLOStqv2gc1VSa+a2VozG6xPfRWEeDD2XhtuLo56fMFhYHv0N+zRfpSKeZ6H/oYRAMuBd3A5wHoxHXEtz0N/3VMgCWZWMrOdktZL6q+D6mtJ95vZTjMrNUbdtcjFAWWY2YCkTZKelDQU8OpQ9M59ZnYiB2n/IFcHSJKZYWaHJK2WtFfSlRrN/5TUI2mNmR0yM/LWl7sDyjCzcTPrkdQpdxwex7CkLjPba2Zjs6Vr1hxQhpldkPRtwqOvzCxkmjQEs+6AZsO8A4oWUDTmHVC0gKIx74CiBRSNEAcUUlOYEd5aqzkgabu6KpuWQtCZ8NtoUsNqDkhKfHYTcrhQEIDdclWocZwKIVlF9bTUUaqkogL460tYJHPWOjqfJuCorUz4QY0kxRTuQHJpRrENcwCwDHdQW+twJZwbl6BMqumtxGXcEXVqmirGXbcDcOm3PaQfr5WAW8Os/7eTdR5OgFiBhAdvvSk33wKJEnBvJuMrOrsN/xIZr/iQ1QGEl8hk+/JVOvc9lCwXQ1ZNYoY6gPAiqYcaZnhMSEiZ3BiulnBhVgfQTGVyMWEhhZJDwI5QB9CMhZJxEFYq+yVRqWwtBxBWKht8FJ8LCI8PHyU8+5BmmOdZQdi1mKSaHp86n+Ysl68E7g7AARp/YWI/zXxhIg7m6pWZOHCXpgYzGH6S//OlqUowl6/NVQIXH16q4ogS8CKzPM+LujrbIuluSY9EP/XJXZ2dKULPPOYy/gaDmMma0bBY9AAAAABJRU5ErkJggg==]],
@@ -4595,16 +4855,14 @@ local EMBEDDED_ICONS={
 	Chevron=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAABFElEQVR4nO3Yyw3CMBBFUYcF9VAGSAi6oKQs6CG90A1k9dh4RBQgP2yDzT07hMjMPNsI7BwAAAAAAAAA/JFq6QclbZxzJ//yXFXVJUxLGdSXtJF01cNN0j5h/b2vaa4+kGQN1HrWpgjBD9++qF8ved4qYG9r51wTMwT/7MbX+h5/BG4vViHaThhYeTuC6Y6Ab2jb+x7oh3AMWGs3UusQqtbcxqKH8LPDdxqMFsLPD29ihJDN8CZkCNkNb0KEkO3w5pMQsh/eLAmhmOHNnBCKG95MCaHY4Y2Gf8K2I+8l+4cZ1chOKHPl+0Z2Qpkr3zchhHKHNwPHobxt/46er7SSXql1Lb4U/ZS+fKkKAAAAAAAAAH/pDieCbEdaAWghAAAAAElFTkSuQmCC]],
 }
 local BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-local BASE64_MAP = table.create(256)
-for index = 1, #BASE64_ALPHABET do
-	BASE64_MAP[
-		string.byte(
-			BASE64_ALPHABET,
-			index
-		)
-	] = index - 1
-end
+local BASE64_MAP
 local function decodeBase64(data)
+	if not BASE64_MAP then
+		BASE64_MAP = table.create(256)
+		for index = 1, #BASE64_ALPHABET do
+			BASE64_MAP[string.byte(BASE64_ALPHABET, index)] = index - 1
+		end
+	end
 	local output = table.create(
 			math.floor(
 				#data * 0.75
@@ -5228,15 +5486,15 @@ local menuItems = {}
 local TRACKED_TAB_NAME={
 	Home="HOME",
 	Autofarm="AUTOFARM",
-	Games="GAMES",
+	Games="MINIGAMES",
 	Matchmaking="MATCHMAKING",
-	Offers="MINIGAME OFFER",
-	AutoAcceptTrades="TRADE OFFER",
-	Cancel="CANCEL CRITERIA",
-	Fallbacks="FALLBACKS",
-	Messages="MESSAGES",
+	Offers="MINIGAME TRADES",
+	AutoAcceptTrades="REGULAR TRADES",
+	Cancel="TRADE RULES",
+	Fallbacks="TRADE FALLBACKS",
+	Messages="AUTO MESSAGES",
 	Inventory="INVENTORY",
-	Booth="BOOTH",
+	Booth="AUTO BOOTH",
 	System="SYSTEM",
 	Settings="SETTINGS",
 }
@@ -5297,6 +5555,7 @@ selectedTabTitle.Parent = nil
 -- their rows dynamically. Fixed-height secondary labels/buttons wrap first and
 -- only reduce text size as a last resort, so words are never clipped or elided.
 autoServerHopState.RuntimeTextVisibilityBindings = setmetatable({}, {__mode = "k"})
+autoServerHopState.RuntimeTextVisibilityPending = setmetatable({}, {__mode = "k"})
 autoServerHopState.FitVisibleUiText = function(object)
 	if typeof(object) ~= "Instance"
 		or not (object:IsA("TextLabel") or object:IsA("TextButton"))
@@ -5306,6 +5565,7 @@ autoServerHopState.FitVisibleUiText = function(object)
 	if object.Name == "Tuff" or object.Name == "Hub"
 		or object.Name == "CompactT" or object.Name == "CompactH"
 		or object.Name == "PlayerName" or object.Name == "WelcomeLabel"
+		or object.Name == "SimpleAutoFarmModeBanner"
 	then
 		return
 	end
@@ -5326,18 +5586,40 @@ autoServerHopState.FitVisibleUiText = function(object)
 	local availableWidth = math.max(1, width - px(4))
 	local availableHeight = math.max(1, height - px(2))
 	local minimumSize = isPhonePanelLayout() and 7 or 8
-	local chosen = baseSize
-	while chosen > minimumSize do
-		local measured = TextService:GetTextSize(
+	local function fits(size)
+		return TextService:GetTextSize(
 			text,
-			chosen,
+			size,
 			MENU_FONT,
 			V2(availableWidth, 10000)
-		)
-		if measured.Y <= availableHeight then break end
-		chosen -= 1
+		).Y <= availableHeight
+	end
+	local chosen = baseSize
+	if not fits(baseSize) then
+		local low, high = minimumSize, baseSize - 1
+		chosen = minimumSize
+		while low <= high do
+			local middle = math.floor((low + high) * 0.5)
+			if fits(middle) then
+				chosen = middle
+				low = middle + 1
+			else
+				high = middle - 1
+			end
+		end
 	end
 	object.TextSize = math.max(minimumSize, chosen)
+end
+autoServerHopState.ScheduleVisibleUiTextFit = function(object)
+	local pending = autoServerHopState.RuntimeTextVisibilityPending
+	if pending[object] then return end
+	pending[object] = true
+	task.defer(function()
+		pending[object] = nil
+		if object.Parent then
+			autoServerHopState.FitVisibleUiText(object)
+		end
+	end)
 end
 autoServerHopState.BindVisibleUiText = function(object)
 	if typeof(object) ~= "Instance"
@@ -5348,19 +5630,19 @@ autoServerHopState.BindVisibleUiText = function(object)
 	local bindings = autoServerHopState.RuntimeTextVisibilityBindings
 	if bindings[object] then return end
 	bindings[object] = true
-	task.defer(autoServerHopState.FitVisibleUiText, object)
+	autoServerHopState.ScheduleVisibleUiTextFit(object)
 	object:GetPropertyChangedSignal("Text"):Connect(function()
-		task.defer(autoServerHopState.FitVisibleUiText, object)
+		autoServerHopState.ScheduleVisibleUiTextFit(object)
 	end)
 	object:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
-		task.defer(autoServerHopState.FitVisibleUiText, object)
+		autoServerHopState.ScheduleVisibleUiTextFit(object)
 	end)
 end
 autoServerHopState.RefreshVisibleUiText = function()
 	for _, object in ipairs(screenGui:GetDescendants()) do
 		if object:IsA("TextLabel") or object:IsA("TextButton") then
 			autoServerHopState.BindVisibleUiText(object)
-			autoServerHopState.FitVisibleUiText(object)
+			autoServerHopState.ScheduleVisibleUiTextFit(object)
 		end
 	end
 end
@@ -6275,23 +6557,23 @@ tabs.Home.Label.Text = formatPanelTitle("Home", "sidebar")
 tabs.Autofarm = createSidebarItem("Autofarm", 1, "A")
 tabs.Autofarm.Label.Text = formatPanelTitle("Autofarm", "sidebar")
 tabs.Games = createSidebarItem("Games", 2, "G")
-tabs.Games.Label.Text = formatPanelTitle("Games", "sidebar")
+tabs.Games.Label.Text = formatPanelTitle("Minigames", "sidebar")
 tabs.Matchmaking = createSidebarItem("Matchmaking", 3, "M")
 tabs.Matchmaking.Label.Text = formatPanelTitle("Matchmaking", "sidebar")
 tabs.Offers = createSidebarItem("Offers", 4, "O")
-tabs.Offers.Label.Text = formatPanelTitle("Minigame Offer", "sidebar")
+tabs.Offers.Label.Text = formatPanelTitle("Minigame Trades", "sidebar")
 tabs.AutoAcceptTrades = createSidebarItem("AutoAcceptTrades", 5, "✓")
-tabs.AutoAcceptTrades.Label.Text = formatPanelTitle("Trade Offer", "sidebar")
+tabs.AutoAcceptTrades.Label.Text = formatPanelTitle("Regular Trades", "sidebar")
 tabs.Cancel = createSidebarItem("Cancel", 6, "C")
-tabs.Cancel.Label.Text = formatPanelTitle("Cancel Criteria", "sidebar")
+tabs.Cancel.Label.Text = formatPanelTitle("Trade Rules", "sidebar")
 tabs.Fallbacks = createSidebarItem("Fallbacks", 7, "F")
-tabs.Fallbacks.Label.Text = formatPanelTitle("Fallbacks", "sidebar")
+tabs.Fallbacks.Label.Text = formatPanelTitle("Trade Fallbacks", "sidebar")
 tabs.Messages = createSidebarItem("Messages", 8, "M")
-tabs.Messages.Label.Text = formatPanelTitle("Messages", "sidebar")
+tabs.Messages.Label.Text = formatPanelTitle("Auto Messages", "sidebar")
 tabs.Inventory = createSidebarItem("Inventory", 9, "I")
 tabs.Inventory.Label.Text = formatPanelTitle("Inventory", "sidebar")
 tabs.Booth = createSidebarItem("Booth", 10, "B")
-tabs.Booth.Label.Text = formatPanelTitle("Booth", "sidebar")
+tabs.Booth.Label.Text = formatPanelTitle("Auto Booth", "sidebar")
 tabs.System = createSidebarItem("System", 11, "S")
 tabs.System.Label.Text = formatPanelTitle("System", "sidebar")
 tabs.Settings = autoServerHopState.RuntimeSidebarQuickButtons
@@ -6312,7 +6594,7 @@ if type(autoServerHopState.RefreshSidebarMinimumWidth) == "function" then
 end
 syncPixelSnappedGeometry()
 local rightContent = New("ScrollingFrame")
-rightContent.Name = "UnsupportedGameContent"
+rightContent.Name = "MainContent"
 rightContent.BackgroundTransparency = 1
 rightContent.BorderSizePixel = 0
 rightContent.ClipsDescendants = true
@@ -6331,6 +6613,36 @@ rightContent.ElasticBehavior = Enum.ElasticBehavior.WhenScrollable
 rightContent.ZIndex = 45000
 rightContent.Parent = window
 selectedTabTitle.Parent = rightContent
+do
+	local banner = New("TextLabel")
+	banner.Name = "SimpleAutoFarmModeBanner"
+	banner.BackgroundTransparency = 1
+	banner.BorderSizePixel = 0
+	banner.Text = "SIMPLE AUTO FARM MODE"
+	banner.TextColor3 = RGB(255, 74, 74)
+	banner.FontFace = MENU_FONT_BOLD_FACE
+	banner.TextScaled = true
+	banner.TextWrapped = false
+	banner.TextTruncate = Enum.TextTruncate.None
+	banner.TextXAlignment = Enum.TextXAlignment.Center
+	banner.TextYAlignment = Enum.TextYAlignment.Center
+	banner.ZIndex = 54000
+	banner.Visible = autoServerHopState.Utility.SimpleAutofarmEnabled == true
+	banner.Parent = rightContent
+	local textConstraint = New("UITextSizeConstraint")
+	textConstraint.MinTextSize = 12
+	textConstraint.MaxTextSize = isPhonePanelLayout() and 18 or 22
+	textConstraint.Parent = banner
+	autoServerHopState.RuntimeSimpleAutofarmModeBanner = banner
+	autoServerHopState.RuntimeSimpleAutofarmModeBannerTextConstraint = textConstraint
+	rawset(_G, "__TUFFHUB_REFRESH_SIMPLE_AUTOFARM_MODE_BANNER", function()
+		if not banner.Parent then return end
+		banner.Visible = autoServerHopState.Utility.SimpleAutofarmEnabled == true
+		textConstraint.MaxTextSize = isPhonePanelLayout() and 18 or 22
+		local sync = rawget(_G, "__TUFFHUB_SYNC_RIGHT_PANEL_GEOMETRY")
+		if type(sync) == "function" then pcall(sync, true) end
+	end)
+end
 local unsupportedPanelGroups = {
 }
 local allUnsupportedPanels = {
@@ -7249,6 +7561,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		local isUtilityMultiDropdown = definition and definition.UtilityMultiDropdownKey ~= nil
 		local isCustomReplyManager = definition and definition.CustomReplyManager == true
 		local isSimpleAutofarmWarning = definition and definition.SimpleAutofarmWarning == true
+		local isInfoNote = definition and definition.InfoNoteText ~= nil
 		local isActionButton = definition and definition.ActionButton == true
 		local isTradeChatOfferManager = definition and definition.TradeChatOfferManager == true
 		local isSpecificCriteriaManager = definition and definition.SpecificCriteriaManager == true
@@ -7382,12 +7695,16 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		)
 		featureLabel.BackgroundTransparency = 1
 		featureLabel.BorderSizePixel = 0
-		featureLabel.Text = (isDropdownOnly or isAutoCancelFilterOnly or compactUtilityText)
-			and "" or capitalizeUiWords(definition and definition.Label or "Feature")
-		featureLabel.FontFace = childIndentLevel <= 0
-			and MENU_FONT_SEMIBOLD_FACE
-			or (childIndentLevel == 1 and MENU_FONT_FACE or MENU_FONT_REGULAR_FACE)
-		setResponsiveTextSize(featureLabel, (utilityExclusiveGroup or isDependentText) and 13 or 14)
+		featureLabel.Text = isInfoNote
+			and tostring(definition.InfoNoteText or "")
+			or ((isDropdownOnly or isAutoCancelFilterOnly or compactUtilityText)
+				and "" or capitalizeUiWords(definition and definition.Label or "Feature"))
+		featureLabel.FontFace = isInfoNote
+			and MENU_FONT_REGULAR_FACE
+			or (childIndentLevel <= 0
+				and MENU_FONT_SEMIBOLD_FACE
+				or (childIndentLevel == 1 and MENU_FONT_FACE or MENU_FONT_REGULAR_FACE))
+		setResponsiveTextSize(featureLabel, isInfoNote and 12 or ((utilityExclusiveGroup or isDependentText) and 13 or 14))
 		featureLabel.TextXAlignment = Enum.TextXAlignment.Left
 		featureLabel.TextYAlignment = Enum.TextYAlignment.Center
 		featureLabel.TextWrapped = true
@@ -7416,6 +7733,12 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					end
 				end)
 			end)
+		elseif isInfoNote then
+			featureLabel.Size = U2(1, 0, 0, px(16))
+			featureLabel.Text = tostring(definition.InfoNoteText or "")
+			featureLabel.TextColor3 = MUTED_TEXT_COLOR
+			featureLabel.TextXAlignment = Enum.TextXAlignment.Left
+			featureLabel.TextYAlignment = Enum.TextYAlignment.Center
 		elseif isActionButton then
 			featureLabel.Visible = false
 			actionButton = New("TextButton")
@@ -7447,7 +7770,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					local reset = rawget(_G, "__TUFFHUB_RESET_SIMPLE_AUTOFARM")
 					if type(reset) == "function" then pcall(reset) end
 				elseif definition.Action == "UndoAllSettings" then
-					local reset = rawget(_G, "__TUFFHUB_RESET_ALL_SETTINGS_STATE")
+					local reset = rawget(_G, "__TUFFHUB_CLEAR_ALL_SETTINGS_STATE")
 					if type(reset) == "function" then pcall(reset) end
 					local refresh = rawget(_G, "__TUFFHUB_REFRESH_ALL_SETTINGS_UI")
 					if type(refresh) == "function" then pcall(refresh) end
@@ -7544,6 +7867,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		toggleTrack.Parent = featureRow
 		toggleTrack.Visible = not isDropdownOnly
 			and not isSimpleAutofarmWarning
+			and not isInfoNote
 			and not isActionButton
 			and not isAutoCancelFilterOnly
 			and not isServerHopSliderOnly
@@ -7592,7 +7916,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				and minigameAutoplayState[definition.Id] == true
 				or false
 		end
-		if not isSimpleAutofarmWarning and not isActionButton then
+		if not isSimpleAutofarmWarning and not isInfoNote and not isActionButton then
 			setToggleVisual(toggleTrack, toggleKnob, featureLabel, featureEnabled)
 		end
 		local amountContainer
@@ -10159,7 +10483,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			amountControls[#amountControls+1] = {Frame=frame, Option=criterionKey, SetAmount=setAmount, ValueBox=value, Height=controlHeight}
 		end
 		toggleTrack.MouseButton1Click:Connect(function()
-			if isDropdownOnly
+			if isInfoNote
+				or isDropdownOnly
 				or isServerHopSliderOnly
 				or isUtilityText
 				or isUtilitySlider
@@ -10204,6 +10529,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				if stateEntry then
 					if definition.UtilityToggleKey == "PauseScript" and featureEnabled then
 						autoServerHopState.RuntimeServerHopPending = false
+						autoServerHopState.RuntimeServerHopHardFreeze = false
+			autoServerHopState.RuntimeServerHopFreezeCFrame = nil
 						autoServerHopState.RuntimeScriptUserHopRequested = false
 					end
 					if utilityExclusiveGroup then
@@ -10382,6 +10709,12 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			if isSimpleAutofarmWarning then
 				featureRow.Visible = os.clock() < (tonumber(autoServerHopState.RuntimeSimpleAutofarmWarningUntil) or 0)
 				featureLabel.TextColor3 = RGB(255, 74, 74)
+				return
+			elseif isInfoNote then
+				featureRow.Visible = type(visibilityUtilityParents) ~= "table"
+					or utilityParentsEnabled(autoServerHopState.Utility, visibilityUtilityParents)
+				featureLabel.Text = tostring(definition.InfoNoteText or "")
+				featureLabel.TextColor3 = MUTED_TEXT_COLOR
 				return
 			elseif isActionButton then
 				featureRow.Visible = type(visibilityUtilityParents) ~= "table"
@@ -11357,13 +11690,13 @@ end
 	rawset(_G, "__TUFFHUB_APPLY_THEME", applyTheme)
 
 	-- HOME
-	makePanel(tabs.Home, 1, 1, 1, "Tsunami Brainrot", "game version update status tsunami brainrot", function(h)
+	makePanel(tabs.Home, 1, 1, 1, "TuffHub Status", "game version update status tsunami brainrot", function(h)
 		h.info("Version", "v1.0.0")
-		h.info("Last Update", "9/16/26")
+		h.info("Last Update", "9/20/26")
 		h.info("Status", "Fully Functional", GOOD)
 	end)
 	makePanel(tabs.Home, 2, 2, 1, "Latest Updates", "latest updates changelog finished development", function(h)
-		h.note("• 9/16/26: Finished Development.", MENU_TEXT_SELECTED, px(38))
+		h.note("• 9/20/26: Added Hot Potato Minigame Support.\n• 9/16/26: Finished Development.", MENU_TEXT_SELECTED, px(58))
 	end)
 	makePanel(tabs.Home, 3, 1, 2, "Executor", "executor supported volt potassium delta", function(h)
 		local executorName = identifyExecutorName()
@@ -11374,7 +11707,7 @@ end
 		h.info("Name", executorName)
 		h.info("Supported", fullySupported and "Fully Supported" or "Maybe", fullySupported and GOOD or WARNING)
 	end)
-	makePanel(tabs.Home, 4, 2, 2, "Roblox Account", "roblox account name account age age", function(h)
+	makePanel(tabs.Home, 4, 2, 2, "Account", "roblox account name account age age", function(h)
 		h.info("Name", tostring(startupPlayer.Name or "Unknown"))
 		h.info("Account Age", formatAccountAge(startupPlayer.AccountAge))
 		h.info("Age", accountAgeBracket())
@@ -11397,7 +11730,7 @@ end
 		end)
 		liveConnections[#liveConnections + 1] = connection
 		task.spawn(function()
-			local stats = game:GetService("Stats")
+			local stats = autoServerHopState.RuntimeStatsService
 			while pingValue.Parent and screenGui.Parent do
 				local display
 				pcall(function()
@@ -11418,7 +11751,7 @@ end
 		h.button("Website", nil)
 	end)
 	makePanel(tabs.Home, 8, 2, 4, "Subscription", "subscription days remaining lifetime", function(h)
-		h.info("Days Remaining", "Lifetime", GOOD)
+		h.info("Access", "Lifetime", GOOD)
 	end)
 
 	-- SETTINGS
@@ -11675,12 +12008,12 @@ end
 				setConfigStatus("Could not save autoload selection", DANGER)
 			end
 		end)
-		h.button("Reset Autoload", function()
+		h.button("Clear Autoload", function()
 			writeAutoloadConfigName(nil)
 			autoServerHopState.RuntimeAutoloadTargetName = nil
 			if autoloadSelectButton then autoloadSelectButton.Text = "None" end
 			if autoServerHopState.RuntimeAutoloadCurrentLabel then autoServerHopState.RuntimeAutoloadCurrentLabel.Text = "Current autoload config: none" end
-			setConfigStatus("Autoload reset", MUTED_TEXT_COLOR)
+			setConfigStatus("Autoload cleared", MUTED_TEXT_COLOR)
 		end)
 		autoServerHopState.RuntimeAutoloadCurrentLabel = h.note("Current autoload config: none", MUTED_TEXT_COLOR, px(28))
 		configStatus = h.note("Current config: none", MUTED_TEXT_COLOR, px(28))
@@ -11712,6 +12045,7 @@ end
 	end)
 end)()
 
+-- [04] Tabs, Panels & Feature Definitions -----------------------------------
 -- Build all tab panels in an isolated function scope. The main UI chunk already
 -- carries many long-lived locals; Luau caps each function/chunk at 200 local
 -- registers. Keeping panel-definition temporaries here prevents register
@@ -11723,11 +12057,12 @@ end)()
 		23,
 		1,
 		1,
-		"Simple Autofarm",
+		"Simple Auto Farm",
 		{
-			{Label = "Autofarm Tokens And Brainrots", UtilityToggleKey = "SimpleAutofarmEnabled"},
+			{Label = "Enable Simple Auto Farm", UtilityToggleKey = "SimpleAutofarmEnabled"},
+			{InfoNoteText = "Simple Auto Farm has its own settings profile. While this mode is enabled, changes anywhere in TuffHub apply only to Simple Auto Farm. Disable it to return to your Regular Mode settings. Both profiles are saved together in the same config."},
 			{SimpleAutofarmWarning = true},
-			{Label = "Reset Autofarm Settings To Default", ActionButton = true, Action = "ResetSimpleAutofarm", VisibilityUtilityParentKey = "SimpleAutofarmEnabled"},
+			{Label = "Reset Simple Auto Farm Settings", ActionButton = true, Action = "ResetSimpleAutofarm", VisibilityUtilityParentKey = "SimpleAutofarmEnabled"},
 		}
 	)
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
@@ -11735,27 +12070,42 @@ end)()
 		1,
 		1,
 		1,
-		"Auto Play",
+		"Minigame Autoplay",
 		{
-			{Label = "Auto Play", UtilityToggleKey = "AutoPlayMaster"},
+			{Label = "Enable", UtilityToggleKey = "AutoPlayMaster"},
 			{Label = "Connect 4", Id = "ConnectFour", VisibilityUtilityParentKey = "AutoPlayMaster"},
 			{Label = "Move Delay", UtilitySliderKey = "MoveDelayConnectFour", MinigameParentId = "ConnectFour", VisibilityUtilityParentKey = "AutoPlayMaster", MinValue = 0, MaxValue = 5, Step = 0.05, Decimals = 2, UnitLabel = "Seconds"},
 			{Label = "Football Draft", Id = "FootballDraft", VisibilityUtilityParentKey = "AutoPlayMaster"},
 			{Label = "Move Delay", UtilitySliderKey = "MoveDelayFootballDraft", MinigameParentId = "FootballDraft", VisibilityUtilityParentKey = "AutoPlayMaster", MinValue = 0, MaxValue = 5, Step = 0.05, Decimals = 2, UnitLabel = "Seconds"},
 			{Label = "Candy Bomb", Id = "CandyBomb", VisibilityUtilityParentKey = "AutoPlayMaster"},
 			{Label = "Move Delay", UtilitySliderKey = "MoveDelayCandyBomb", MinigameParentId = "CandyBomb", VisibilityUtilityParentKey = "AutoPlayMaster", MinValue = 0, MaxValue = 5, Step = 0.05, Decimals = 2, UnitLabel = "Seconds"},
-			{Label = "Battle Ship", Id = "Battleship", VisibilityUtilityParentKey = "AutoPlayMaster"},
+			{Label = "Battleship", Id = "Battleship", VisibilityUtilityParentKey = "AutoPlayMaster"},
 			{Label = "Move Delay", UtilitySliderKey = "MoveDelayBattleship", MinigameParentId = "Battleship", VisibilityUtilityParentKey = "AutoPlayMaster", MinValue = 0, MaxValue = 5, Step = 0.05, Decimals = 2, UnitLabel = "Seconds"},
 			{Label = "Higher Or Lower", Id = "NumberGuess", VisibilityUtilityParentKey = "AutoPlayMaster"},
 			{Label = "Move Delay", UtilitySliderKey = "MoveDelayNumberGuess", MinigameParentId = "NumberGuess", VisibilityUtilityParentKey = "AutoPlayMaster", MinValue = 0, MaxValue = 5, Step = 0.05, Decimals = 2, UnitLabel = "Seconds"},
 			{Label = "Knockout", Id = "Knockout", VisibilityUtilityParentKey = "AutoPlayMaster"},
 			{Label = "Move Delay", UtilitySliderKey = "MoveDelayKnockout", MinigameParentId = "Knockout", VisibilityUtilityParentKey = "AutoPlayMaster", MinValue = 0, MaxValue = 5, Step = 0.05, Decimals = 2, UnitLabel = "Seconds"},
-			{Label = "Popcorn", Id = "PopcornBurst", VisibilityUtilityParentKey = "AutoPlayMaster"},
+			{Label = "Popcorn Burst", Id = "PopcornBurst", VisibilityUtilityParentKey = "AutoPlayMaster"},
+			{Label = "Hot Potato", Id = "HotPotato", VisibilityUtilityParentKey = "AutoPlayMaster"},
+			{Label = "Auto Give Back", UtilityToggleKey = "HotPotatoAutoGiveBack", MinigameParentId = "HotPotato", VisibilityUtilityParentKey = "AutoPlayMaster"},
+			{Label = "Keybind Give Back", UtilityToggleKey = "HotPotatoPressButtonToGiveBack", MinigameParentId = "HotPotato", VisibilityUtilityParentKey = "AutoPlayMaster"},
+			(not UserInputService.TouchEnabled) and {Label = "Give Back Keybind", UtilityDropdownKey = "HotPotatoGiveBackKey", UtilityParentKey = "HotPotatoPressButtonToGiveBack", MinigameParentId = "HotPotato", VisibilityUtilityParentKey = "AutoPlayMaster", Placeholder = "Select", Options = {"Q", "E", "R", "F", "G", "T", "Y", "U", "I", "O", "P", "A", "S", "D", "H", "J", "K", "L", "Z", "X", "C", "V", "B", "N", "M", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Zero", "Space", "LeftShift", "RightShift", "LeftControl", "RightControl", "LeftAlt", "RightAlt", "CapsLock", "Tab", "BackSlash", "Semicolon", "Quote", "Comma", "Period", "Slash", "Up", "Down", "Left", "Right"}} or nil,
+		}
+	)
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
+		tabs.Games,
+		1,
+		2,
+		1,
+		"Auto Leave",
+		{
+			{Label = "Enable Auto Leave", UtilityToggleKey = "LeaveWhenAboutToLose"},
+			{InfoNoteText = "Leaves before a clinching minigame loss or after a confirmed disconnect. Minigame Autoplay does not need to be enabled."},
 		}
 	)
 	do
 		local rarityOfferFeatures = {
-			{Label = "Auto Offer", UtilityToggleKey = "AutoOfferMaster"},
+			{Label = "Enable Auto Offer", UtilityToggleKey = "AutoOfferMaster"},
 		}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 			rarityOfferFeatures[#rarityOfferFeatures + 1] = {
@@ -11763,36 +12113,36 @@ end)()
 				VisibilityUtilityParentKey = "AutoOfferMaster",
 			}
 		end
-		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Offers, 2, 1, 1, "BRAINROT/ITEM OFFERS", rarityOfferFeatures)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Offers, 2, 1, 1, "Brainrot & Item Offers", rarityOfferFeatures)
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Offers, 24, 2, 1, "Token Matching", {
-			{Label = "Token Matching", UtilityToggleKey = "AutoOfferTokensEnabled"},
-			{Label = "Match Tokens With Tokens", UtilityToggleKey = "AutoOfferMatchTokensWithTokens", UtilityParentKey = "AutoOfferTokensEnabled", SeparatorGroup = "AutoOfferMatchTokensWithTokensGroup"},
-			{Label = "Token Add Ratio", UtilitySliderKey = "AutoOfferTokenAddRatio", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithTokens"}, SeparatorGroup = "AutoOfferMatchTokensWithTokensGroup", MinValue = 1, MaxValue = 10, UnitLabel = "Multiplier"},
-			{Label = "Lowest Tokens To Match", UtilitySliderKey = "AutoOfferLowestTokensToMatch", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithTokens"}, SeparatorGroup = "AutoOfferMatchTokensWithTokensGroup", MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"},
-			{Label = "Match Tokens With Brainrots", UtilityToggleKey = "AutoOfferMatchTokensWithBrainrots", UtilityParentKey = "AutoOfferTokensEnabled", SeparatorGroup = "AutoOfferMatchTokensWithBrainrotsGroup"},
-			{Label = "Token Amount", UtilitySliderKey = "AutoOfferTokenAmount", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithBrainrots"}, SeparatorGroup = "AutoOfferMatchTokensWithBrainrotsGroup", MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"},
-			{Label = "Offer", UtilityDropdownKey = "AutoOfferTokenRarity", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithBrainrots"}, SeparatorGroup = "AutoOfferMatchTokensWithBrainrotsGroup", Placeholder = "Select", Options = OUTGOING_BRAINROT_RARITY_OPTIONS},
+			{Label = "Enable", UtilityToggleKey = "AutoOfferTokensEnabled"},
+			{Label = "Match Token Offers", UtilityToggleKey = "AutoOfferMatchTokensWithTokens", UtilityParentKey = "AutoOfferTokensEnabled", SeparatorGroup = "AutoOfferMatchTokensWithTokensGroup"},
+			{Label = "Token Match Multiplier", UtilitySliderKey = "AutoOfferTokenAddRatio", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithTokens"}, SeparatorGroup = "AutoOfferMatchTokensWithTokensGroup", MinValue = 1, MaxValue = 10, UnitLabel = "Multiplier"},
+			{Label = "Minimum Tokens to Match", UtilitySliderKey = "AutoOfferLowestTokensToMatch", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithTokens"}, SeparatorGroup = "AutoOfferMatchTokensWithTokensGroup", MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Match Tokens with Brainrots", UtilityToggleKey = "AutoOfferMatchTokensWithBrainrots", UtilityParentKey = "AutoOfferTokensEnabled", SeparatorGroup = "AutoOfferMatchTokensWithBrainrotsGroup"},
+			{Label = "Tokens to Offer", UtilitySliderKey = "AutoOfferTokenAmount", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithBrainrots"}, SeparatorGroup = "AutoOfferMatchTokensWithBrainrotsGroup", MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Brainrot Rarity to Offer", UtilityDropdownKey = "AutoOfferTokenRarity", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithBrainrots"}, SeparatorGroup = "AutoOfferMatchTokensWithBrainrotsGroup", Placeholder = "Select", Options = OUTGOING_BRAINROT_RARITY_OPTIONS},
 		})
-		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Offers, 25, 1, 2, "Trade Chat Offers", {
-			{Label = "Trade Chat Offers", UtilityToggleKey = "AutoOfferBasedOnTradeChat", TradeChatOfferManager = true},
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Offers, 25, 1, 2, "Chat-Based Offers", {
+			{Label = "Enable", UtilityToggleKey = "AutoOfferBasedOnTradeChat", TradeChatOfferManager = true},
 		})
 	end
 	do
 		local autoSitFeatures = {
-			{Label = "Auto Sit At Empty Tables", SitKey = "EmptyTables"},
+			{Label = "Empty Tables", SitKey = "EmptyTables"},
 			{
-				Label = "Auto Sit At 1/2 Tables",
+				Label = "Tables With 1 Player",
 				SitKey = "OneOfTwo",
 				Source = "OneOfTwo",
 				Options = RARITY_OPTIONS,
 				Placeholder = "Any",
-				DropdownLabel = "Brainrots To Check For",
+				DropdownLabel = "Opponent Criteria",
 				SeparatorGroup = "AutoSitOneOfTwoGroup",
 			},
 		}
-		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "AutoSitSpecificItems", VisibilitySitKey = "OneOfTwo", SeparatorGroup = "AutoSitOneOfTwoGroup"}
-		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Opponent Must Own All Selected Brainrots", UtilityToggleKey = "AutoSitMustOwnAllSelected", VisibilitySitKey = "OneOfTwo", SeparatorGroup = "AutoSitOneOfTwoGroup"}
-		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Opponent Must Own One Of Selected Brainrots", UtilityToggleKey = "AutoSitMustOwnOneSelected", VisibilitySitKey = "OneOfTwo", SeparatorGroup = "AutoSitOneOfTwoGroup"}
+		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Specific Brainrots & Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "AutoSitSpecificItems", VisibilitySitKey = "OneOfTwo", SeparatorGroup = "AutoSitOneOfTwoGroup"}
+		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Require All Criteria", UtilityToggleKey = "AutoSitMustOwnAllSelected", VisibilitySitKey = "OneOfTwo", SeparatorGroup = "AutoSitOneOfTwoGroup"}
+		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Require Any Criterion", UtilityToggleKey = "AutoSitMustOwnOneSelected", VisibilitySitKey = "OneOfTwo", SeparatorGroup = "AutoSitOneOfTwoGroup"}
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Matchmaking, 3, 1, 1, "Auto Sit", autoSitFeatures)
 	end
 	local function appendAcceptCriteria(features, parentKey, acceptStateProvider, mutationPrefix, specificStateKey, allKey, oneKey)
@@ -11808,31 +12158,31 @@ end)()
 			features[#features + 1] = {Label = "Level", UtilityMultiDropdownKey = mutationPrefix .. rarity .. "Levels", UtilityParentKey = parentKey, VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end}
 		end
 		features[#features + 1] = {Label = "Tokens", AcceptKey = "Tokens", VisibilityUtilityParentKey = parentKey, AcceptStateProvider = acceptStateProvider}
-		features[#features + 1] = {Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = specificStateKey, UtilityParentKey = parentKey}
-		features[#features + 1] = {Label = "Require All Selected Criteria", UtilityToggleKey = allKey, UtilityParentKey = parentKey, UtilityExclusiveGroup = parentKey .. "CriteriaMode", UtilityExclusiveRequired = true}
-		features[#features + 1] = {Label = "Require At Least One Selected Criterion", UtilityToggleKey = oneKey, UtilityParentKey = parentKey, UtilityExclusiveGroup = parentKey .. "CriteriaMode", UtilityExclusiveRequired = true}
+		features[#features + 1] = {Label = "Specific Brainrots & Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = specificStateKey, UtilityParentKey = parentKey}
+		features[#features + 1] = {Label = "Require All Criteria", UtilityToggleKey = allKey, UtilityParentKey = parentKey, UtilityExclusiveGroup = parentKey .. "CriteriaMode", UtilityExclusiveRequired = true}
+		features[#features + 1] = {Label = "Require Any Criterion", UtilityToggleKey = oneKey, UtilityParentKey = parentKey, UtilityExclusiveGroup = parentKey .. "CriteriaMode", UtilityExclusiveRequired = true}
 		return features
 	end
 	local function sharedAcceptStateProvider() return autoAcceptState end
 	local function tradeRequestStateProvider() return tradeRequestCriteriaState end
 	do
-		local features = {{Label = "Accept Offers", UtilityToggleKey = "AutoAcceptMaster"}}
+		local features = {{Label = "Auto Accept Offers", UtilityToggleKey = "AutoAcceptMaster"}}
 		appendAcceptCriteria(features, "AutoAcceptMaster", sharedAcceptStateProvider, "AutoAccept", "AutoAcceptSpecificItems", "AutoAcceptMustHaveAll", "AutoAcceptMustHaveOne")
-		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Offers, 4, 2, 2, "Accept Criteria", features)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Offers, 4, 2, 2, "Auto Accept", features)
 	end
 	do
-		local acceptOfferFeatures = {{Label = "Accept Offers", UtilityToggleKey = "AutoAcceptTradesAcceptOffers"}}
+		local acceptOfferFeatures = {{Label = "Auto Accept Offers", UtilityToggleKey = "AutoAcceptTradesAcceptOffers"}}
 		appendAcceptCriteria(acceptOfferFeatures, "AutoAcceptTradesAcceptOffers", sharedAcceptStateProvider, "AutoAccept", "AutoAcceptSpecificItems", "AutoAcceptMustHaveAll", "AutoAcceptMustHaveOne")
-		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 32, 1, 1, "Accept Criteria", acceptOfferFeatures)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 32, 1, 1, "Auto Accept", acceptOfferFeatures)
 
-		local requestFeatures = {{Label = "Accept Trade Request", UtilityToggleKey = "AutoAcceptTradesAcceptRequests"}}
+		local requestFeatures = {{Label = "Auto Accept Trade Requests", UtilityToggleKey = "AutoAcceptTradesAcceptRequests"}}
 		appendAcceptCriteria(requestFeatures, "AutoAcceptTradesAcceptRequests", tradeRequestStateProvider, "AutoAcceptTradesRequest", "AutoAcceptTradesRequestSpecificItems", "AutoAcceptTradesRequestMustHaveAll", "AutoAcceptTradesRequestMustHaveOne")
-		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 33, 2, 1, "Trade Request Criteria", requestFeatures)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 33, 2, 1, "Trade Requests", requestFeatures)
 
 		-- Regular Trade Offer mirrors the reactive Minigame Offers tools, but uses
 		-- an independent offer namespace so configuring one trade type never changes the other.
 		local regularRarityOfferFeatures = {
-			{Label = "Auto Offer", UtilityToggleKey = "RegularAutoOfferMaster"},
+			{Label = "Enable Auto Offer", UtilityToggleKey = "RegularAutoOfferMaster"},
 		}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 			regularRarityOfferFeatures[#regularRarityOfferFeatures + 1] = {
@@ -11843,23 +12193,23 @@ end)()
 				VisibilityUtilityParentKey = "RegularAutoOfferMaster",
 			}
 		end
-		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 37, 1, 2, "BRAINROT/ITEM OFFERS", regularRarityOfferFeatures)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 37, 1, 2, "Brainrot & Item Offers", regularRarityOfferFeatures)
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 38, 2, 2, "Token Matching", {
-			{Label = "Token Matching", UtilityToggleKey = "RegularAutoOfferTokensEnabled"},
-			{Label = "Match Tokens With Tokens", UtilityToggleKey = "RegularAutoOfferMatchTokensWithTokens", UtilityParentKey = "RegularAutoOfferTokensEnabled", SeparatorGroup = "RegularAutoOfferMatchTokensWithTokensGroup"},
-			{Label = "Token Add Ratio", UtilitySliderKey = "RegularAutoOfferTokenAddRatio", UtilityParentKeys = {"RegularAutoOfferTokensEnabled", "RegularAutoOfferMatchTokensWithTokens"}, SeparatorGroup = "RegularAutoOfferMatchTokensWithTokensGroup", MinValue = 1, MaxValue = 10, UnitLabel = "Multiplier"},
-			{Label = "Lowest Tokens To Match", UtilitySliderKey = "RegularAutoOfferLowestTokensToMatch", UtilityParentKeys = {"RegularAutoOfferTokensEnabled", "RegularAutoOfferMatchTokensWithTokens"}, SeparatorGroup = "RegularAutoOfferMatchTokensWithTokensGroup", MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"},
-			{Label = "Match Tokens With Brainrots", UtilityToggleKey = "RegularAutoOfferMatchTokensWithBrainrots", UtilityParentKey = "RegularAutoOfferTokensEnabled", SeparatorGroup = "RegularAutoOfferMatchTokensWithBrainrotsGroup"},
-			{Label = "Token Amount", UtilitySliderKey = "RegularAutoOfferTokenAmount", UtilityParentKeys = {"RegularAutoOfferTokensEnabled", "RegularAutoOfferMatchTokensWithBrainrots"}, SeparatorGroup = "RegularAutoOfferMatchTokensWithBrainrotsGroup", MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"},
-			{Label = "Offer", UtilityDropdownKey = "RegularAutoOfferTokenRarity", UtilityParentKeys = {"RegularAutoOfferTokensEnabled", "RegularAutoOfferMatchTokensWithBrainrots"}, SeparatorGroup = "RegularAutoOfferMatchTokensWithBrainrotsGroup", Placeholder = "Select", Options = OUTGOING_BRAINROT_RARITY_OPTIONS},
+			{Label = "Enable Token Matching", UtilityToggleKey = "RegularAutoOfferTokensEnabled"},
+			{Label = "Match Token Offers", UtilityToggleKey = "RegularAutoOfferMatchTokensWithTokens", UtilityParentKey = "RegularAutoOfferTokensEnabled", SeparatorGroup = "RegularAutoOfferMatchTokensWithTokensGroup"},
+			{Label = "Token Match Multiplier", UtilitySliderKey = "RegularAutoOfferTokenAddRatio", UtilityParentKeys = {"RegularAutoOfferTokensEnabled", "RegularAutoOfferMatchTokensWithTokens"}, SeparatorGroup = "RegularAutoOfferMatchTokensWithTokensGroup", MinValue = 1, MaxValue = 10, UnitLabel = "Multiplier"},
+			{Label = "Minimum Tokens to Match", UtilitySliderKey = "RegularAutoOfferLowestTokensToMatch", UtilityParentKeys = {"RegularAutoOfferTokensEnabled", "RegularAutoOfferMatchTokensWithTokens"}, SeparatorGroup = "RegularAutoOfferMatchTokensWithTokensGroup", MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Match Tokens with Brainrots", UtilityToggleKey = "RegularAutoOfferMatchTokensWithBrainrots", UtilityParentKey = "RegularAutoOfferTokensEnabled", SeparatorGroup = "RegularAutoOfferMatchTokensWithBrainrotsGroup"},
+			{Label = "Tokens to Offer", UtilitySliderKey = "RegularAutoOfferTokenAmount", UtilityParentKeys = {"RegularAutoOfferTokensEnabled", "RegularAutoOfferMatchTokensWithBrainrots"}, SeparatorGroup = "RegularAutoOfferMatchTokensWithBrainrotsGroup", MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"},
+			{Label = "Brainrot Rarity to Offer", UtilityDropdownKey = "RegularAutoOfferTokenRarity", UtilityParentKeys = {"RegularAutoOfferTokensEnabled", "RegularAutoOfferMatchTokensWithBrainrots"}, SeparatorGroup = "RegularAutoOfferMatchTokensWithBrainrotsGroup", Placeholder = "Select", Options = OUTGOING_BRAINROT_RARITY_OPTIONS},
 		})
-		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 39, 1, 3, "Trade Chat Offers", {
-			{Label = "Trade Chat Offers", UtilityToggleKey = "RegularAutoOfferBasedOnTradeChat", TradeChatOfferManager = true, TradeChatOffersKey = "RegularAutoOfferTradeChatOffers"},
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 39, 1, 3, "Chat-Based Offers", {
+			{Label = "Enable Chat-Based Offers", UtilityToggleKey = "RegularAutoOfferBasedOnTradeChat", TradeChatOfferManager = true, TradeChatOffersKey = "RegularAutoOfferTradeChatOffers"},
 		})
 
 		local regularOpeningFeatures = {
-			{Label = "Autoshow Best Brainrots", UtilityToggleKey = "RegularOpeningAutoshowBestBrainrots", UtilityExclusiveGroup = "RegularOpeningBrainrotMode"},
-			{Label = "Custom Opening Brainrots", UtilityToggleKey = "RegularOpeningCustomBrainrots", UtilityExclusiveGroup = "RegularOpeningBrainrotMode", SeparatorGroup = "RegularOpeningBrainrotsGroup"},
+			{Label = "Show Best Brainrots", UtilityToggleKey = "RegularOpeningAutoshowBestBrainrots", UtilityExclusiveGroup = "RegularOpeningBrainrotMode"},
+			{Label = "Use Custom Brainrots", UtilityToggleKey = "RegularOpeningCustomBrainrots", UtilityExclusiveGroup = "RegularOpeningBrainrotMode", SeparatorGroup = "RegularOpeningBrainrotsGroup"},
 		}
 		for slotIndex = 1, 6 do
 			regularOpeningFeatures[#regularOpeningFeatures + 1] = {
@@ -11873,42 +12223,42 @@ end)()
 				ClearIfMissing = true,
 			}
 		end
-		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Autoshow All Tokens", UtilityToggleKey = "RegularOpeningAutoshowAllTokens", UtilityExclusiveGroup = "RegularOpeningTokenMode"}
-		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Custom Opening Tokens", UtilityToggleKey = "RegularOpeningCustomTokens", UtilityExclusiveGroup = "RegularOpeningTokenMode", SeparatorGroup = "RegularOpeningTokensGroup"}
-		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Custom Token Amount", UtilitySliderKey = "RegularOpeningTokenAmount", UtilityParentKey = "RegularOpeningCustomTokens", SeparatorGroup = "RegularOpeningTokensGroup", MinValue = 0, MaxValue = 1000000, MaxValueProvider = function() return autoServerHopState.CurrentTradeTokenBalance() end, UnitLabel = "Tokens"}
+		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Show All Tokens", UtilityToggleKey = "RegularOpeningAutoshowAllTokens", UtilityExclusiveGroup = "RegularOpeningTokenMode"}
+		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Use Custom Token Amount", UtilityToggleKey = "RegularOpeningCustomTokens", UtilityExclusiveGroup = "RegularOpeningTokenMode", SeparatorGroup = "RegularOpeningTokensGroup"}
+		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Token Amount", UtilitySliderKey = "RegularOpeningTokenAmount", UtilityParentKey = "RegularOpeningCustomTokens", SeparatorGroup = "RegularOpeningTokensGroup", MinValue = 0, MaxValue = 1000000, MaxValueProvider = function() return autoServerHopState.CurrentTradeTokenBalance() end, UnitLabel = "Tokens"}
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 34, 2, 3, "Opening Offer", regularOpeningFeatures)
-		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 35, 1, 4, "Trade Delays", {
-			{Label="Custom Delays", UtilityToggleKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup"},
-			{Label="Accept Trade Request Delay", UtilitySliderKey="AutoAcceptTradesInitialDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
-			{Label="Delay After Trade Message", UtilitySliderKey="AutoAcceptTradesDelayAfterTradeMessage", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 35, 1, 4, "Trade Timing", {
+			{Label="Use Custom Timing", UtilityToggleKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup"},
+			{Label="Trade Request Delay", UtilitySliderKey="AutoAcceptTradesInitialDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Post-Message Delay", UtilitySliderKey="AutoAcceptTradesDelayAfterTradeMessage", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
 			{Label="Reaction Delay", UtilitySliderKey="AutoAcceptTradesReactionDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
 			{Label="Add Brainrot Delay", UtilitySliderKey="AutoAcceptTradesAddBrainrotDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
 			{Label="Remove Brainrot Delay", UtilitySliderKey="AutoAcceptTradesRemoveBrainrotDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
 			{Label="Add Token Delay", UtilitySliderKey="AutoAcceptTradesAddTokenDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
 			{Label="Remove Token Delay", UtilitySliderKey="AutoAcceptTradesRemoveTokenDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
-			{Label="Accept Offer Delay", UtilitySliderKey="AutoAcceptTradesAcceptDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Accept Delay", UtilitySliderKey="AutoAcceptTradesAcceptDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
 		})
 	end
 	do
-		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Cancel, 5, 1, 1, "Cancel After Time", {
-			{Label = "Cancel Trade After", UtilityToggleKey = "AutoCancelTradeTimeoutEnabled", SeparatorGroup = "AutoCancelTradeTimeoutGroup"},
-			{Label = "Trade Time Limit", UtilitySliderKey = "AutoCancelTradeTimeout", UtilityParentKey = "AutoCancelTradeTimeoutEnabled", SeparatorGroup = "AutoCancelTradeTimeoutGroup", MinValue = 1, MaxValue = 60, UnitLabel = "Seconds"},
-			{Label = "Cancel If No Value Is Offered After", UtilityToggleKey = "AutoCancelNoValueTimeoutEnabled", SeparatorGroup = "AutoCancelNoValueTimeoutGroup"},
-			{Label = "No Value Time Limit", UtilitySliderKey = "AutoCancelNoValueTimeout", UtilityParentKey = "AutoCancelNoValueTimeoutEnabled", SeparatorGroup = "AutoCancelNoValueTimeoutGroup", MinValue = 1, MaxValue = 30, UnitLabel = "Seconds"},
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Cancel, 5, 1, 1, "Trade Timeouts", {
+			{Label = "Enable Trade Timeout", UtilityToggleKey = "AutoCancelTradeTimeoutEnabled", SeparatorGroup = "AutoCancelTradeTimeoutGroup"},
+			{Label = "Trade Timeout", UtilitySliderKey = "AutoCancelTradeTimeout", UtilityParentKey = "AutoCancelTradeTimeoutEnabled", SeparatorGroup = "AutoCancelTradeTimeoutGroup", MinValue = 1, MaxValue = 60, UnitLabel = "Seconds"},
+			{Label = "Enable No-Value Timeout", UtilityToggleKey = "AutoCancelNoValueTimeoutEnabled", SeparatorGroup = "AutoCancelNoValueTimeoutGroup"},
+			{Label = "No-Value Timeout", UtilitySliderKey = "AutoCancelNoValueTimeout", UtilityParentKey = "AutoCancelNoValueTimeoutEnabled", SeparatorGroup = "AutoCancelNoValueTimeoutGroup", MinValue = 1, MaxValue = 30, UnitLabel = "Seconds"},
 		})
 		local inventory = {
-			{Label = "Cancel Based On Rarities Owned", UtilityToggleKey = "AutoCancelCheckOpponentsBrainrots"},
+			{Label = "Require Selected Rarities", UtilityToggleKey = "AutoCancelCheckOpponentsBrainrots"},
 		}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 			inventory[#inventory + 1] = {Label = rarity, AutoCancelRarityKey = rarity, VisibilityUtilityParentKey = "AutoCancelCheckOpponentsBrainrots"}
 		end
-		inventory[#inventory + 1] = {Label = "Cancel Based On Specific Brainrots / Items", UtilityToggleKey = "AutoCancelBasedOnSpecificItems", SeparatorGroup = "AutoCancelSpecificItemsGroup"}
-		inventory[#inventory + 1] = {Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "AutoCancelSpecificItems", UtilityParentKey = "AutoCancelBasedOnSpecificItems", SeparatorGroup = "AutoCancelSpecificItemsGroup"}
-		inventory[#inventory + 1] = {Label = "Cancel If Player Does Not Own All Selected", UtilityToggleKey = "AutoCancelPlayerMustOwnAllSelected", VisibilityAutoCancelInventoryCriteria = true, UtilityExclusiveGroup = "AutoCancelOwnershipMode", UtilityExclusiveRequired = true}
-		inventory[#inventory + 1] = {Label = "Cancel If Player Does Not Own At Least One Selected", UtilityToggleKey = "AutoCancelPlayerMustOwnAtLeastOneSelected", VisibilityAutoCancelInventoryCriteria = true, UtilityExclusiveGroup = "AutoCancelOwnershipMode", UtilityExclusiveRequired = true}
-		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Cancel, 28, 2, 1, "Cancel Based On Inventory", inventory)
-		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Cancel, 29, 1, 2, "Cancel Based On Tokens", {
-			{Label = "Player Must Own This Many Tokens", AutoCancelRarityKey = "Tokens"},
+		inventory[#inventory + 1] = {Label = "Require Specific Brainrots & Items", UtilityToggleKey = "AutoCancelBasedOnSpecificItems", SeparatorGroup = "AutoCancelSpecificItemsGroup"}
+		inventory[#inventory + 1] = {Label = "Specific Brainrots & Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "AutoCancelSpecificItems", UtilityParentKey = "AutoCancelBasedOnSpecificItems", SeparatorGroup = "AutoCancelSpecificItemsGroup"}
+		inventory[#inventory + 1] = {Label = "Require All Selected", UtilityToggleKey = "AutoCancelPlayerMustOwnAllSelected", VisibilityAutoCancelInventoryCriteria = true, UtilityExclusiveGroup = "AutoCancelOwnershipMode", UtilityExclusiveRequired = true}
+		inventory[#inventory + 1] = {Label = "Require Any Selected", UtilityToggleKey = "AutoCancelPlayerMustOwnAtLeastOneSelected", VisibilityAutoCancelInventoryCriteria = true, UtilityExclusiveGroup = "AutoCancelOwnershipMode", UtilityExclusiveRequired = true}
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Cancel, 28, 2, 1, "Inventory Requirements", inventory)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Cancel, 29, 1, 2, "Token Requirement", {
+			{Label = "Minimum Tokens Required", AutoCancelRarityKey = "Tokens"},
 		})
 	end
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
@@ -11916,35 +12266,26 @@ end)()
 		6,
 		2,
 		1,
-		"Auto Server Hop",
+		"Server Hopping",
 		{
-			{Label = "Auto Server Hop", ServerHopKey = "Enabled"},
+			{Label = "Enable", ServerHopKey = "Enabled"},
 			{
-				Label = "Time In Server Until Hop",
+				Label = "Server Time Limit",
 				ServerHopKey = "ServerTimeEnabled",
 				SliderKey = "ServerTime",
 				MinValue = 1,
 				MaxValue = 60,
 			},
 			{
-				Label = "Time Without Game Until Hop",
+				Label = "No-Game Timeout",
 				ServerHopKey = "TimeSinceLastGameEnabled",
 				SliderKey = "TimeSinceLastGame",
 				MinValue = 1,
 				MaxValue = 60,
 			},
-			{Label = "Time Added After Winning Wager", ServerHopSliderKey = "WinWagerTimeAdded", MinValue = 0, MaxValue = 60, UnitLabel = "Minutes"},
-			{Label = "Time Added After Booth Purchase", ServerHopSliderKey = "BoothPurchaseTimeAdded", MinValue = 1, MaxValue = 60, UnitLabel = "Minutes"},
-		}
-	)
-	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
-		tabs.Matchmaking,
-		22,
-		2,
-		2,
-		"Blacklist Servers",
-		{
-			{Label = "How Long To Blacklist Joined Servers", ServerHopSliderKey = "ServerBlacklistMinutes", ServerHopSliderAlwaysVisible = true, MinValue = 1, MaxValue = 60, UnitLabel = "Minutes"},
+			{Label = "Extra Time After Win", ServerHopSliderKey = "WinWagerTimeAdded", MinValue = 0, MaxValue = 60, UnitLabel = "Minutes"},
+			{Label = "Extra Time After Booth Purchase", ServerHopSliderKey = "BoothPurchaseTimeAdded", MinValue = 1, MaxValue = 60, UnitLabel = "Minutes"},
+			{Label = "Server Blacklist Duration", ServerHopSliderKey = "ServerBlacklistMinutes", ServerHopSliderAlwaysVisible = true, MinValue = 1, MaxValue = 60, UnitLabel = "Minutes"},
 		}
 	)
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
@@ -11952,21 +12293,21 @@ end)()
 		20,
 		1,
 		2,
-		"Check Server",
+		"Server Eligibility",
 		{
-			{Label = "Server Hop If No Player In Server Meets Criteria", UtilityToggleKey = "CheckServerHopNobodyServer"},
-			{Label = "Server Hop After Playing Every Player In Server With Criteria", UtilityToggleKey = "CheckServerHopPlayedEveryoneServer"},
-			{Label = "Server Hop If No Player With Criteria Is In Minigame Area", UtilityToggleKey = "CheckServerHopNobodyMinigamesArea"},
-			{Label = "Server Hop After Playing Every Player With Criteria In Minigame Area", UtilityToggleKey = "CheckServerHopPlayedEveryoneMinigamesArea"},
-			{Label = "Rarities To Check For", UtilityMultiDropdownKey = "CheckServerBrainrotRarities", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "None", Options = BRAINROT_RARITY_OPTIONS},
-			{Label = "Required Mutations", UtilityMultiDropdownKey = "CheckServerMutations", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Required Traits", UtilityMultiDropdownKey = "CheckServerTraits", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Required Signature", UtilityMultiDropdownKey = "CheckServerSignatures", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "Any", Options = {"Signed", "Unsigned"}},
-			{Label = "Required Size", UtilityMultiDropdownKey = "CheckServerSizes", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
-			{Label = "Required Level", UtilityMultiDropdownKey = "CheckServerLevels", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
-			{Label = "Specific Brainrots / Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "CheckServerSpecificItems", SeparatorGroup = "CheckServerCriteriaGroup"},
-			{Label = "Player Must Own All Selected Criteria", UtilityToggleKey = "CheckServerMustOwnAll", UtilityExclusiveGroup = "CheckServerOwnershipMode", SeparatorGroup = "CheckServerCriteriaGroup"},
-			{Label = "Player Must Own At Least One Selected Criterion", UtilityToggleKey = "CheckServerMustOwnOne", UtilityExclusiveGroup = "CheckServerOwnershipMode", SeparatorGroup = "CheckServerCriteriaGroup"},
+			{Label = "Hop If No Eligible Player Is in Server", UtilityToggleKey = "CheckServerHopNobodyServer"},
+			{Label = "Hop After All Eligible Server Players", UtilityToggleKey = "CheckServerHopPlayedEveryoneServer"},
+			{Label = "Hop If No Eligible Player Is in Minigame Area", UtilityToggleKey = "CheckServerHopNobodyMinigamesArea"},
+			{Label = "Hop After All Eligible Area Players", UtilityToggleKey = "CheckServerHopPlayedEveryoneMinigamesArea"},
+			{Label = "Rarities", UtilityMultiDropdownKey = "CheckServerBrainrotRarities", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "None", Options = BRAINROT_RARITY_OPTIONS},
+			{Label = "Mutations", UtilityMultiDropdownKey = "CheckServerMutations", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Traits", UtilityMultiDropdownKey = "CheckServerTraits", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Signature", UtilityMultiDropdownKey = "CheckServerSignatures", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "Any", Options = {"Signed", "Unsigned"}},
+			{Label = "Size", UtilityMultiDropdownKey = "CheckServerSizes", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+			{Label = "Level", UtilityMultiDropdownKey = "CheckServerLevels", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
+			{Label = "Specific Brainrots & Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "CheckServerSpecificItems", SeparatorGroup = "CheckServerCriteriaGroup"},
+			{Label = "Require All Criteria", UtilityToggleKey = "CheckServerMustOwnAll", UtilityExclusiveGroup = "CheckServerOwnershipMode", SeparatorGroup = "CheckServerCriteriaGroup"},
+			{Label = "Require Any Criterion", UtilityToggleKey = "CheckServerMustOwnOne", UtilityExclusiveGroup = "CheckServerOwnershipMode", SeparatorGroup = "CheckServerCriteriaGroup"},
 		}
 	)
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
@@ -11976,7 +12317,7 @@ end)()
 		1,
 		"Auto Chat",
 		{
-			{Label = "Auto Chat", UtilityToggleKey = "AutoChat", SeparatorGroup = "AutoChatGroup"},
+			{Label = "Enable Auto Chat", UtilityToggleKey = "AutoChat", SeparatorGroup = "AutoChatGroup"},
 			{
 				Label = "Message",
 				UtilityTextKey = "AutoChatMessage",
@@ -11995,13 +12336,13 @@ end)()
 				UnitLabel = "Minutes",
 			},
 			{
-				Label = "Do Not Send During Active Trade Feature",
+				Label = "Pause During Active Trades",
 				UtilityToggleKey = "AutoChatDoNotSendDuringActiveTrade",
 				SeparatorGroup = "AutoChatGroup",
 				UtilityParentKey = "AutoChat",
 			},
 			{
-				Label = "Wait This Long After Execution",
+				Label = "Startup Delay",
 				UtilitySliderKey = "AutoChatExecutionDelay",
 				SeparatorGroup = "AutoChatGroup",
 				UtilityParentKey = "AutoChat",
@@ -12018,9 +12359,9 @@ end)()
 		8,
 		2,
 		1,
-		"Auto Trade Message",
+		"Trade Messages",
 		{
-			{Label = "Auto Trade Chat", UtilityToggleKey = "AutoTradeChat", SeparatorGroup = "AutoTradeBaseGroup"},
+			{Label = "Enable Trade Messages", UtilityToggleKey = "AutoTradeChat", SeparatorGroup = "AutoTradeBaseGroup"},
 			{
 				Label = "Message",
 				UtilityTextKey = "AutoTradeMessage",
@@ -12029,7 +12370,7 @@ end)()
 				Placeholder = "Type your trade message",
 			},
 			{
-				Label = "Send This Long After Trade Starts",
+				Label = "Initial Send Delay",
 				UtilitySliderKey = "AutoTradeMessageStartDelay",
 				SeparatorGroup = "AutoTradeBaseGroup",
 				UtilityParentKey = "AutoTradeChat",
@@ -12040,13 +12381,13 @@ end)()
 				UnitLabel = "Seconds",
 			},
 			{
-				Label = "Send Message Every Fixed Amount Of Time",
+				Label = "Repeat Message",
 				UtilityToggleKey = "AutoTradeRepeatMessage",
 				SeparatorGroup = "AutoTradeRepeatGroup",
 				UtilityParentKey = "AutoTradeChat",
 			},
 			{
-				Label = "Send Every",
+				Label = "Repeat Interval",
 				UtilitySliderKey = "AutoTradeRepeatInterval",
 				SeparatorGroup = "AutoTradeRepeatGroup",
 				UtilityParentKeys = {"AutoTradeChat", "AutoTradeRepeatMessage"},
@@ -12056,13 +12397,13 @@ end)()
 				UnitLabel = "Seconds",
 			},
 			{
-				Label = "Send Separate Message If Value Not Offered",
+				Label = "Send No-Value Message",
 				UtilityToggleKey = "AutoTradeSendIfValueNotOffered",
 				SeparatorGroup = "AutoTradeNoValueGroup",
 				UtilityParentKey = "AutoTradeChat",
 			},
 			{
-				Label = "Message To Send",
+				Label = "No-Value Message",
 				UtilityTextKey = "AutoTradeNoValueMessage",
 				SeparatorGroup = "AutoTradeNoValueGroup",
 				UtilityParentKeys = {"AutoTradeChat", "AutoTradeSendIfValueNotOffered"},
@@ -12071,7 +12412,7 @@ end)()
 				RevisionKey = "AutoTradeNoValueMessageRevision",
 			},
 			{
-				Label = "Time Before Send",
+				Label = "No-Value Delay",
 				UtilitySliderKey = "AutoTradeNoValueDelay",
 				SeparatorGroup = "AutoTradeNoValueGroup",
 				UtilityParentKeys = {"AutoTradeChat", "AutoTradeSendIfValueNotOffered"},
@@ -12082,7 +12423,7 @@ end)()
 				UnitLabel = "Seconds",
 			},
 			{
-				Label = "Add Trade Chat Reply",
+				Label = "Enable Custom Replies",
 				UtilityToggleKey = "AutoTradeCustomRepliesEnabled",
 				UtilityParentKey = "AutoTradeChat",
 				CustomReplyManager = true,
@@ -12095,15 +12436,15 @@ end)()
 		9,
 		1,
 		1,
-		"Auto Delete Inventory",
+		"Inventory Cleanup",
 		{
 			{
-				Label = "Auto Delete Worst Inventory",
+				Label = "Enable Auto Cleanup",
 				UtilityToggleKey = "AutoDeleteWorstInventory",
 				SeparatorGroup = "AutoDeleteCoreGroup",
 			},
 			{
-				Label = "Delete Non Brainrots First",
+				Label = "Delete Non-Brainrots First",
 				UtilityToggleKey = "DeleteNonBrainrotsFirst",
 				SeparatorGroup = "AutoDeleteCoreGroup",
 				UtilityParentKey = "AutoDeleteWorstInventory",
@@ -12117,7 +12458,7 @@ end)()
 				UtilityExclusiveGroup = "DeletePriority",
 			},
 			{
-				Label = "At This Inventory Or Higher",
+				Label = "Start at Inventory Count",
 				UtilitySliderKey = "DeleteInventoryThreshold",
 				SeparatorGroup = "AutoDeleteCoreGroup",
 				UtilityParentKey = "AutoDeleteWorstInventory",
@@ -12125,32 +12466,32 @@ end)()
 				MaxValue = 100,
 				UnitLabel = "Inventory",
 			},
-			{Label = "Avoid Deleting These Traits", UtilityMultiDropdownKey = "AvoidDeletingTraits",
+			{Label = "Protected Traits", UtilityMultiDropdownKey = "AvoidDeletingTraits",
 				SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Avoid Deleting These Mutations", UtilityMultiDropdownKey = "AvoidDeletingMutations",
+			{Label = "Protected Mutations", UtilityMultiDropdownKey = "AvoidDeletingMutations",
 				SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Avoid Deleting Signed Brainrots", UtilityToggleKey = "AvoidDeletingSignedBrainrots",
+			{Label = "Protect Signed Brainrots", UtilityToggleKey = "AvoidDeletingSignedBrainrots",
 				SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory"},
-			{Label = "Avoid Deleting Locked Items", UtilityToggleKey = "AvoidDeletingLockedItems",
+			{Label = "Protect Locked Items", UtilityToggleKey = "AvoidDeletingLockedItems",
 				SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory"},
-			{Label = "Avoid Deleting These Sizes", UtilityMultiDropdownKey = "AvoidDeletingSizes",
+			{Label = "Protected Sizes", UtilityMultiDropdownKey = "AvoidDeletingSizes",
 				SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
-			{Label = "Avoid Deleting These Levels", UtilityMultiDropdownKey = "AvoidDeletingLevels",
+			{Label = "Protected Levels", UtilityMultiDropdownKey = "AvoidDeletingLevels",
 				SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
 			{
-				Label = "Never Delete Non Brainrots",
+				Label = "Protect All Non-Brainrots",
 				UtilityToggleKey = "NeverDeleteNonBrainrots",
 				UtilityParentKey = "AutoDeleteWorstInventory",
 				SeparatorGroup = "NeverDeleteProtectionGroup",
 			},
 			{
-				Label = "Never Delete These Rarities",
+				Label = "Protect Rarities",
 				UtilityToggleKey = "NeverDeleteRaritiesEnabled",
 				UtilityParentKey = "AutoDeleteWorstInventory",
 				SeparatorGroup = "NeverDeleteProtectionGroup",
 			},
 			{
-				Label = "Rarities To Never Delete",
+				Label = "Protected Rarities",
 				UtilityMultiDropdownKey = "NeverDeleteRarities",
 				UtilityParentKeys = {"AutoDeleteWorstInventory", "NeverDeleteRaritiesEnabled"},
 				SeparatorGroup = "NeverDeleteProtectionGroup",
@@ -12158,13 +12499,13 @@ end)()
 				OptionsProvider = function() return BRAINROT_RARITY_OPTIONS end,
 			},
 			{
-				Label = "Never Delete",
+				Label = "Protect Specific Items",
 				UtilityToggleKey = "NeverDeleteEnabled",
 				UtilityParentKey = "AutoDeleteWorstInventory",
 				SeparatorGroup = "NeverDeleteSpecificItemsGroup",
 			},
 			{
-				Label = "Specific Brainrots / Items",
+				Label = "Specific Brainrots & Items",
 				SpecificCriteriaManager = true,
 				SpecificCriteriaStateKey = "NeverDeleteSpecificItems",
 				UtilityParentKeys = {"AutoDeleteWorstInventory", "NeverDeleteEnabled"},
@@ -12175,19 +12516,19 @@ end)()
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.Inventory, 10, 2, 1, "Auto Equip",
 		{
-			{Label = "Auto Equip (Hold)", UtilityToggleKey = "AutoEquipModeHold", UtilityExclusiveGroup = "AutoEquipMode", SeparatorGroup = "AutoEquipHoldGroup"},
+			{Label = "Hold Mode", UtilityToggleKey = "AutoEquipModeHold", UtilityExclusiveGroup = "AutoEquipMode", SeparatorGroup = "AutoEquipHoldGroup"},
 			{Label = "Equip Best Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipHoldGroup"},
 			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipHoldGroup"},
-			{Label = "Brainrot To Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipHoldGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = false},
-			{Label = "Auto Equip (Mount)", UtilityToggleKey = "AutoEquipModeMount", UtilityExclusiveGroup = "AutoEquipMode", SeparatorGroup = "AutoEquipMountGroup"},
+			{Label = "Brainrot to Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipHoldGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = false},
+			{Label = "Mount Mode", UtilityToggleKey = "AutoEquipModeMount", UtilityExclusiveGroup = "AutoEquipMode", SeparatorGroup = "AutoEquipMountGroup"},
 			{Label = "Equip Best Mountable Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipMountGroup"},
 			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipMountGroup"},
-			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipMountGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedMountableBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = false},
-			{Label = "Auto Equip (Hold + Mount)", UtilityToggleKey = "AutoEquipModeHoldMount", UtilityExclusiveGroup = "AutoEquipMode", SeparatorGroup = "AutoEquipHoldMountGroup"},
-			{Label = "Equip Best Brainrot + Mountable Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipHoldMountGroup"},
+			{Label = "Brainrot to Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipMountGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedMountableBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = false},
+			{Label = "Hold + Mount Mode", UtilityToggleKey = "AutoEquipModeHoldMount", UtilityExclusiveGroup = "AutoEquipMode", SeparatorGroup = "AutoEquipHoldMountGroup"},
+			{Label = "Equip Best Hold + Mount Brainrots", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipHoldMountGroup"},
 			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipHoldMountGroup"},
-			{Label = "Brainrot To Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipHoldMountGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = false},
-			{Label = "Brainrot To Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipHoldMountGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedMountableBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = false},
+			{Label = "Brainrot to Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipHoldMountGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = false},
+			{Label = "Brainrot to Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipHoldMountGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedMountableBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = false},
 		}
 	)
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
@@ -12197,8 +12538,8 @@ end)()
 		3,
 		"Opening Offer",
 		{
-			{Label = "Autoshow Best Brainrots", UtilityToggleKey = "AutoshowBestBrainrots", UtilityExclusiveGroup = "OpeningOfferBrainrotMode"},
-			{Label = "Custom Opening Brainrots", UtilityToggleKey = "CustomOpeningOffer", UtilityExclusiveGroup = "OpeningOfferBrainrotMode", SeparatorGroup = "OpeningOfferBrainrotsGroup"},
+			{Label = "Show Best Brainrots", UtilityToggleKey = "AutoshowBestBrainrots", UtilityExclusiveGroup = "OpeningOfferBrainrotMode"},
+			{Label = "Use Custom Brainrots", UtilityToggleKey = "CustomOpeningOffer", UtilityExclusiveGroup = "OpeningOfferBrainrotMode", SeparatorGroup = "OpeningOfferBrainrotsGroup"},
 			{
 				Label = "Brainrot 1",
 				UtilityDropdownKey = "OpeningOfferBrainrot1",
@@ -12259,9 +12600,9 @@ end)()
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end,
 				ClearIfMissing = true,
 			},
-			{Label = "Autoshow All Tokens", UtilityToggleKey = "AutoshowAllTokens", UtilityExclusiveGroup = "OpeningOfferTokenMode"},
-			{Label = "Custom Opening Tokens", UtilityToggleKey = "CustomOpeningTokens", UtilityExclusiveGroup = "OpeningOfferTokenMode", SeparatorGroup = "OpeningOfferTokensGroup"},
-			{Label = "Custom Token Amount", UtilitySliderKey = "OpeningOfferTokenAmount", UtilityParentKey = "CustomOpeningTokens", SeparatorGroup = "OpeningOfferTokensGroup", MinValue = 0, MaxValue = 1000000, MaxValueProvider = function() return autoServerHopState.CurrentTradeTokenBalance() end, UnitLabel = "Tokens"},
+			{Label = "Show All Tokens", UtilityToggleKey = "AutoshowAllTokens", UtilityExclusiveGroup = "OpeningOfferTokenMode"},
+			{Label = "Use Custom Token Amount", UtilityToggleKey = "CustomOpeningTokens", UtilityExclusiveGroup = "OpeningOfferTokenMode", SeparatorGroup = "OpeningOfferTokensGroup"},
+			{Label = "Token Amount", UtilitySliderKey = "OpeningOfferTokenAmount", UtilityParentKey = "CustomOpeningTokens", SeparatorGroup = "OpeningOfferTokensGroup", MinValue = 0, MaxValue = 1000000, MaxValueProvider = function() return autoServerHopState.CurrentTradeTokenBalance() end, UnitLabel = "Tokens"},
 		}
 	)
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
@@ -12269,11 +12610,11 @@ end)()
 		12,
 		2,
 		3,
-		"Trade Delays",
+		"Trade Timing",
 		{
-			{Label = "Custom Delays", UtilityToggleKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup"},
+			{Label = "Use Custom Timing", UtilityToggleKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup"},
 			{Label = "Initial Delay", UtilitySliderKey = "InitialJoinDelay", UtilityParentKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
-			{Label = "Delay After Trade Message", UtilitySliderKey = "DelayAfterTradeMessage", UtilityParentKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
+			{Label = "Post-Message Delay", UtilitySliderKey = "DelayAfterTradeMessage", UtilityParentKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
 			{Label = "Reaction Delay", UtilitySliderKey = "ReactionDelay", UtilityParentKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
 			{Label = "Add Brainrot Delay", UtilitySliderKey = "AddBrainrotDelay", UtilityParentKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
 			{Label = "Remove Brainrot Delay", UtilitySliderKey = "RemoveBrainrotDelay", UtilityParentKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
@@ -12287,72 +12628,72 @@ end)()
 		13,
 		2,
 		1,
-		"Auto Choose",
+		"Game & Round Selection",
 		{
-			{Label = "Auto Choose Game", UtilityToggleKey = "AutoChooseGame", SeparatorGroup = "AutoChooseGameGroup"},
+			{Label = "Auto Choose Minigame", UtilityToggleKey = "AutoChooseGame", SeparatorGroup = "AutoChooseGameGroup"},
 			{
-				Label = "Game To Choose",
+				Label = "Preferred Minigame",
 				UtilityDropdownKey = "GameToChoose",
 				SeparatorGroup = "AutoChooseGameGroup",
 				UtilityParentKey = "AutoChooseGame",
 				ClearsUtilityMultiDropdownKey = "FallbackGameChoices",
-				Options = {"Candy Bomb", "Popcorn Burst", "Higher Or Lower", "Connect 4", "Battle Ship", "Knockout", "Football Draft"},
+				Options = {"Candy Bomb", "Popcorn Burst", "Higher Or Lower", "Connect 4", "Battle Ship", "Knockout", "Football Draft", "Hot Potato"},
 			},
 			{
-				Label = "Round 1 Time Before Choice",
+				Label = "Round 1 Choice Delay",
 				UtilitySliderKey = "AutoChooseRound1Delay",
 				SeparatorGroup = "AutoChooseGameGroup",
 				UtilityParentKey = "AutoChooseGame",
 				MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds",
 			},
 			{
-				Label = "Round 2 Time Before Choice",
+				Label = "Round 2 Choice Delay",
 				UtilitySliderKey = "AutoChooseRound2Delay",
 				SeparatorGroup = "AutoChooseGameGroup",
 				UtilityParentKey = "AutoChooseGame",
 				MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds",
 			},
 			{
-				Label = "Round 3 Time Before Choice",
+				Label = "Round 3 Choice Delay",
 				UtilitySliderKey = "AutoChooseRound3Delay",
 				SeparatorGroup = "AutoChooseGameGroup",
 				UtilityParentKey = "AutoChooseGame",
 				MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds",
 			},
 			{
-				Label = "Match Opponent Before Time",
+				Label = "Match Opponent Before Delay",
 				UtilityToggleKey = "MatchOpponentGame",
 				SeparatorGroup = "AutoChooseGameGroup",
 				UtilityParentKey = "AutoChooseGame",
 			},
 			{
-				Label = "Choices To Match",
+				Label = "Choices Allowed to Match",
 				UtilityMultiDropdownKey = "FallbackGameChoices",
 				SeparatorGroup = "AutoChooseGameGroup",
 				UtilityParentKeys = {"AutoChooseGame", "MatchOpponentGame"},
 				ExcludeUtilityDropdownKey = "GameToChoose",
-				Options = {"Candy Bomb", "Popcorn Burst", "Higher Or Lower", "Connect 4", "Battle Ship", "Knockout", "Football Draft"},
+				Options = {"Candy Bomb", "Popcorn Burst", "Higher Or Lower", "Connect 4", "Battle Ship", "Knockout", "Football Draft", "Hot Potato"},
 			},
-			{Label = "Auto Choose Rounds", UtilityToggleKey = "AutoChooseRounds", SeparatorGroup = "AutoChooseRoundsGroup"},
+			{Label = "Auto Choose Round Count", UtilityToggleKey = "AutoChooseRounds", SeparatorGroup = "AutoChooseRoundsGroup"},
 			{
-				Label = "Rounds To Choose",
+				Label = "Preferred Round Count",
 				UtilityDropdownKey = "RoundsToChoose",
 				SeparatorGroup = "AutoChooseRoundsGroup",
 				UtilityParentKey = "AutoChooseRounds",
 				ClearsUtilityMultiDropdownKey = "FallbackRoundChoices",
 				Options = {"1", "3", "5"},
 			},
-			{Label = "Round 1 Time Before Choice", UtilitySliderKey = "AutoChooseRoundsRound1Delay", UtilityParentKey = "AutoChooseRounds", SeparatorGroup = "AutoChooseRoundsGroup", MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds"},
-			{Label = "Round 2 Time Before Choice", UtilitySliderKey = "AutoChooseRoundsRound2Delay", UtilityParentKey = "AutoChooseRounds", SeparatorGroup = "AutoChooseRoundsGroup", MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds"},
-			{Label = "Round 3 Time Before Choice", UtilitySliderKey = "AutoChooseRoundsRound3Delay", UtilityParentKey = "AutoChooseRounds", SeparatorGroup = "AutoChooseRoundsGroup", MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds"},
+			{Label = "Round 1 Choice Delay", UtilitySliderKey = "AutoChooseRoundsRound1Delay", UtilityParentKey = "AutoChooseRounds", SeparatorGroup = "AutoChooseRoundsGroup", MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds"},
+			{Label = "Round 2 Choice Delay", UtilitySliderKey = "AutoChooseRoundsRound2Delay", UtilityParentKey = "AutoChooseRounds", SeparatorGroup = "AutoChooseRoundsGroup", MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds"},
+			{Label = "Round 3 Choice Delay", UtilitySliderKey = "AutoChooseRoundsRound3Delay", UtilityParentKey = "AutoChooseRounds", SeparatorGroup = "AutoChooseRoundsGroup", MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds"},
 			{
-				Label = "Match Opponent Before Time",
+				Label = "Match Opponent Before Delay",
 				UtilityToggleKey = "MatchOpponentRounds",
 				SeparatorGroup = "AutoChooseRoundsGroup",
 				UtilityParentKey = "AutoChooseRounds",
 			},
 			{
-				Label = "Choices To Match",
+				Label = "Choices Allowed to Match",
 				UtilityMultiDropdownKey = "FallbackRoundChoices",
 				SeparatorGroup = "AutoChooseRoundsGroup",
 				UtilityParentKeys = {"AutoChooseRounds", "MatchOpponentRounds"},
@@ -12362,48 +12703,39 @@ end)()
 		}
 	)
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
-		tabs.Games,
-		14,
-		1,
-		2,
-		"Auto Leave On Loss",
-		{
-			{Label = "Leave When About To Lose", UtilityToggleKey = "LeaveWhenAboutToLose"},
-		}
-	)
-	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.System,
 		3,
 		1,
 		2,
-		"Logging",
+		"Logs",
 		{
-			{Label = "Print Wins/Losses To Terminal", UtilityToggleKey = "PrintWinsLossesToTerminal"},
-			{Label = "Print Kicks To Terminal", UtilityToggleKey = "PrintKicksToTerminal"},
-			{Label = "Print Auto Deletes To Terminal", UtilityToggleKey = "PrintAutoDeletesToTerminal"},
-			{Label = "Print Purchased Booth Listings To Terminal", UtilityToggleKey = "PrintPurchasedBoothListingsToTerminal"},
+			{Label = "Wins & Losses", UtilityToggleKey = "PrintWinsLossesToTerminal"},
+			{Label = "Kicks", UtilityToggleKey = "PrintKicksToTerminal"},
+			{Label = "Disconnects", UtilityToggleKey = "PrintDisconnectsToTerminal"},
+			{Label = "Auto Deletes", UtilityToggleKey = "PrintAutoDeletesToTerminal"},
+			{Label = "Booth Purchases", UtilityToggleKey = "PrintPurchasedBoothListingsToTerminal"},
 		}
 	)
 	do
 		local boothSettings = {
 			{Label = "Auto Booth", UtilityToggleKey = "AutoBooth", SeparatorGroup = "AutoBoothIdentityGroup"},
 			{Label = "Booth Name", UtilityTextKey = "AutoBoothName", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothIdentityGroup", Placeholder = "Booth Name"},
-			{Label = "List Best Brainrot First", UtilityToggleKey = "AutoBoothListBestFirst", UtilityParentKey = "AutoBooth", UtilityExclusiveGroup = "AutoBoothSortOrder"},
-			{Label = "List Worst Brainrot First", UtilityToggleKey = "AutoBoothListWorstFirst", UtilityParentKey = "AutoBooth", UtilityExclusiveGroup = "AutoBoothSortOrder"},
-			{Label = "Avoid Listing Brainrots With These Traits", UtilityMultiDropdownKey = "AutoBoothAvoidTraits", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAvoidGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Avoid Listing Brainrots With These Mutations", UtilityMultiDropdownKey = "AutoBoothAvoidMutations", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAvoidGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Avoid Listing Signed Brainrots", UtilityToggleKey = "AutoBoothAvoidSignedBrainrots", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAvoidGroup"},
-			{Label = "Avoid Listing Brainrots With These Sizes", UtilityMultiDropdownKey = "AutoBoothAvoidSizes", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAvoidGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
-			{Label = "Avoid Listing Brainrots At These Levels", UtilityMultiDropdownKey = "AutoBoothAvoidLevels", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAvoidGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
-			{Label = "Avoid Listing These Specific Brainrots", UtilityMultiDropdownKey = "AutoBoothAvoidBrainrots", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAvoidGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothBrainrotOptions() end},
+			{Label = "List Best First", UtilityToggleKey = "AutoBoothListBestFirst", UtilityParentKey = "AutoBooth", UtilityExclusiveGroup = "AutoBoothSortOrder"},
+			{Label = "List Worst First", UtilityToggleKey = "AutoBoothListWorstFirst", UtilityParentKey = "AutoBooth", UtilityExclusiveGroup = "AutoBoothSortOrder"},
+			{Label = "Excluded Traits", UtilityMultiDropdownKey = "AutoBoothAvoidTraits", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAvoidGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Excluded Mutations", UtilityMultiDropdownKey = "AutoBoothAvoidMutations", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAvoidGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Exclude Signed Brainrots", UtilityToggleKey = "AutoBoothAvoidSignedBrainrots", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAvoidGroup"},
+			{Label = "Excluded Sizes", UtilityMultiDropdownKey = "AutoBoothAvoidSizes", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAvoidGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+			{Label = "Excluded Levels", UtilityMultiDropdownKey = "AutoBoothAvoidLevels", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAvoidGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
+			{Label = "Excluded Brainrots", UtilityMultiDropdownKey = "AutoBoothAvoidBrainrots", UtilityParentKey = "AutoBooth", SeparatorGroup = "AutoBoothAvoidGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothBrainrotOptions() end},
 		}
 		local boothMessages = {
-			{Label = "Send Message When All Listings Are Listed", UtilityToggleKey = "AutoBoothMessageAllListingsCompleted", SeparatorGroup = "AutoBoothAllListingsMessageGroup"},
+			{Label = "Message When Configured Listings Finish", UtilityToggleKey = "AutoBoothMessageAllListingsCompleted", SeparatorGroup = "AutoBoothAllListingsMessageGroup"},
 			{Label = "Message", UtilityTextKey = "AutoBoothAllListingsCompletedMessage", UtilityParentKeys = {"AutoBoothMessageAllListingsCompleted"}, SeparatorGroup = "AutoBoothAllListingsMessageGroup", Placeholder = "Message when all configured listings are listed"},
-			{Label = "Delay Before Sending Message", UtilitySliderKey = "AutoBoothAllListingsCompletedMessageDelay", UtilityParentKeys = {"AutoBoothMessageAllListingsCompleted"}, SeparatorGroup = "AutoBoothAllListingsMessageGroup", MinValue = 0, MaxValue = 30, Step = 0.25, Decimals = 2, UnitLabel = "Seconds"},
-			{Label = "Send Message When All Possible Listings Are Listed", UtilityToggleKey = "AutoBoothMessageAllPossibleCompleted", SeparatorGroup = "AutoBoothAllPossibleMessageGroup"},
+			{Label = "Message Delay", UtilitySliderKey = "AutoBoothAllListingsCompletedMessageDelay", UtilityParentKeys = {"AutoBoothMessageAllListingsCompleted"}, SeparatorGroup = "AutoBoothAllListingsMessageGroup", MinValue = 0, MaxValue = 30, Step = 0.25, Decimals = 2, UnitLabel = "Seconds"},
+			{Label = "Message When All Possible Listings Finish", UtilityToggleKey = "AutoBoothMessageAllPossibleCompleted", SeparatorGroup = "AutoBoothAllPossibleMessageGroup"},
 			{Label = "Message", UtilityTextKey = "AutoBoothAllPossibleCompletedMessage", UtilityParentKeys = {"AutoBoothMessageAllPossibleCompleted"}, SeparatorGroup = "AutoBoothAllPossibleMessageGroup", Placeholder = "Message when every possible eligible listing is listed"},
-			{Label = "Delay Before Sending Message", UtilitySliderKey = "AutoBoothAllPossibleCompletedMessageDelay", UtilityParentKeys = {"AutoBoothMessageAllPossibleCompleted"}, SeparatorGroup = "AutoBoothAllPossibleMessageGroup", MinValue = 0, MaxValue = 30, Step = 0.25, Decimals = 2, UnitLabel = "Seconds"},
+			{Label = "Message Delay", UtilitySliderKey = "AutoBoothAllPossibleCompletedMessageDelay", UtilityParentKeys = {"AutoBoothMessageAllPossibleCompleted"}, SeparatorGroup = "AutoBoothAllPossibleMessageGroup", MinValue = 0, MaxValue = 30, Step = 0.25, Decimals = 2, UnitLabel = "Seconds"},
 		}
 		local listings = {}
 		for index = 1, 14 do
@@ -12411,29 +12743,29 @@ end)()
 			local parents = {prefix .. "Enabled"}
 			local function add(definition) definition.BoothSlotIndex = index; listings[#listings + 1] = definition end
 			add({Label = "Listing " .. tostring(index), UtilityToggleKey = prefix .. "Enabled"})
-			add({Label = "List By Rarity", UtilityToggleKey = prefix .. "ListByRarity", UtilityParentKeys = parents, UtilityExclusiveGroup = prefix .. "SelectionMode", UtilityExclusiveRequired = true, SeparatorGroup = prefix .. "ListByRarityGroup"})
+			add({Label = "List by Rarity", UtilityToggleKey = prefix .. "ListByRarity", UtilityParentKeys = parents, UtilityExclusiveGroup = prefix .. "SelectionMode", UtilityExclusiveRequired = true, SeparatorGroup = prefix .. "ListByRarityGroup"})
 			add({Label = "Rarity", UtilityDropdownKey = prefix .. "Rarity", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Select", Options = BRAINROT_RARITY_OPTIONS})
 			add({Label = "Mutation", UtilityMultiDropdownKey = prefix .. "BrainrotMutations", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end})
 			add({Label = "Traits", UtilityMultiDropdownKey = prefix .. "BrainrotTraits", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end})
 			add({Label = "Signature", UtilityMultiDropdownKey = prefix .. "BrainrotSignatures", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Any", Options = {"Signed", "Unsigned"}})
 			add({Label = "Size", UtilityMultiDropdownKey = prefix .. "BrainrotSizes", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end})
 			add({Label = "Level", UtilityMultiDropdownKey = prefix .. "BrainrotLevels", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end})
-			add({Label = "List When You Have At Least", UtilitySliderKey = prefix .. "MinimumCopies", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", MinValue = 1, MaxValue = 100, UnitLabel = "Owned"})
-			add({Label = "List Brainrot By Name", UtilityToggleKey = prefix .. "ListByBrainrot", UtilityParentKeys = parents, UtilityExclusiveGroup = prefix .. "SelectionMode", UtilityExclusiveRequired = true, SeparatorGroup = prefix .. "ListByBrainrotGroup"})
+			add({Label = "Minimum Copies Owned", UtilitySliderKey = prefix .. "MinimumCopies", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", MinValue = 1, MaxValue = 100, UnitLabel = "Owned"})
+			add({Label = "List by Brainrot Name", UtilityToggleKey = prefix .. "ListByBrainrot", UtilityParentKeys = parents, UtilityExclusiveGroup = prefix .. "SelectionMode", UtilityExclusiveRequired = true, SeparatorGroup = prefix .. "ListByBrainrotGroup"})
 			add({Label = "Brainrot Name", UtilityDropdownKey = prefix .. "Brainrot", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothBrainrotOptions() end})
 			add({Label = "Mutation", UtilityMultiDropdownKey = prefix .. "BrainrotMutations", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end})
 			add({Label = "Traits", UtilityMultiDropdownKey = prefix .. "BrainrotTraits", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end})
 			add({Label = "Signature", UtilityMultiDropdownKey = prefix .. "BrainrotSignatures", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Any", Options = {"Signed", "Unsigned"}})
 			add({Label = "Size", UtilityMultiDropdownKey = prefix .. "BrainrotSizes", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end})
 			add({Label = "Level", UtilityMultiDropdownKey = prefix .. "BrainrotLevels", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end})
-			add({Label = "List When You Have At Least", UtilitySliderKey = prefix .. "MinimumCopies", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", MinValue = 1, MaxValue = 100, UnitLabel = "Owned"})
-			add({Label = "List Specific Brainrot", UtilityToggleKey = prefix .. "ListSpecificBrainrot", UtilityParentKeys = parents, UtilityExclusiveGroup = prefix .. "SelectionMode", UtilityExclusiveRequired = true, SeparatorGroup = prefix .. "ListSpecificBrainrotGroup"})
+			add({Label = "Minimum Copies Owned", UtilitySliderKey = prefix .. "MinimumCopies", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", MinValue = 1, MaxValue = 100, UnitLabel = "Owned"})
+			add({Label = "List Specific Owned Brainrot", UtilityToggleKey = prefix .. "ListSpecificBrainrot", UtilityParentKeys = parents, UtilityExclusiveGroup = prefix .. "SelectionMode", UtilityExclusiveRequired = true, SeparatorGroup = prefix .. "ListSpecificBrainrotGroup"})
 			add({Label = "Owned Brainrot", UtilityDropdownKey = prefix .. "SpecificBrainrotId", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListSpecificBrainrot"}, SeparatorGroup = prefix .. "ListSpecificBrainrotGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true})
-			add({Label = "List Above This Inventory Or Higher", UtilitySliderKey = prefix .. "InventoryThreshold", UtilityParentKeys = parents, SeparatorGroup = prefix .. "ListingConditionsGroup", MinValue = 1, MaxValue = 100, UnitLabel = "Inventory"})
+			add({Label = "Minimum Inventory Count", UtilitySliderKey = prefix .. "InventoryThreshold", UtilityParentKeys = parents, SeparatorGroup = prefix .. "ListingConditionsGroup", MinValue = 1, MaxValue = 100, UnitLabel = "Inventory"})
 			add({Label = "Listing " .. tostring(index) .. " Tokens", UtilitySliderKey = prefix .. "Tokens", UtilityParentKeys = parents, SeparatorGroup = prefix .. "ListingConditionsGroup", MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"})
 			add({Label = "Message When Listed", UtilityToggleKey = prefix .. "MessageWhenListed", UtilityParentKeys = parents, SeparatorGroup = prefix .. "MessageWhenListedGroup"})
 			add({Label = "Message", UtilityTextKey = prefix .. "ListedMessage", UtilityParentKeys = {prefix .. "Enabled", prefix .. "MessageWhenListed"}, SeparatorGroup = prefix .. "MessageWhenListedGroup", Placeholder = "Message to send when listed"})
-			add({Label = "Delay Before Sending Message", UtilitySliderKey = prefix .. "MessageDelay", UtilityParentKeys = {prefix .. "Enabled", prefix .. "MessageWhenListed"}, SeparatorGroup = prefix .. "MessageWhenListedGroup", MinValue = 0, MaxValue = 30, Step = 0.25, Decimals = 2, UnitLabel = "Seconds"})
+			add({Label = "Message Delay", UtilitySliderKey = prefix .. "MessageDelay", UtilityParentKeys = {prefix .. "Enabled", prefix .. "MessageWhenListed"}, SeparatorGroup = prefix .. "MessageWhenListedGroup", MinValue = 0, MaxValue = 30, Step = 0.25, Decimals = 2, UnitLabel = "Seconds"})
 		end
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Booth, 16, 1, 1, "Booth Settings", boothSettings)
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Booth, 30, 2, 1, "Booth Messages", boothMessages)
@@ -12443,26 +12775,26 @@ end)()
 		-- All three fallback types stay visible and independent. Each enabled type
 		-- reveals only its own controls immediately beneath it.
 		local features = {
-			{Label = "Next Highest Lower Rarity Fallback Offers", UtilityToggleKey = "FallbackToNextLowerRarityBrainrot", UtilityExclusiveGroup = "MinigameFallbackRarityDirection", SeparatorGroup = "MinigameFallbackLowerGroup"},
-			{Label = "Amount Of Brainrots To Offer", UtilitySliderKey = "FallbackNextLowerRarityAmount", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
-			{Label = "Avoid Offering Brainrots With These Mutations", UtilityMultiDropdownKey = "FallbackAvoidMutations", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Avoid Offering Brainrots With These Traits", UtilityMultiDropdownKey = "FallbackAvoidTraits", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Avoid Offering Signed Brainrots", UtilityToggleKey = "FallbackAvoidSignedBrainrots", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot"},
-			{Label = "Avoid Offering Brainrots With These Sizes", UtilityMultiDropdownKey = "FallbackAvoidSizes", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
-			{Label = "Avoid Offering Brainrots At These Levels", UtilityMultiDropdownKey = "FallbackAvoidLevels", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
-			{Label = "Next Highest Higher Rarity Fallback Offers", UtilityToggleKey = "FallbackToNextHigherRarityBrainrot", UtilityExclusiveGroup = "MinigameFallbackRarityDirection", SeparatorGroup = "MinigameFallbackHigherGroup"},
-			{Label = "Amount Of Brainrots To Offer", UtilitySliderKey = "FallbackNextHigherRarityAmount", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
-			{Label = "Avoid Offering Brainrots With These Mutations", UtilityMultiDropdownKey = "FallbackAvoidMutations", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Avoid Offering Brainrots With These Traits", UtilityMultiDropdownKey = "FallbackAvoidTraits", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Avoid Offering Signed Brainrots", UtilityToggleKey = "FallbackAvoidSignedBrainrots", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot"},
-			{Label = "Avoid Offering Brainrots With These Sizes", UtilityMultiDropdownKey = "FallbackAvoidSizes", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
-			{Label = "Avoid Offering Brainrots At These Levels", UtilityMultiDropdownKey = "FallbackAvoidLevels", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
-			{Label = "Specific Brainrots / Items Fallback", UtilityToggleKey = "FallbackToSpecificBrainrotItem"},
+			{Label = "Fallback to Next Lower Rarity", UtilityToggleKey = "FallbackToNextLowerRarityBrainrot", UtilityExclusiveGroup = "MinigameFallbackRarityDirection", SeparatorGroup = "MinigameFallbackLowerGroup"},
+			{Label = "Brainrots to Offer", UtilitySliderKey = "FallbackNextLowerRarityAmount", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
+			{Label = "Excluded Mutations", UtilityMultiDropdownKey = "FallbackAvoidMutations", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Excluded Traits", UtilityMultiDropdownKey = "FallbackAvoidTraits", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Exclude Signed Brainrots", UtilityToggleKey = "FallbackAvoidSignedBrainrots", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot"},
+			{Label = "Excluded Sizes", UtilityMultiDropdownKey = "FallbackAvoidSizes", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+			{Label = "Excluded Levels", UtilityMultiDropdownKey = "FallbackAvoidLevels", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
+			{Label = "Fallback to Next Higher Rarity", UtilityToggleKey = "FallbackToNextHigherRarityBrainrot", UtilityExclusiveGroup = "MinigameFallbackRarityDirection", SeparatorGroup = "MinigameFallbackHigherGroup"},
+			{Label = "Brainrots to Offer", UtilitySliderKey = "FallbackNextHigherRarityAmount", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
+			{Label = "Excluded Mutations", UtilityMultiDropdownKey = "FallbackAvoidMutations", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Excluded Traits", UtilityMultiDropdownKey = "FallbackAvoidTraits", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Exclude Signed Brainrots", UtilityToggleKey = "FallbackAvoidSignedBrainrots", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot"},
+			{Label = "Excluded Sizes", UtilityMultiDropdownKey = "FallbackAvoidSizes", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+			{Label = "Excluded Levels", UtilityMultiDropdownKey = "FallbackAvoidLevels", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
+			{Label = "Fallback to Specific Brainrots & Items", UtilityToggleKey = "FallbackToSpecificBrainrotItem"},
 		}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 			local sourceRarity = rarity
 			features[#features + 1] = {
-				Label = sourceRarity .. " Specific Fallback",
+				Label = sourceRarity .. " Fallback Items",
 				UtilityMultiDropdownKey = "FallbackSpecific" .. sourceRarity .. "Items",
 				UtilityParentKey = "FallbackToSpecificBrainrotItem",
 				Placeholder = "Select",
@@ -12470,34 +12802,34 @@ end)()
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end,
 			}
 		end
-		features[#features + 1] = {Label = "Token Fallback Offers", UtilityToggleKey = "FallbackToTokens"}
+		features[#features + 1] = {Label = "Fallback to Tokens", UtilityToggleKey = "FallbackToTokens"}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 			features[#features + 1] = {Label = rarity .. " Tokens", UtilitySliderKey = "FallbackTokens" .. rarity, UtilityParentKey = "FallbackToTokens", SeparatorGroup = "FallbackTokens" .. rarity .. "Group", MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"}
 			features[#features + 1] = {Label = rarity .. " Offer All Tokens", UtilityToggleKey = "Fallback" .. rarity .. "OfferAllTokens", UtilityParentKey = "FallbackToTokens", SeparatorGroup = "FallbackTokens" .. rarity .. "Group"}
 		end
-		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Fallbacks, 17, 1, 1, "Minigame Trade Fallbacks", features)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Fallbacks, 17, 1, 1, "Minigame Fallbacks", features)
 
 		local regularFeatures = {
-			{Label = "Next Highest Lower Rarity Fallback Offers", UtilityToggleKey = "RegularFallbackOffers", UtilityExclusiveGroup = "RegularFallbackRarityDirection", SeparatorGroup = "RegularFallbackLowerGroup"},
-			{Label = "Amount Of Brainrots To Offer", UtilitySliderKey = "RegularFallbackNextLowerRarityAmount", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
-			{Label = "Avoid Offering Brainrots With These Mutations", UtilityMultiDropdownKey = "RegularFallbackAvoidMutations", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Avoid Offering Brainrots With These Traits", UtilityMultiDropdownKey = "RegularFallbackAvoidTraits", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Avoid Offering Signed Brainrots", UtilityToggleKey = "RegularFallbackAvoidSignedBrainrots", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers"},
-			{Label = "Avoid Offering Brainrots With These Sizes", UtilityMultiDropdownKey = "RegularFallbackAvoidSizes", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
-			{Label = "Avoid Offering Brainrots At These Levels", UtilityMultiDropdownKey = "RegularFallbackAvoidLevels", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
-			{Label = "Next Highest Higher Rarity Fallback Offers", UtilityToggleKey = "RegularFallbackToNextHigherRarityBrainrot", UtilityExclusiveGroup = "RegularFallbackRarityDirection", SeparatorGroup = "RegularFallbackHigherGroup"},
-			{Label = "Amount Of Brainrots To Offer", UtilitySliderKey = "RegularFallbackNextHigherRarityAmount", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
-			{Label = "Avoid Offering Brainrots With These Mutations", UtilityMultiDropdownKey = "RegularFallbackAvoidMutations", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Avoid Offering Brainrots With These Traits", UtilityMultiDropdownKey = "RegularFallbackAvoidTraits", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Avoid Offering Signed Brainrots", UtilityToggleKey = "RegularFallbackAvoidSignedBrainrots", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot"},
-			{Label = "Avoid Offering Brainrots With These Sizes", UtilityMultiDropdownKey = "RegularFallbackAvoidSizes", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
-			{Label = "Avoid Offering Brainrots At These Levels", UtilityMultiDropdownKey = "RegularFallbackAvoidLevels", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
-			{Label = "Specific Brainrots / Items Fallback", UtilityToggleKey = "RegularFallbackToSpecificItems"},
+			{Label = "Fallback to Next Lower Rarity", UtilityToggleKey = "RegularFallbackOffers", UtilityExclusiveGroup = "RegularFallbackRarityDirection", SeparatorGroup = "RegularFallbackLowerGroup"},
+			{Label = "Brainrots to Offer", UtilitySliderKey = "RegularFallbackNextLowerRarityAmount", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
+			{Label = "Excluded Mutations", UtilityMultiDropdownKey = "RegularFallbackAvoidMutations", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Excluded Traits", UtilityMultiDropdownKey = "RegularFallbackAvoidTraits", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Exclude Signed Brainrots", UtilityToggleKey = "RegularFallbackAvoidSignedBrainrots", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers"},
+			{Label = "Excluded Sizes", UtilityMultiDropdownKey = "RegularFallbackAvoidSizes", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+			{Label = "Excluded Levels", UtilityMultiDropdownKey = "RegularFallbackAvoidLevels", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
+			{Label = "Fallback to Next Higher Rarity", UtilityToggleKey = "RegularFallbackToNextHigherRarityBrainrot", UtilityExclusiveGroup = "RegularFallbackRarityDirection", SeparatorGroup = "RegularFallbackHigherGroup"},
+			{Label = "Brainrots to Offer", UtilitySliderKey = "RegularFallbackNextHigherRarityAmount", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
+			{Label = "Excluded Mutations", UtilityMultiDropdownKey = "RegularFallbackAvoidMutations", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Excluded Traits", UtilityMultiDropdownKey = "RegularFallbackAvoidTraits", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Exclude Signed Brainrots", UtilityToggleKey = "RegularFallbackAvoidSignedBrainrots", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot"},
+			{Label = "Excluded Sizes", UtilityMultiDropdownKey = "RegularFallbackAvoidSizes", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+			{Label = "Excluded Levels", UtilityMultiDropdownKey = "RegularFallbackAvoidLevels", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
+			{Label = "Fallback to Specific Brainrots & Items", UtilityToggleKey = "RegularFallbackToSpecificItems"},
 		}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 			local sourceRarity = rarity
 			regularFeatures[#regularFeatures + 1] = {
-				Label = sourceRarity .. " Specific Fallback",
+				Label = sourceRarity .. " Fallback Items",
 				UtilityMultiDropdownKey = "RegularFallbackSpecific" .. sourceRarity .. "Items",
 				UtilityParentKey = "RegularFallbackToSpecificItems",
 				Placeholder = "Select",
@@ -12505,7 +12837,7 @@ end)()
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end,
 			}
 		end
-		regularFeatures[#regularFeatures + 1] = {Label = "Token Fallback Offers", UtilityToggleKey = "RegularFallbackToTokens"}
+		regularFeatures[#regularFeatures + 1] = {Label = "Fallback to Tokens", UtilityToggleKey = "RegularFallbackToTokens"}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 			regularFeatures[#regularFeatures + 1] = {Label = rarity .. " Tokens", UtilitySliderKey = "RegularFallbackTokens" .. rarity, UtilityParentKey = "RegularFallbackToTokens", SeparatorGroup = "RegularFallbackTokens" .. rarity .. "Group", MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"}
 			regularFeatures[#regularFeatures + 1] = {Label = rarity .. " Offer All Tokens", UtilityToggleKey = "RegularFallback" .. rarity .. "OfferAllTokens", UtilityParentKey = "RegularFallbackToTokens", SeparatorGroup = "RegularFallbackTokens" .. rarity .. "Group"}
@@ -12517,24 +12849,13 @@ end)()
 		19,
 		1,
 		3,
-		"Blacklist Players",
+		"Player Blacklist",
 		{
-			{Label = "Temp Blacklist", UtilityToggleKey = "TempBlacklistPlayersAfterCanceledTrade"},
-			{Label = "After This Many Canceled Trades In A Row", UtilitySliderKey = "TempBlacklistAfterCanceledTrades", UtilityParentKey = "TempBlacklistPlayersAfterCanceledTrade", MinValue = 1, MaxValue = 10, UnitLabel = "Trades"},
-			{Label = "Perm Blacklist", UtilityToggleKey = "PermanentBlacklistPlayersAfterCanceledTrade"},
-			{Label = "After This Many Canceled Trades In A Row", UtilitySliderKey = "PermanentBlacklistAfterCanceledTrades", UtilityParentKey = "PermanentBlacklistPlayersAfterCanceledTrade", MinValue = 1, MaxValue = 10, UnitLabel = "Trades"},
-			{Label = "Avoid Going Back To Same Player For This Long", UtilitySliderKey = "AvoidSamePlayerSeconds", MinValue = 1, MaxValue = 60, UnitLabel = "Seconds"},
-		}
-	)
-	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
-		tabs.System,
-		4,
-		2,
-		2,
-		"Manual",
-		{
-			{Label = "Manual Server Hop", ActionButton = true, Action = "ManualServerHop"},
-			{Label = "Manual Kick During Minigame", ActionButton = true, Action = "ManualKickMinigame"},
+			{Label = "Temporary Blacklist", UtilityToggleKey = "TempBlacklistPlayersAfterCanceledTrade"},
+			{Label = "Canceled Trades Before Blacklist", UtilitySliderKey = "TempBlacklistAfterCanceledTrades", UtilityParentKey = "TempBlacklistPlayersAfterCanceledTrade", MinValue = 1, MaxValue = 10, UnitLabel = "Trades"},
+			{Label = "Permanent Blacklist", UtilityToggleKey = "PermanentBlacklistPlayersAfterCanceledTrade"},
+			{Label = "Canceled Trades Before Blacklist", UtilitySliderKey = "PermanentBlacklistAfterCanceledTrades", UtilityParentKey = "PermanentBlacklistPlayersAfterCanceledTrade", MinValue = 1, MaxValue = 10, UnitLabel = "Trades"},
+			{Label = "Player Revisit Cooldown", UtilitySliderKey = "AvoidSamePlayerSeconds", MinValue = 1, MaxValue = 60, UnitLabel = "Seconds"},
 		}
 	)
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
@@ -12542,39 +12863,23 @@ end)()
 		1,
 		1,
 		1,
-		"Pause Script",
+		"Runtime",
 		{
 			{Label = "Pause Script", UtilityToggleKey = "PauseScript"},
-		}
-	)
-	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
-		tabs.System,
-		2,
-		2,
-		1,
-		"Undo Settings",
-		{
-			{Label = "Undo All Settings", ActionButton = true, Action = "UndoAllSettings"},
-		}
-	)
-	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
-		tabs.System,
-		6,
-		1,
-		3,
-		"Auto Reconnect",
-		{
 			{Label = "Auto Reconnect", UtilityToggleKey = "AutoReconnect"},
+			{Label = "Leave If Another TuffHub User Is Present", ServerHopKey = "LeaveIfScriptUserInServer", ServerHopIndependent = true},
 		}
 	)
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.System,
-		5,
 		2,
-		3,
-		"Detect Script Users",
+		2,
+		1,
+		"Actions",
 		{
-			{Label = "Leave If Script User Is In Server", ServerHopKey = "LeaveIfScriptUserInServer", ServerHopIndependent = true},
+			{Label = "Hop Server", ActionButton = true, Action = "ManualServerHop"},
+			{Label = "Kick & Hop During Minigame", ActionButton = true, Action = "ManualKickMinigame"},
+			{Label = "Reset All Settings", ActionButton = true, Action = "UndoAllSettings"},
 		}
 	)
 end)()
@@ -12606,6 +12911,26 @@ local function syncRightPanelGeometry(
 		px(2),
 		panelHeight
 		)
+	local simpleAutofarmMode = autoServerHopState.Utility.SimpleAutofarmEnabled == true
+	local simpleAutofarmBanner = autoServerHopState.RuntimeSimpleAutofarmModeBanner
+	local simpleAutofarmBannerHeight = simpleAutofarmMode
+		and px(isPhonePanelLayout() and 28 or 34)
+		or 0
+	local panelTopPadding = CONTENT_TOP_PADDING
+	if simpleAutofarmBanner and simpleAutofarmBanner.Parent then
+		simpleAutofarmBanner.Visible = simpleAutofarmMode
+		if simpleAutofarmMode then
+			local bannerInset = px(14)
+			simpleAutofarmBanner.Position = U2O(bannerInset, CONTENT_TOP_PADDING)
+			simpleAutofarmBanner.Size = U2O(
+				math.max(px(1), contentWidth - (bannerInset * 2)),
+				simpleAutofarmBannerHeight
+			)
+			local constraint = autoServerHopState.RuntimeSimpleAutofarmModeBannerTextConstraint
+			if constraint then constraint.MaxTextSize = isPhonePanelLayout() and 18 or 22 end
+			panelTopPadding += simpleAutofarmBannerHeight + CONTENT_ROW_GAP
+		end
+	end
 	rightContent.Position = U2O(
 		contentLeft,
 		contentTop
@@ -12725,9 +13050,9 @@ local function syncRightPanelGeometry(
 		or {
 		}
 	local columnBottom = {
-		[1] = CONTENT_TOP_PADDING
+		[1] = panelTopPadding
 			+ PANEL_SCROLL_EDGE_INSET,
-		[2] = CONTENT_TOP_PADDING
+		[2] = panelTopPadding
 			+ PANEL_SCROLL_EDGE_INSET
 	}
 	local maxPanelOrder = 0
@@ -12771,7 +13096,7 @@ local function syncRightPanelGeometry(
 				end
 			end
 		end
-		placeAutofarmPanelFirst("Simple Autofarm")
+		placeAutofarmPanelFirst("Simple Auto Farm")
 	end
 	for order = 1, maxPanelOrder do
 		for sourceColumn = 1, 2 do
@@ -12790,7 +13115,7 @@ local function syncRightPanelGeometry(
 		or math.max(columnBottom[1], columnBottom[2])
 	if panelContentBottom
 		> (
-		CONTENT_TOP_PADDING
+		panelTopPadding
 			+ PANEL_SCROLL_EDGE_INSET
 		) then
 		panelContentBottom -= CONTENT_ROW_GAP
@@ -12954,6 +13279,14 @@ if MINIGAME_MODE then
 						if type(accept) == "table" then
 							accept.Enabled = targeted
 							accept.Amount = 1
+						end
+						local offerConfig = autoOfferState[rarity]
+						if type(offerConfig) == "table" then
+							-- Lower rarities do not qualify Simple Autofarm by themselves, but
+							-- they still contribute their configured response/fallback whenever
+							-- they are offered alongside a qualifying rarity or token amount.
+							offerConfig.Enabled = true
+							offerConfig.AlongsideOnly = not targeted
 						end
 						autoCancelState.Targets[rarity] = targeted and true or nil
 						autoCancelState.Amounts[rarity] = 1
@@ -13754,6 +14087,7 @@ autoServerHopState.ConnectPersistent(UserInputService.InputBegan,
 		end
 	end)
 end)()
+-- [05] Trading / Inventory / Booth Automation -------------------------------
 -- Shared public-ownership snapshot. Auto Sit, Check-style ownership tests, and
 -- Regular Trade Offer and Auto Sit both consume this same resolver so their "Must Own"
 -- semantics cannot drift apart. Only information replicated by Roblox to this
@@ -14649,9 +14983,16 @@ if MINIGAME_MODE then
 				and (minigameQueuedAS() or minigamePlayingAS())
 		end
 		local function pausedAS()
+			local emptyEnabled = autoSitState
+				and autoSitState.EmptyTables
+				and autoSitState.EmptyTables.Enabled == true
+			local partnerEnabled = autoSitState
+				and autoSitState.OneOfTwo
+				and autoSitState.OneOfTwo.Enabled == true
 			return autoServerHopState.Utility.PauseScript == true
 				or autoServerHopState.Utility.PauseMinigameFeatures == true
 				or autoServerHopState.RuntimeServerHopPending == true
+				or (not emptyEnabled and not partnerEnabled)
 		end
 		local function stopMovementAS()
 			local _, humanoid, root = characterPartsAS()
@@ -14659,6 +15000,13 @@ if MINIGAME_MODE then
 				humanoid:Move(Vector3.zero, false)
 				if root then pcall(function() humanoid:MoveTo(root.Position) end) end
 			end
+		end
+		local function releaseMovementAS()
+			pcall(function()
+				RunServiceAS:UnbindFromRenderStep(
+					"__TUFFHUB_AUTOSIT_MOVE_" .. tostring(LocalPlayerAS.UserId)
+				)
+			end)
 		end
 		local function walkCommittedAS(candidate)
 			if (pausedAS() or minigamePlayingAS() or negotiationActiveAS()) then
@@ -15325,7 +15673,9 @@ if MINIGAME_MODE then
 			if not emptyEnabled and not partnerEnabled then return end
 			ensureAutoSitGameSpeedAS()
 			if routeBusyAS or (minigamePlayingAS() or negotiationActiveAS()) then
-				stopMovementAS()
+				if minigamePlayingAS() or negotiationActiveAS() then
+					releaseMovementAS()
+				end
 				return
 			end
 			local current = physicalCurrentTableAS()
@@ -15390,7 +15740,11 @@ if MINIGAME_MODE then
 				or autoServerHopState.RuntimeServerHopPending == true
 				or (minigamePlayingAS() or negotiationActiveAS())
 			) then
-				stopMovementAS()
+				if minigamePlayingAS() or negotiationActiveAS() then
+					releaseMovementAS()
+				else
+					stopMovementAS()
+				end
 			end
 			local emptyEnabled = autoSitState
 				and autoSitState.EmptyTables
@@ -17015,6 +17369,7 @@ if MINIGAME_MODE then
 	task.spawn(function()
 		if not screenGui.Parent then return end
 		local HttpServiceHP = HttpService
+		-- [06] Server Hop / Runtime Lifecycle ------------------------------------
 		local TeleportServiceHP = TeleportService
 		local RSHP = ReplicatedStorage
 		local LocalPlayerHP = Players.LocalPlayer
@@ -17135,6 +17490,7 @@ if MINIGAME_MODE then
 				return true
 			end
 			if now - lastNegotiationSeenAtHP < 1.00 then return true end
+			if tryIndexHP(active, {"queued"}) == true then return true end
 			if tryIndexHP(active, {"phase"}) ~= nil then return true end
 			if tryIndexHP(active, {"session", "gameId"}) ~= nil then return true end
 			if type(tryIndexHP(active, {"voting"})) == "table" then return true end
@@ -17157,6 +17513,7 @@ if MINIGAME_MODE then
 		end
 		local function hopPreparationBlockedHP(active, forcedManual)
 			if autoServerHopState.Utility.PauseScript == true then return true end
+			if autoServerHopState.RuntimeServerHopHardFreeze == true then return false end
 			local immediateManualKick = forcedManual == true
 				and autoServerHopState.RuntimeManualKickRequested == true
 			if not immediateManualKick and lifecycleBlockedHP(active or activeMinigameHP()) then return true end
@@ -17513,9 +17870,6 @@ if MINIGAME_MODE then
 			if os.clock() - serverCacheAtHP > PRESENCE_HOP_CACHE_MAX_AGE_HP then return nil end
 			return cachedChoiceHP()
 		end
-		local function presenceChoiceHP()
-			return freshPresenceChoiceHP() or cachedChoiceHP()
-		end
 		local function hopDifferentHP()
 			local collisionDueHP = presenceDueHP()
 			local manualDueHP = autoServerHopState.RuntimeManualServerHopRequested == true
@@ -17532,6 +17886,12 @@ if MINIGAME_MODE then
 					or os.clock() - startedAt >= 0.75
 			end
 			if not presenceWarmHP or hoppingHP or not scheduledDueHP() then return end
+			-- From this exact point onward the hop is committed. Do not let any
+			-- minigame/trade/autosit controller regain movement while HTTP selection
+			-- or TeleportService is still working.
+			autoServerHopState.RuntimeServerHopFreezeCFrame = nil
+			autoServerHopState.RuntimeServerHopHardFreeze = true
+			autoServerHopState.RuntimeServerHopPending = true
 			hoppingHP = true
 			stopForServerHopHP()
 			local checkServerDueHP = autoServerHopState.RuntimeCheckServerHopRequested == true
@@ -17568,7 +17928,10 @@ if MINIGAME_MODE then
 
 			local immediateManualKickHP = manualDueHP
 				and autoServerHopState.RuntimeManualKickRequested == true
-			if lifecycleBlockedHP(activeMinigameHP()) and not immediateManualKickHP then
+			if lifecycleBlockedHP(activeMinigameHP())
+				and not immediateManualKickHP
+				and autoServerHopState.RuntimeServerHopHardFreeze ~= true
+			then
 				hoppingHP = false
 				autoServerHopState.RuntimeServerHopPending = false
 				return
@@ -17577,7 +17940,10 @@ if MINIGAME_MODE then
 			recordRecentServerHP(originJobId)
 			recordRecentServerHP(chosen.id)
 			stopForServerHopHP()
-			if lifecycleBlockedHP(activeMinigameHP()) and not immediateManualKickHP then
+			if lifecycleBlockedHP(activeMinigameHP())
+				and not immediateManualKickHP
+				and autoServerHopState.RuntimeServerHopHardFreeze ~= true
+			then
 				hoppingHP = false
 				autoServerHopState.RuntimeServerHopPending = false
 				return
@@ -17614,6 +17980,8 @@ if MINIGAME_MODE then
 			task.wait(0.35)
 			if autoServerHopState.Utility.PauseScript == true then
 				autoServerHopState.RuntimeServerHopPending = false
+				autoServerHopState.RuntimeServerHopHardFreeze = false
+			autoServerHopState.RuntimeServerHopFreezeCFrame = nil
 				autoServerHopState.RuntimeScriptUserHopRequested = false
 				autoServerHopState.RuntimeCheckServerHopRequested = false
 				autoServerHopState.RuntimeManualServerHopRequested = false
@@ -17649,7 +18017,6 @@ if MINIGAME_MODE then
 				postWagerSettleUntilHP = math.max(postWagerSettleUntilHP, settleUntil)
 				hopNotBeforeHP = math.max(hopNotBeforeHP, settleUntil)
 			end
-			local lifecycleBlocked = lifecycleBlockedHP(active)
 			local manualHopDueEarlyHP = autoServerHopState.RuntimeManualServerHopRequested == true
 			local pausedHP = autoServerHopState.Utility.PauseScript == true
 				or autoServerHopState.Utility.PauseMinigameFeatures == true
@@ -17726,12 +18093,14 @@ if MINIGAME_MODE then
 				and autoServerHopState.RuntimeManualKickRequested == true
 			local startupDecisionPendingHP =
 				autoServerHopState.RuntimeStartupServerDecisionResolved ~= true
+			local startupHoldPendingHP = startupDecisionPendingHP
+				and not lifecycleNowBlockedHP
+			local departurePendingHP = (hopDueHP or hoppingHP)
+				and (not lifecycleNowBlockedHP or immediateManualKickPendingHP)
 			local pendingHopHP = autoServerHopState.Utility.PauseScript ~= true
-				and not wagerDelayActiveHP
 				and (
-					startupDecisionPendingHP
-					or ((hopDueHP or hoppingHP)
-						and (not lifecycleNowBlockedHP or immediateManualKickPendingHP))
+					autoServerHopState.RuntimeServerHopHardFreeze == true
+					or (not wagerDelayActiveHP and (startupHoldPendingHP or departurePendingHP))
 				)
 			autoServerHopState.RuntimeServerHopPending = pendingHopHP
 			if pendingHopHP then
@@ -18436,8 +18805,9 @@ if MINIGAME_MODE then
 			Celestial = 9,
 			Divine = 10,
 			Infinity = 11,
-			Paradox = 12,
-			Eternal = 13,
+			Meta = 12,
+			Paradox = 13,
+			Eternal = 14,
 		}
 		local tryIndexADI = safeTryIndex
 		local function refreshReplicatorsADI()
@@ -18533,20 +18903,28 @@ if MINIGAME_MODE then
 		local function boothPriorityBlocksDeleteADI()
 			local utility = autoServerHopState and autoServerHopState.Utility
 			if not utility or utility.AutoBooth ~= true then return false end
-			if autoServerHopState.RuntimeBoothMutationBusy == true
+			-- Only an active booth mutation/listing blocks deletion here. A stale
+			-- evaluation must reach confirmBoothPriorityBeforeDeleteADI(), otherwise
+			-- the confirmation path is unreachable and 95+ deletion can stall forever.
+			return autoServerHopState.RuntimeBoothMutationBusy == true
 				or autoServerHopState.RuntimeBoothListingsPending == true
-			then
-				return true
-			end
-			local evaluatedAt = tonumber(autoServerHopState.RuntimeBoothLastEvaluationAt) or 0
-			return evaluatedAt <= 0 or os.clock() - evaluatedAt > 1.25
 		end
 		local function confirmBoothPriorityBeforeDeleteADI()
 			local utility = autoServerHopState and autoServerHopState.Utility
 			if not utility or utility.AutoBooth ~= true then return true end
-			local requestedAt = os.clock()
-			autoServerHopState.RuntimeBoothLastEvaluationAt = 0
-			local deadline = requestedAt + 1.35
+			if autoServerHopState.RuntimeBoothMutationBusy == true
+				or autoServerHopState.RuntimeBoothListingsPending == true
+			then
+				return false
+			end
+			local started = os.clock()
+			local evaluatedAt = tonumber(autoServerHopState.RuntimeBoothLastEvaluationAt) or 0
+			-- Booth listings keep priority, but Auto Delete must not reset the booth
+			-- worker's timestamp every attempt; doing that can perpetually defer 95+ deletion.
+			if evaluatedAt > 0 and started - evaluatedAt <= 1.20 then
+				return true
+			end
+			local deadline = started + 1.25
 			repeat
 				if deleteBlockedADI() then return false end
 				if autoServerHopState.RuntimeBoothMutationBusy == true
@@ -18554,13 +18932,11 @@ if MINIGAME_MODE then
 				then
 					return false
 				end
-				local evaluatedAt = tonumber(autoServerHopState.RuntimeBoothLastEvaluationAt) or 0
-				if evaluatedAt >= requestedAt then
-					task.wait(0.05)
-					return autoServerHopState.RuntimeBoothMutationBusy ~= true
-						and autoServerHopState.RuntimeBoothListingsPending ~= true
+				evaluatedAt = tonumber(autoServerHopState.RuntimeBoothLastEvaluationAt) or 0
+				if evaluatedAt > 0 and evaluatedAt >= started - 0.10 then
+					return true
 				end
-				task.wait(0.05)
+				task.wait(0.04)
 			until os.clock() >= deadline
 			return false
 		end
@@ -19049,7 +19425,7 @@ if MINIGAME_MODE then
 			return false
 		end
 		while screenGui.Parent do
-			task.wait(1.00)
+			task.wait(0.30)
 			local state = autoServerHopState and autoServerHopState.Utility
 			if state and state.PauseScript == true then
 				task.wait(0.50)
@@ -19079,7 +19455,11 @@ if MINIGAME_MODE then
 			local deleteNonFirst = state.DeleteNonBrainrotsFirst == true
 			local deleteBrainrotFirst = state.DeleteWorstBrainrotsFirst == true
 			if not deleteNonFirst and not deleteBrainrotFirst then
-				continue
+				if state.SimpleAutofarmEnabled == true then
+					deleteNonFirst = true
+				else
+					continue
+				end
 			end
 			local brainrotId = worstBrainrotIdADI()
 			local junkIds = nonBrainrotIdsADI()
@@ -19088,6 +19468,8 @@ if MINIGAME_MODE then
 				or nil
 			local selectedId
 			local selectedKind
+			-- Either priority mode can delete both categories; the toggle only decides
+			-- which eligible category is tried first before falling through to the other.
 			if deleteNonFirst then
 				if junkId ~= nil then
 					selectedId = junkId
@@ -20709,22 +21091,7 @@ if MINIGAME_MODE then
                     and sourceCount > 0
                     and type(config) == "table"
                     and config.Enabled == true
-                    and (
-                        (
-                            utilityAO.SimpleAutofarmEnabled == true
-                            and (
-                                (
-                                    type(autoAcceptState[sourceRarity]) == "table"
-                                    and autoAcceptState[sourceRarity].Enabled == true
-                                )
-                                or autoServerHopState.RuntimeSimpleAutofarmTradeHasAcceptedBrainrot == true
-                            )
-                        )
-                        or (
-                            utilityAO.SimpleAutofarmEnabled ~= true
-                            and (config.AlongsideOnly ~= true or primaryQualifiedAO == true)
-                        )
-                    )
+                    and (config.AlongsideOnly ~= true or primaryQualifiedAO == true)
                 then
                     hasEnabledSource = true
                     config.OfferModeRarity = config.OfferModeRarity ~= false
@@ -22405,21 +22772,9 @@ if MINIGAME_MODE then
 		end
 	end)
 	task.spawn(function()
-		while screenGui.Parent do
-			local state = autoServerHopState and autoServerHopState.Utility
-			if state
-				and state.PauseScript ~= true
-				and state.PauseMinigameFeatures ~= true
-				and autoServerHopState.RuntimeServerHopPending ~= true
-				and (
-					state.AutoChooseGame == true
-					or state.AutoChooseRounds == true
-				)
-			then
-				break
-			end
-			task.wait(0.50)
-		end
+		-- Initialize the voting controller immediately. Waiting for the global startup
+		-- gate here meant attaching during an already-open vote could miss that vote
+		-- completely before this controller ever required the live replicator.
 		if not screenGui.Parent then return end
 		local RSVC = ReplicatedStorage
 		local ClientModulesVC = RSVC:WaitForChild("Client"):WaitForChild("Modules")
@@ -22449,6 +22804,7 @@ if MINIGAME_MODE then
 			["Battle Ship"]="Battleship",
 			["Knockout"]="Knockout",
 			["Football Draft"]="FootballDraft",
+			["Hot Potato"]="HotPotato",
 		}
 		local gameLabelVC = {}
 		for label, id in pairs(gameMapVC) do gameLabelVC[id] = label end
@@ -22461,19 +22817,24 @@ if MINIGAME_MODE then
 			refreshVC()
 			return tryVC(ActiveVC, {"voting"})
 		end
-		local function phaseVC()
-			refreshVC()
-			return tryVC(ActiveVC, {"phase"})
-		end
 		local function negotiationGuidVC()
 			refreshVC()
 			return tryVC(NegotiationVC, {"guid"})
 		end
-		local function fireVoteVC(gameId, bestOf)
+		local function votingAutomationBlockedVC()
 			if autoServerHopState.Utility.PauseScript == true
 				or autoServerHopState.Utility.PauseMinigameFeatures == true
-				or autoServerHopState.RuntimeServerHopPending == true
-			then return false end
+			then
+				return true
+			end
+			local blocked = autoServerHopState.AutomationBlocked
+			if type(blocked) == "function" then
+				return blocked() == true
+			end
+			return autoServerHopState.RuntimeServerHopPending == true
+		end
+		local function fireVoteVC(gameId, bestOf)
+			if votingAutomationBlockedVC() then return false end
 			if not VoteRemoteVC then return false end
 			return pcall(function()
 				VoteRemoteVC:FireServer(gameId, bestOf)
@@ -22484,7 +22845,6 @@ if MINIGAME_MODE then
 				or autoServerHopState.Utility.PauseMinigameFeatures == true
 				or generation ~= voteGenerationVC
 				or negotiationGuidVC() ~= nil
-				or phaseVC() == nil
 			then
 				return false, nil
 			end
@@ -22496,6 +22856,22 @@ if MINIGAME_MODE then
 			end
 			local liveRound = tonumber(voting.voteRound) or selectionRound
 			return liveRound == selectionRound, voting
+		end
+		local function remainingVoteTimeVC(voting)
+			if type(voting) ~= "table" then return nil end
+			local deadline = tonumber(voting.deadline)
+			if not deadline then return nil end
+			local ok, serverNow = pcall(workspace.GetServerTimeNow, workspace)
+			if not ok then return nil end
+			return math.max(0, deadline - serverNow)
+		end
+		local function attachSafeDelayVC(configuredDelay, voting)
+			local delayTime = math.clamp(tonumber(configuredDelay) or 0, 0, 10)
+			local remaining = remainingVoteTimeVC(voting)
+			if remaining ~= nil then
+				delayTime = math.min(delayTime, math.max(0, remaining - 0.60))
+			end
+			return delayTime
 		end
 		local function sendGameVC(generation, selectionRound, gameId)
 			local valid = stillVoteVC(generation, "game", selectionRound)
@@ -22528,18 +22904,15 @@ if MINIGAME_MODE then
 					end
 				end)
 			end
-			local waitSeconds = math.clamp(
-				tonumber(
-					selectionRound <= 1
-						and state.AutoChooseRound1Delay
-						or (
-							selectionRound == 2
-								and state.AutoChooseRound2Delay
-								or state.AutoChooseRound3Delay
-						)
-				) or 0,
-				0,
-				10
+			local waitSeconds = attachSafeDelayVC(
+				selectionRound <= 1
+					and state.AutoChooseRound1Delay
+					or (
+						selectionRound == 2
+							and state.AutoChooseRound2Delay
+							or state.AutoChooseRound3Delay
+					),
+				voting
 			)
 			task.spawn(function()
 				local started = os.clock()
@@ -22593,18 +22966,15 @@ if MINIGAME_MODE then
 			local function submit(choice)
 				sendRoundsVC(generation, selectionRound, choice)
 			end
-			local waitSeconds = math.clamp(
-				tonumber(
-					selectionRound <= 1
-						and state.AutoChooseRoundsRound1Delay
-						or (
-							selectionRound == 2
-								and state.AutoChooseRoundsRound2Delay
-								or state.AutoChooseRoundsRound3Delay
-						)
-				) or 0,
-				0,
-				10
+			local waitSeconds = attachSafeDelayVC(
+				selectionRound <= 1
+					and state.AutoChooseRoundsRound1Delay
+					or (
+						selectionRound == 2
+							and state.AutoChooseRoundsRound2Delay
+							or state.AutoChooseRoundsRound3Delay
+					),
+				voting
 			)
 			task.spawn(function()
 				local started = os.clock()
@@ -22646,11 +23016,13 @@ if MINIGAME_MODE then
 		end
 		while screenGui.Parent do
 			local state = autoServerHopState.Utility
+			local voting = votingVC()
+			local hasLiveVote = type(voting) == "table"
 			local votingEnabled = state.PauseScript ~= true
 				and state.PauseMinigameFeatures ~= true
-				and autoServerHopState.RuntimeServerHopPending ~= true
+				and not votingAutomationBlockedVC()
 				and (state.AutoChooseGame == true or state.AutoChooseRounds == true)
-			task.wait(votingEnabled and 0.18 or 0.75)
+			task.wait((votingEnabled or hasLiveVote) and 0.08 or 0.50)
 			if not votingEnabled then
 				if not voteSuspendedVC then
 					votePhaseSeenVC = nil
@@ -22670,9 +23042,8 @@ if MINIGAME_MODE then
 				continue
 			end
 			voteSuspendedVC = false
-			local phase = phaseVC()
-			local voting = votingVC()
-			if phase == nil or type(voting) ~= "table" then
+			voting = votingVC()
+			if type(voting) ~= "table" then
 				votePhaseSeenVC = nil
 				voteRoundSeenVC = nil
 				continue
@@ -22702,17 +23073,10 @@ if MINIGAME_MODE then
 			end
 		end
 	end)
+	-- [07] Minigame Logging & Shared Match Context ---------------------------
 	task.spawn(function()
-		while screenGui.Parent do
-			local state = autoServerHopState and autoServerHopState.Utility
-			if state
-				and state.PauseScript ~= true
-				and state.PrintWinsLossesToTerminal == true
-			then
-				break
-			end
-			task.wait(0.50)
-		end
+		-- Always maintain the current minigame/wager cache. KICKED and DISCONNECT
+		-- logs need the same wager data even when WIN/LOSS printing is disabled.
 		if not screenGui.Parent then return end
 		local RSLG = ReplicatedStorage
 		local function requireLG(moduleScript)
@@ -22740,6 +23104,8 @@ if MINIGAME_MODE then
 		local lastWagerLG
 		local queuedResultLG
 		local wasPlayingLG = false
+		local sharedLogContextLG = {}
+		rawset(_G, "__TUFFHUB_MINIGAME_LOG_CONTEXT", sharedLogContextLG)
 		local namesLG = {
 			PopcornBurst="Popcorn Burst",
 			ConnectFour="Connect Four",
@@ -22747,7 +23113,8 @@ if MINIGAME_MODE then
 			NumberGuess="Higher Or Lower",
 			FootballDraft="Football Draft",
 			Knockout="Knockout",
-			Battleship="Battle Ship",
+			Battleship="Battleship",
+			HotPotato="Hot Potato",
 		}
 		local configuredRarityLG = {}
 		if type(BrainrotsConfigLG) == "table" then
@@ -22760,6 +23127,7 @@ if MINIGAME_MODE then
 			ActiveLG = safeRepGet(ReplicatorLG, "ActiveMinigame") or ActiveLG
 		end
 		local function cacheContextLG()
+			refreshLG()
 			local gameId = tryLG(ActiveLG, {"session", "gameId"})
 			if type(gameId) == "string" and gameId ~= "" then
 				lastGameLG = gameId
@@ -22772,6 +23140,9 @@ if MINIGAME_MODE then
 			if type(wager) == "table" then
 				lastWagerLG = wager
 			end
+			sharedLogContextLG.GameId = lastGameLG
+			sharedLogContextLG.OpponentName = lastOpponentUserLG
+			sharedLogContextLG.Wager = lastWagerLG
 		end
 		local function itemNameLG(item)
 			if type(item) ~= "table" then return nil end
@@ -22803,11 +23174,11 @@ if MINIGAME_MODE then
 			end
 			return itemNameLG(item) ~= nil
 		end
-		local function appendWagerLG(parts, won, wager)
+		local function appendWagerLG(parts, useOpponentWager, wager)
 			wager = type(wager) == "table" and wager or {}
-			local currency = tonumber(won and wager.oppCurrency or wager.myCurrency) or 0
+			local currency = tonumber(useOpponentWager and wager.oppCurrency or wager.myCurrency) or 0
 			parts[#parts + 1] = "Tokens: " .. tostring(math.floor(currency))
-			local items = won and wager.oppItems or wager.myItems
+			local items = useOpponentWager and wager.oppItems or wager.myItems
 			if type(items) == "table" then
 				for _, item in pairs(items) do
 					if isBrainrotLG(item) then
@@ -22816,6 +23187,21 @@ if MINIGAME_MODE then
 					end
 				end
 			end
+		end
+		sharedLogContextLG.Refresh = cacheContextLG
+		sharedLogContextLG.PrintEvent = function(eventName, useOpponentWager, gameIdOverride, opponentNameOverride)
+			cacheContextLG()
+			local gameId = type(gameIdOverride) == "string" and gameIdOverride ~= "" and gameIdOverride or lastGameLG
+			local opponentName = opponentNameOverride or lastOpponentUserLG or "Unknown"
+			local parts = {
+				tostring(eventName or "EVENT"),
+				"User: " .. tostring(opponentName),
+				"Game: " .. tostring(namesLG[gameId] or gameId or "Unknown"),
+			}
+			appendWagerLG(parts, useOpponentWager == true, lastWagerLG)
+			print(table.concat(parts, " | "))
+			print(string.rep("\\", 10))
+			return true
 		end
 		local function printResultLG(result)
 			if type(result) ~= "table" then return end
@@ -22832,14 +23218,7 @@ if MINIGAME_MODE then
 				and autoServerHopState.Utility.PrintWinsLossesToTerminal == true
 			then
 				local won = winner == 1
-				local parts = {
-					won and "WIN" or "LOSS",
-					"User: " .. tostring(lastOpponentUserLG or "Unknown"),
-					"Game: " .. tostring(namesLG[lastGameLG] or lastGameLG or "Unknown"),
-				}
-				appendWagerLG(parts, won, lastWagerLG)
-				print(table.concat(parts, " | "))
-				print(string.rep("\\", 10))
+				sharedLogContextLG.PrintEvent(won and "WIN" or "LOSS", won, lastGameLG, lastOpponentUserLG)
 			end
 		end
 		local function bindObserverLG()
@@ -23813,6 +24192,7 @@ if MINIGAME_MODE then
 		end
 	end)
 end
+-- [08] Minigame Autoplay Controllers ----------------------------------------
 if MINIGAME_MODE then
 task.spawn(function()
 while screenGui.Parent do
@@ -23822,7 +24202,10 @@ while screenGui.Parent do
     if type(utility) == "table"
         and utility.PauseScript ~= true
         and utility.PauseMinigameFeatures ~= true
-        and autoServerHopState.RuntimeServerHopPending ~= true
+        -- Build the universal minigame controller as soon as autoplay is enabled.
+        -- A normal pending/startup server-hop decision may block actions, but it must
+        -- never prevent the controller from existing when a vote transitions into an
+        -- arena. Hard-freeze/pause checks remain inside the per-game action gates.
         and utility.AutoPlayMaster == true
         and type(flags) == "table"
     then
@@ -23862,17 +24245,34 @@ local MINIGAME_AUTOPLAY_KEY = "__TUFFHUB_MINIGAME_AUTOPLAY"
 local function minigameAutoplayEnabled(id)
     local flags = rawget(_G, MINIGAME_AUTOPLAY_KEY)
     local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
-    return type(utility) == "table"
-        and utility.PauseScript ~= true
-        and utility.PauseMinigameFeatures ~= true
-        and autoServerHopState.RuntimeServerHopPending ~= true
-        and utility.AutoPlayMaster == true
-        and type(flags) == "table"
-        and flags[id] == true
+    if type(utility) ~= "table"
+        or utility.PauseScript == true
+        or utility.PauseMinigameFeatures == true
+        or utility.AutoPlayMaster ~= true
+        or type(flags) ~= "table"
+        or flags[id] ~= true
+        or autoServerHopState.RuntimeServerHopHardFreeze == true
+    then
+        return false
+    end
+
+    -- A queued/startup hop is not allowed to disable an arena that is already live.
+    -- This is deliberately resolved from ActiveMinigame itself instead of the startup
+    -- bookkeeping so executing during game/round selection cannot miss the transition.
+    local liveId
+    pcall(function()
+        liveId = ActiveMinigame:TryIndex({"session", "gameId"})
+    end)
+    if liveId == id then
+        return true
+    end
+    return autoServerHopState.AutomationBlocked() ~= true
 end
 local scriptEnabled = true
-local GLOBAL_KEY = "__TSUNAMI_UNIVERSAL_SMART_MINIGAMES_V13"
+local GLOBAL_KEY = "__TSUNAMI_UNIVERSAL_SMART_MINIGAMES_V14"
 local oldController = rawget(_G, GLOBAL_KEY)
+    or rawget(_G, "__TSUNAMI_UNIVERSAL_SMART_MINIGAMES_V13")
+    or rawget(_G, "__TSUNAMI_UNIVERSAL_SMART_MINIGAMES_V12")
     or rawget(_G, "__TSUNAMI_UNIVERSAL_SMART_MINIGAMES_V11")
     or rawget(_G, "__TSUNAMI_UNIVERSAL_SMART_MINIGAMES_V10")
     or rawget(_G, "__TSUNAMI_UNIVERSAL_SMART_MINIGAMES_V9")
@@ -24082,6 +24482,10 @@ function controller:Destroy()
     if self.destroyed then return end
     self.destroyed = true
     scriptEnabled = false
+    if type(self.HotPotatoCleanup) == "function" then
+        pcall(self.HotPotatoCleanup)
+        self.HotPotatoCleanup = nil
+    end
     local popController = rawget(_G, "__TSUNAMI_POPCORN_PERFECT_V17")
         or rawget(_G, "__TSUNAMI_POPCORN_PERFECT_V16")
     if popController and type(popController.Destroy) == "function" then
@@ -24092,7 +24496,6 @@ function controller:Destroy()
     end
 end
 task.spawn(function()
-local Stats = game:GetService("Stats")
 for _, key in ipairs({
     "__TSUNAMI_PERFECT_POPCORN",
     "__TSUNAMI_POPCORN_PERFECT_V2",
@@ -24244,7 +24647,7 @@ local function pushSample(list, value, limit)
 end
 local function readDataPingSeconds()
     local ok, value = pcall(function()
-        local network = Stats:FindFirstChild("Network")
+        local network = autoServerHopState.RuntimeStatsService:FindFirstChild("Network")
         local serverStats = network and network:FindFirstChild("ServerStatsItem")
         local dataPing = serverStats and serverStats:FindFirstChild("Data Ping")
         return dataPing and dataPing:GetValue()
@@ -31113,6 +31516,1265 @@ task.spawn(function()
     releaseFleetIndex()
     saveBattleLearning(true)
 end)
+-- [09] Hot Potato Handoff Controller ----------------------------------------
+-- Hot Potato: manual handoff plus final-second loss prevention.
+-- Automatic pursuit/evasion, pathfinding, jumping, ladder logic, speed overrides,
+-- and mount-specific movement handling are intentionally disabled in this build.
+-- The configurable manual give-back key performs a one-shot Handle handoff only.
+-- Always Give Back is an optional immediate-return mode whenever we receive the Tool.
+-- The normal last-second handoff remains part of Hot Potato autoplay regardless of that
+-- toggle; Auto Leave On Loss remains an independent terminal fallback.
+-- Neither player nor Hot Potato Handle is teleported by the handoff system.
+do
+    local GLOBAL_KEY = "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2"
+    local previous = rawget(_G, GLOBAL_KEY)
+    if type(previous) == "table" and type(previous.Destroy) == "function" then
+        pcall(previous.Destroy)
+    end
+
+    local PlayersHP = game:GetService("Players")
+    local ReplicatedStorageHP = game:GetService("ReplicatedStorage")
+    local RunServiceHP = game:GetService("RunService")
+    local UserInputServiceHP = game:GetService("UserInputService")
+    local WorkspaceHP = game:GetService("Workspace")
+    local localPlayerHP = PlayersHP.LocalPlayer
+    local state = {
+        busy = false,
+        destroyed = false,
+        inputConnection = nil,
+        holderConnection = nil,
+        destroyConnection = nil,
+        replicator = nil,
+        replicatorRetryAt = 0,
+        localHolding = false,
+        holderChangedAt = -math.huge,
+        lastAttemptStartedAt = -math.huge,
+        lastAttemptSentAt = -math.huge,
+        lastConfirmedTransferAt = -math.huge,
+        lastAttemptOpponentUserId = nil,
+        cachedOpponentUserId = nil,
+        lastLatencyRecordedAttemptAt = -math.huge,
+        transferLatencyEma = nil,
+        transferLatencyJitter = 0,
+        transferLatencySamples = 0,
+        pendingFinalGeneration = 0,
+        pendingFinalFireAt = nil,
+        pendingFinalDeadlineAt = nil,
+        pendingFinalPersistent = false,
+        finalFallbackRequired = false,
+        finalFallbackAt = -math.huge,
+        finalFallbackExpiresAt = -math.huge,
+        finalFallbackReason = nil,
+        finalTransferWindowViable = false,
+        -- Automatic final-second handoff stays armed through the endgame window.
+        -- If the opponent returns the same Tool during that window, the Handle is
+        -- immediately driven back into them and fresh contacts continue until transfer.
+        persistentArmed = false,
+        persistentUntilAt = -math.huge,
+        persistentConnection = nil,
+        persistentLastSeenAt = -math.huge,
+        mobileButton = nil,
+        mobileButtonActivatedConnection = nil,
+        mobileButtonVisibilityConnection = nil,
+        returnShieldActive = false,
+        returnShieldTool = nil,
+        returnShieldHandle = nil,
+        returnShieldHandleCanTouch = nil,
+        returnShieldHandleCanQuery = nil,
+        returnShieldLocalParts = {},
+        returnShieldLastOpponentUserId = nil,
+        returnShieldConnection = nil,
+        alwaysGiveBackConnection = nil,
+        alwaysGiveBackCharacterAddedConnection = nil,
+        alwaysGiveBackChildAddedConnection = nil,
+        arenaLifecycleConnection = nil,
+        lastArenaActive = localPlayerHP and localPlayerHP:GetAttribute("InArena") == true or false,
+        roundGeneration = 0,
+        workerSerial = 0,
+        activeWorkerSerial = nil,
+    }
+    rawset(_G, GLOBAL_KEY, state)
+    -- The old movement controller exposed this runtime table to loss-prevention code.
+    -- Clear it so no stale route ETA or holder state can survive into manual mode.
+    rawset(_G, "__TSUNAMI_HOT_POTATO_RUNTIME_V1", nil)
+
+    local function hotPotatoTool(character)
+        if not character then return nil end
+        local direct = character:FindFirstChild("Hot Potato")
+        if direct and direct:IsA("Tool") then return direct end
+        for _, child in ipairs(character:GetChildren()) do
+            if child:IsA("Tool") and string.lower(child.Name) == "hot potato" then
+                return child
+            end
+        end
+        return nil
+    end
+
+    local function hotPotatoDisplayedTime(tool)
+        if not tool then return nil end
+        local handle = tool:FindFirstChild("Handle")
+        if not handle then return nil end
+        for _, descendant in ipairs(handle:GetDescendants()) do
+            if descendant:IsA("TextLabel") or descendant:IsA("TextButton") then
+                local raw = tostring(descendant.Text or "")
+                local value = tonumber(raw) or tonumber(string.match(raw, "%-?%d+%.?%d*"))
+                if value ~= nil and (descendant.Name == "TimeLeft" or value >= 0) then
+                    return value
+                end
+            end
+        end
+        return nil
+    end
+
+    local function validOpponent(player)
+        if typeof(player) ~= "Instance" or not player:IsA("Player") or player == localPlayerHP then
+            return false
+        end
+        local character = player.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        return humanoid ~= nil and humanoid.Health > 0 and root ~= nil
+    end
+
+    local function playerFromIdentity(value, seen, depth)
+        if validOpponent(value) then return value end
+        if depth <= 0 then return nil end
+        if typeof(value) == "Instance" then
+            if value:IsA("Model") then
+                local player = PlayersHP:GetPlayerFromCharacter(value)
+                return validOpponent(player) and player or nil
+            end
+            return nil
+        end
+        if type(value) == "number" then
+            local player = PlayersHP:GetPlayerByUserId(math.floor(value))
+            return validOpponent(player) and player or nil
+        end
+        if type(value) == "string" then
+            local numericId = tonumber(value)
+            if numericId then
+                local player = PlayersHP:GetPlayerByUserId(math.floor(numericId))
+                if validOpponent(player) then return player end
+            end
+            local player = PlayersHP:FindFirstChild(value)
+            return validOpponent(player) and player or nil
+        end
+        if type(value) ~= "table" then return nil end
+        seen = seen or {}
+        if seen[value] then return nil end
+        seen[value] = true
+        for _, key in ipairs({
+            "opponent", "opponentPlayer", "opponentUserId", "opponentId",
+            "player", "Player", "userId", "UserId", "playerId", "PlayerId",
+            "username", "Username", "name", "Name",
+        }) do
+            local child = rawget(value, key)
+            if child ~= nil then
+                local player = playerFromIdentity(child, seen, depth - 1)
+                if player then return player end
+            end
+        end
+        for key, child in pairs(value) do
+            if key ~= "tableModel" and key ~= "model" then
+                local player = playerFromIdentity(child, seen, depth - 1)
+                if player then return player end
+            end
+        end
+        return nil
+    end
+
+    local function getReplicator()
+        if state.replicator then return state.replicator end
+        if os.clock() < state.replicatorRetryAt then return nil end
+        state.replicatorRetryAt = os.clock() + 1
+        local module = ReplicatedStorageHP:FindFirstChild("Client")
+        module = module and module:FindFirstChild("Modules")
+        module = module and module:FindFirstChild("ReplicatorClient")
+        if not module then return nil end
+        local ok, result = pcall(require, module)
+        if ok and result then
+            state.replicator = result
+            return result
+        end
+        return nil
+    end
+
+    local function repGet(rep, key)
+        if not rep or type(rep.get) ~= "function" then return nil end
+        local ok, value = pcall(rep.get, key)
+        return ok and value or nil
+    end
+
+    local function repIndex(root, path)
+        if not root or type(root.TryIndex) ~= "function" then return nil end
+        local ok, value = pcall(root.TryIndex, root, path)
+        return ok and value or nil
+    end
+
+    local function arenaModelFor(root, character)
+        if not root then return nil end
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = character and {character} or {}
+        params.IgnoreWater = true
+        local hit = WorkspaceHP:Raycast(
+            root.Position + Vector3.new(0, 4, 0),
+            Vector3.new(0, -32, 0),
+            params
+        )
+        local node = hit and hit.Instance or nil
+        for _ = 1, 14 do
+            if not node or node == WorkspaceHP then break end
+            if node:IsA("Model") and node:FindFirstChild("Center") and node:FindFirstChild("Spawns") then
+                return node
+            end
+            node = node.Parent
+        end
+        return nil
+    end
+
+    local function resolveOpponent()
+        -- Never trust a cached opponent before checking the live minigame. The same
+        -- TuffHub execution can play multiple Hot Potato matches in one server, and a
+        -- still-alive player from match 1 must not remain the Q/final-handoff target in
+        -- match 2.
+        local rep = getReplicator()
+        if rep then
+            local active = repGet(rep, "ActiveMinigame")
+            local opponent = playerFromIdentity(repIndex(active, {"session", "private", "opponent"}), nil, 4)
+                or playerFromIdentity(repIndex(active, {"session", "private"}), nil, 3)
+                or playerFromIdentity(repIndex(active, {"session"}), nil, 2)
+            if opponent then
+                state.cachedOpponentUserId = opponent.UserId
+                return opponent
+            end
+
+            -- Negotiation is useful before the arena fully materializes, but it is only
+            -- a fallback. During an active arena match the exact arena/current-session
+            -- resolution below is safer than an old negotiation object.
+            if localPlayerHP:GetAttribute("InArena") ~= true then
+                local negotiation = repGet(rep, "ActiveNegotiation")
+                opponent = playerFromIdentity(repIndex(negotiation, {"player2", "player"}), nil, 3)
+                    or playerFromIdentity(repIndex(negotiation, {"player1", "player"}), nil, 3)
+                if opponent then
+                    state.cachedOpponentUserId = opponent.UserId
+                    return opponent
+                end
+            end
+        end
+
+        -- Last-resort resolution stays restricted to the exact cloned arena containing
+        -- the local character. It never chooses a merely-nearby player from another match.
+        local character = localPlayerHP and localPlayerHP.Character
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        if not root or localPlayerHP:GetAttribute("InArena") ~= true then return nil end
+        local arena = arenaModelFor(root, character)
+        if not arena then return nil end
+        local okBounds, arenaCF, arenaSize = pcall(arena.GetBoundingBox, arena)
+        if not okBounds then return nil end
+        local candidate
+        for _, player in ipairs(PlayersHP:GetPlayers()) do
+            if validOpponent(player) and player:GetAttribute("InArena") == true then
+                local otherRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+                if otherRoot then
+                    local relative = arenaCF:PointToObjectSpace(otherRoot.Position)
+                    local inside = math.abs(relative.X) <= arenaSize.X * 0.5 + 8
+                        and math.abs(relative.Y) <= arenaSize.Y * 0.5 + 20
+                        and math.abs(relative.Z) <= arenaSize.Z * 0.5 + 8
+                    if inside then
+                        if candidate then return nil end
+                        candidate = player
+                    end
+                end
+            end
+        end
+        if candidate then
+            state.cachedOpponentUserId = candidate.UserId
+            return candidate
+        end
+
+        -- Only after both live session and exact-arena resolution fail may we use the
+        -- cache. ResetRound clears this cache at every Hot Potato round/session boundary.
+        local cachedUserId = tonumber(state.cachedOpponentUserId)
+        if cachedUserId then
+            local cachedPlayer = PlayersHP:GetPlayerByUserId(math.floor(cachedUserId))
+            if validOpponent(cachedPlayer) then
+                return cachedPlayer
+            end
+            state.cachedOpponentUserId = nil
+        end
+        return nil
+    end
+
+    local function touchFunction()
+        local fireTouch = rawget(_G, "firetouchinterest")
+        if type(fireTouch) ~= "function" and getgenv then
+            pcall(function()
+                fireTouch = rawget(getgenv(), "firetouchinterest")
+            end)
+        end
+        return type(fireTouch) == "function" and fireTouch or nil
+    end
+
+    local function localCharacterBaseParts(character)
+        local parts = {}
+        for _, object in ipairs(character and character:GetDescendants() or {}) do
+            if object:IsA("BasePart") then
+                parts[#parts + 1] = object
+            end
+        end
+        return parts
+    end
+
+    local function clearReturnShield()
+        if state.returnShieldHandle and state.returnShieldHandle.Parent then
+            if state.returnShieldHandleCanTouch ~= nil then
+                pcall(function() state.returnShieldHandle.CanTouch = state.returnShieldHandleCanTouch end)
+            end
+            if state.returnShieldHandleCanQuery ~= nil then
+                pcall(function() state.returnShieldHandle.CanQuery = state.returnShieldHandleCanQuery end)
+            end
+        end
+        for part, previousCanTouch in pairs(state.returnShieldLocalParts or {}) do
+            if part and part.Parent and previousCanTouch ~= nil then
+                pcall(function() part.CanTouch = previousCanTouch end)
+            end
+        end
+        state.returnShieldLocalParts = {}
+        state.returnShieldActive = false
+        state.returnShieldTool = nil
+        state.returnShieldHandle = nil
+        state.returnShieldHandleCanTouch = nil
+        state.returnShieldHandleCanQuery = nil
+        state.returnShieldLastOpponentUserId = nil
+    end
+
+    local function armReturnShield(tool, opponent)
+        if not tool or not tool.Parent or not validOpponent(opponent) then return false end
+        local handle = tool:FindFirstChild("Handle")
+        local localCharacter = localPlayerHP and localPlayerHP.Character
+        if not handle or not handle:IsA("BasePart") or not localCharacter then return false end
+        if state.returnShieldTool ~= tool then
+            clearReturnShield()
+            state.returnShieldTool = tool
+            state.returnShieldHandle = handle
+            state.returnShieldHandleCanTouch = handle.CanTouch
+            state.returnShieldHandleCanQuery = handle.CanQuery
+            state.returnShieldLastOpponentUserId = opponent.UserId
+            for _, part in ipairs(localCharacterBaseParts(localCharacter)) do
+                state.returnShieldLocalParts[part] = part.CanTouch
+            end
+        end
+        state.returnShieldActive = true
+        -- The server's transfer trigger is Handle.Touched. CanTouch=false on either
+        -- side prevents a fresh touch edge when the property is authoritative; keeping
+        -- both sides suppressed locally also prevents client physics from manufacturing
+        -- a contact that can be replicated back during ownership handoff.
+        pcall(function()
+            handle.CanTouch = false
+            handle.CanQuery = false
+        end)
+        for part in pairs(state.returnShieldLocalParts) do
+            if part and part.Parent then
+                pcall(function() part.CanTouch = false end)
+            end
+        end
+        local fireTouch = touchFunction()
+        if fireTouch then
+            for part in pairs(state.returnShieldLocalParts) do
+                if part and part.Parent then
+                    pcall(fireTouch, handle, part, 1)
+                end
+            end
+        end
+        return true
+    end
+
+    local function syntheticTouchPhase(handle, character, touching)
+        if not handle or not character then return false end
+        local fireTouch = touchFunction()
+        if not fireTouch then return false end
+        local phase = touching == true and 0 or 1
+        local fired = false
+        for _, name in ipairs({"HumanoidRootPart", "UpperTorso", "Torso", "LowerTorso", "Head"}) do
+            local part = character:FindFirstChild(name)
+            if part and part:IsA("BasePart") then
+                local ok = pcall(fireTouch, handle, part, phase)
+                fired = fired or ok
+            end
+        end
+        return fired
+    end
+
+    local function stillHolding(tool, character)
+        return tool ~= nil
+            and tool.Parent == character
+            and character ~= nil
+            and hotPotatoTool(character) == tool
+    end
+
+    local function currentPingSeconds()
+        local pingSeconds = 0.08
+        pcall(function()
+            local item = autoServerHopState.RuntimeStatsService.Network.ServerStatsItem["Data Ping"]
+            local value = item and item:GetValue()
+            if tonumber(value) then
+                pingSeconds = math.clamp(tonumber(value) / 1000, 0.015, 0.35)
+            end
+        end)
+        return pingSeconds
+    end
+
+    local function recordConfirmedTransfer(confirmedAt)
+        confirmedAt = tonumber(confirmedAt) or os.clock()
+        state.lastConfirmedTransferAt = math.max(
+            tonumber(state.lastConfirmedTransferAt) or -math.huge,
+            confirmedAt
+        )
+        local sentAt = tonumber(state.lastAttemptSentAt) or -math.huge
+        if sentAt <= (tonumber(state.lastLatencyRecordedAttemptAt) or -math.huge)
+            or confirmedAt < sentAt
+        then
+            return
+        end
+        local sample = confirmedAt - sentAt
+        if sample < 0.005 or sample > 0.75 then return end
+        local previous = tonumber(state.transferLatencyEma)
+        if not previous then
+            state.transferLatencyEma = sample
+            state.transferLatencyJitter = 0
+        else
+            local errorMagnitude = math.abs(sample - previous)
+            state.transferLatencyEma = previous * 0.68 + sample * 0.32
+            state.transferLatencyJitter = (tonumber(state.transferLatencyJitter) or 0) * 0.72
+                + errorMagnitude * 0.28
+        end
+        state.transferLatencySamples = (tonumber(state.transferLatencySamples) or 0) + 1
+        state.lastLatencyRecordedAttemptAt = sentAt
+    end
+
+    local function predictedConfirmationLatency(pingSeconds)
+        pingSeconds = tonumber(pingSeconds) or currentPingSeconds()
+        local baseline = pingSeconds + 0.018
+        local learned = tonumber(state.transferLatencyEma)
+        if learned then
+            -- Keep only a small measured-jitter allowance. This is the latest send
+            -- point that still normally leaves time for authoritative reparenting to
+            -- replicate back before the zero-edge fallback decision.
+            learned = learned
+                + (tonumber(state.transferLatencyJitter) or 0) * 1.35
+                + 0.004
+            baseline = math.max(pingSeconds + 0.006, learned)
+        end
+        return math.clamp(baseline, 0.025, 0.40)
+    end
+
+    local function waitUntilLatestSafeFrame(targetAt)
+        targetAt = tonumber(targetAt)
+        if not targetAt then return end
+        local frameEstimate = 1 / 60
+        while not state.destroyed do
+            local now = os.clock()
+            local remaining = targetAt - now
+            if remaining <= 0 then return end
+            if remaining > 0.06 then
+                task.wait(math.max(0.001, remaining - 0.035))
+            else
+                -- Fire on the last scheduler frame that is expected to occur before
+                -- the requested timestamp. Roblox cannot guarantee sub-frame execution,
+                -- so this avoids crossing the deadline while minimizing early lead.
+                if remaining <= math.max(0.001, frameEstimate * 0.60) then
+                    return
+                end
+                local dt = RunServiceHP.Heartbeat:Wait()
+                if tonumber(dt) then
+                    frameEstimate = math.clamp(frameEstimate * 0.65 + dt * 0.35, 1 / 240, 1 / 20)
+                end
+            end
+        end
+    end
+
+    local function fireTouchBurst(handle, opponentCharacter, burstCount)
+        if not handle or not opponentCharacter then return false end
+        burstCount = math.max(1, math.floor(tonumber(burstCount) or 1))
+        local fired = false
+        for _ = 1, burstCount do
+            fired = syntheticTouchPhase(handle, opponentCharacter, true) or fired
+            syntheticTouchPhase(handle, opponentCharacter, false)
+        end
+        return fired
+    end
+
+    local function finalFallbackCutoffReached()
+        if state.finalFallbackRequired ~= true then return false end
+        local allowAt = tonumber(state.finalFallbackAt)
+        if not allowAt then return false end
+        -- The leave controller intentionally uses a short multi-Heartbeat possession
+        -- confirmation guard before committing Kick. Keep the transfer pump alive for
+        -- that same guard instead of throwing those final physics frames away. If a
+        -- pass lands during this tail, the leave controller sees ownership change and
+        -- cancels the pending kick.
+        local transferTail = math.clamp(
+            0.060 + currentPingSeconds() * 0.55,
+            0.070,
+            0.230
+        )
+        return os.clock() >= allowAt + transferTail
+    end
+
+    local function immediateManualTouchBurst()
+        if state.destroyed or not localPlayerHP or finalFallbackCutoffReached() then return false end
+        local character = localPlayerHP.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local tool = hotPotatoTool(character)
+        local handle = tool and tool:FindFirstChild("Handle")
+        if not character or not humanoid or humanoid.Health <= 0
+            or not tool or not handle or not handle:IsA("BasePart")
+        then
+            return false
+        end
+        local opponent = resolveOpponent()
+        local opponentCharacter = opponent and opponent.Character
+        local opponentHumanoid = opponentCharacter and opponentCharacter:FindFirstChildOfClass("Humanoid")
+        local opponentRoot = opponentCharacter and opponentCharacter:FindFirstChild("HumanoidRootPart")
+        if not validOpponent(opponent) or not opponentHumanoid
+            or opponentHumanoid.Health <= 0 or not opponentRoot
+        then
+            return false
+        end
+
+        -- No Handle CFrame writes, joint detaches, velocity changes, or visible motion.
+        -- Fire several fresh touch begin/end edges synchronously in the exact input
+        -- call stack so Q/mobile has no scheduler wait before the first attempt.
+        pcall(function() handle.CanTouch = true end)
+        local fired = fireTouchBurst(handle, opponentCharacter, 4)
+        state.lastAttemptSentAt = os.clock()
+        state.lastAttemptOpponentUserId = opponent.UserId
+        return fired == true
+    end
+
+    local function handoffNow(finalSecondFast, requestedFireAt, requestedDeadlineAt, persistentMode)
+        if state.destroyed or not localPlayerHP or finalFallbackCutoffReached() then return false end
+        local roundGeneration = tonumber(state.roundGeneration) or 0
+
+        -- Manual input always gets an immediate synchronous attempt, even if another
+        -- retry worker is already active. No visual Handle movement is performed.
+        local immediateManualSent = false
+        if finalSecondFast ~= true then
+            immediateManualSent = immediateManualTouchBurst()
+        end
+
+        if state.busy then
+            if finalSecondFast == true then
+                -- A stale/manual worker must never block the terminal pass. Emit a full
+                -- synchronous burst now, then queue the persistent final worker behind it.
+                immediateManualTouchBurst()
+                state.pendingFinalGeneration = (tonumber(state.pendingFinalGeneration) or 0) + 1
+                local generation = state.pendingFinalGeneration
+                state.pendingFinalFireAt = tonumber(requestedFireAt)
+                state.pendingFinalDeadlineAt = tonumber(requestedDeadlineAt)
+                state.pendingFinalPersistent = persistentMode == true
+                task.spawn(function()
+                    while not state.destroyed
+                        and state.roundGeneration == roundGeneration
+                        and state.busy
+                        and state.pendingFinalGeneration == generation
+                    do
+                        local deadlineAt = tonumber(state.pendingFinalDeadlineAt)
+                        if deadlineAt and os.clock() >= deadlineAt then return end
+                        RunServiceHP.Heartbeat:Wait()
+                    end
+                    if state.destroyed
+                        or state.roundGeneration ~= roundGeneration
+                        or state.pendingFinalGeneration ~= generation
+                        or state.busy
+                    then return end
+                    local deadlineAt = tonumber(state.pendingFinalDeadlineAt)
+                    if finalFallbackCutoffReached() then return end
+                    if deadlineAt and os.clock() >= deadlineAt then return end
+                    handoffNow(
+                        true,
+                        state.pendingFinalFireAt,
+                        deadlineAt,
+                        state.pendingFinalPersistent == true
+                    )
+                end)
+                return true
+            end
+            return immediateManualSent
+        end
+
+        local character = localPlayerHP.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local tool = hotPotatoTool(character)
+        local handle = tool and tool:FindFirstChild("Handle")
+        if not character or not humanoid or humanoid.Health <= 0
+            or not tool or not handle or not handle:IsA("BasePart")
+        then
+            return immediateManualSent
+        end
+
+        if state.localHolding ~= true then
+            state.localHolding = true
+            state.holderChangedAt = os.clock()
+        end
+        state.busy = true
+        state.workerSerial = (tonumber(state.workerSerial) or 0) + 1
+        local workerSerial = state.workerSerial
+        state.activeWorkerSerial = workerSerial
+        local workerRoundGeneration = tonumber(state.roundGeneration) or 0
+        state.lastAttemptStartedAt = os.clock()
+
+        task.spawn(function()
+            local savedCanTouch = handle.CanTouch
+            local ok = pcall(function()
+                local opponent = resolveOpponent()
+                local opponentCharacter = opponent and opponent.Character
+                local opponentHumanoid = opponentCharacter and opponentCharacter:FindFirstChildOfClass("Humanoid")
+                local opponentRoot = opponentCharacter and opponentCharacter:FindFirstChild("HumanoidRootPart")
+
+                -- Final-second calls can be scheduled for an exact future edge. There
+                -- is still no artificial holder-age/cooldown wait.
+                local attemptStartAt = finalSecondFast == true
+                    and (tonumber(requestedFireAt) or os.clock())
+                    or os.clock()
+                if os.clock() < attemptStartAt then
+                    waitUntilLatestSafeFrame(attemptStartAt)
+                end
+                if state.roundGeneration ~= workerRoundGeneration then return end
+                -- The hard fallback cutoff has absolute priority over every handoff mode.
+                -- Once reached, no manual/automatic retry is allowed to consume another frame.
+                if finalFallbackCutoffReached() or not stillHolding(tool, character) then return end
+
+                local resolveDeadline = tonumber(requestedDeadlineAt)
+                    or (os.clock() + (finalSecondFast == true and 0.35 or 0.12))
+                while not state.destroyed
+                    and state.roundGeneration == workerRoundGeneration
+                    and not finalFallbackCutoffReached()
+                    and stillHolding(tool, character)
+                    and os.clock() < resolveDeadline
+                    and (not validOpponent(opponent) or not opponentHumanoid
+                        or opponentHumanoid.Health <= 0 or not opponentRoot)
+                do
+                    opponent = resolveOpponent()
+                    opponentCharacter = opponent and opponent.Character
+                    opponentHumanoid = opponentCharacter and opponentCharacter:FindFirstChildOfClass("Humanoid")
+                    opponentRoot = opponentCharacter and opponentCharacter:FindFirstChild("HumanoidRootPart")
+                    RunServiceHP.Heartbeat:Wait()
+                end
+                if state.destroyed or state.roundGeneration ~= workerRoundGeneration
+                    or finalFallbackCutoffReached() or not stillHolding(tool, character)
+                    or not validOpponent(opponent) or not opponentHumanoid
+                    or opponentHumanoid.Health <= 0 or not opponentRoot
+                then
+                    return
+                end
+
+                if persistentMode == true then
+                    state.persistentArmed = true
+                    state.persistentUntilAt = math.max(
+                        tonumber(state.persistentUntilAt) or -math.huge,
+                        tonumber(requestedDeadlineAt) or (os.clock() + 0.50)
+                    )
+                    state.persistentLastSeenAt = os.clock()
+                end
+
+                pcall(function() handle.CanTouch = true end)
+
+                -- First attempt happens immediately at the requested send edge. Multiple
+                -- begin/end pairs are issued in the same frame against all core body
+                -- parts. This is faster than waiting for physics and causes no teleport.
+                fireTouchBurst(handle, opponentCharacter, finalSecondFast == true and 8 or 4)
+                state.lastAttemptSentAt = os.clock()
+                state.lastAttemptOpponentUserId = opponent.UserId
+
+                local deadline = os.clock() + (finalSecondFast == true and 0.45 or 0.22)
+                if finalSecondFast == true and tonumber(requestedDeadlineAt) then
+                    deadline = math.max(os.clock(), tonumber(requestedDeadlineAt))
+                end
+                if persistentMode == true and state.persistentArmed == true then
+                    deadline = math.max(deadline, tonumber(state.persistentUntilAt) or deadline)
+                end
+
+                while not state.destroyed
+                    and state.roundGeneration == workerRoundGeneration
+                    and not finalFallbackCutoffReached()
+                    and os.clock() < deadline
+                    and stillHolding(tool, character)
+                do
+                    if persistentMode == true and state.persistentArmed ~= true then break end
+
+                    if not opponentRoot.Parent or opponentHumanoid.Health <= 0 then
+                        opponent = resolveOpponent()
+                        opponentCharacter = opponent and opponent.Character
+                        opponentHumanoid = opponentCharacter and opponentCharacter:FindFirstChildOfClass("Humanoid")
+                        opponentRoot = opponentCharacter and opponentCharacter:FindFirstChild("HumanoidRootPart")
+                        if not validOpponent(opponent) or not opponentHumanoid
+                            or opponentHumanoid.Health <= 0 or not opponentRoot
+                        then
+                            RunServiceHP.Heartbeat:Wait()
+                            continue
+                        end
+                    end
+
+                    -- Final-second mode is intentionally more aggressive: several complete
+                    -- begin/end groups are emitted every Heartbeat until the authoritative
+                    -- Tool reparent arrives or the emergency cutoff is reached.
+                    fireTouchBurst(handle, opponentCharacter, finalSecondFast == true and 4 or 2)
+                    RunServiceHP.Heartbeat:Wait()
+                end
+
+                if opponentCharacter then
+                    syntheticTouchPhase(handle, opponentCharacter, false)
+                end
+
+                -- Give inbound ownership replication a brief chance to arrive before a
+                -- one-shot worker finishes. Persistent endgame mode remains armed.
+                if stillHolding(tool, character) then
+                    local confirmationGraceEnd = os.clock()
+                        + math.clamp(currentPingSeconds() + 0.035, 0.055, 0.30)
+                    while not state.destroyed
+                        and state.roundGeneration == workerRoundGeneration
+                        and not finalFallbackCutoffReached()
+                        and os.clock() < confirmationGraceEnd
+                        and stillHolding(tool, character)
+                    do
+                        RunServiceHP.Heartbeat:Wait()
+                    end
+                end
+
+                if opponentCharacter and tool.Parent == opponentCharacter then
+                    recordConfirmedTransfer(os.clock())
+                    armReturnShield(tool, opponent)
+                end
+
+                if state.persistentArmed == true
+                    and os.clock() >= (tonumber(state.persistentUntilAt) or -math.huge)
+                then
+                    state.persistentArmed = false
+                    state.persistentUntilAt = -math.huge
+                end
+            end)
+
+            -- Only restore the local CanTouch value when we still own this exact Tool.
+            -- No CFrame/velocity/joint restoration exists because none is modified.
+            if stillHolding(tool, character) and handle and handle.Parent then
+                pcall(function() handle.CanTouch = savedCanTouch end)
+            end
+            if state.activeWorkerSerial == workerSerial then
+                state.busy = false
+                state.activeWorkerSerial = nil
+            end
+            if not ok then
+                -- Keep the fallback controller live even if an executor-specific touch
+                -- call errors; never leave the busy latch stuck.
+                state.lastAttemptStartedAt = tonumber(state.lastAttemptStartedAt) or os.clock()
+            end
+        end)
+        return true
+    end
+
+    local initialCharacter = localPlayerHP and localPlayerHP.Character
+    state.localHolding = hotPotatoTool(initialCharacter) ~= nil
+    state.holderChangedAt = state.localHolding and (os.clock() - 1.1) or os.clock()
+    state.holderConnection = RunServiceHP.Heartbeat:Connect(function()
+        if state.destroyed then return end
+        local holding = hotPotatoTool(localPlayerHP and localPlayerHP.Character) ~= nil
+        if holding ~= state.localHolding then
+            local wasHolding = state.localHolding
+            state.localHolding = holding
+            state.holderChangedAt = os.clock()
+            if holding then
+                -- If the server ever manages to return the Tool, immediately restore
+                -- our own touch state so manual/final give-back can operate normally.
+                clearReturnShield()
+            elseif wasHolding then
+                local opponent = resolveOpponent()
+                local opponentCharacter = opponent and opponent.Character
+                local opponentTool = opponentCharacter and hotPotatoTool(opponentCharacter) or nil
+                if opponentTool ~= nil then
+                    recordConfirmedTransfer(state.holderChangedAt)
+                    armReturnShield(opponentTool, opponent)
+                end
+            end
+        end
+    end)
+
+    local function alwaysGiveBackEnabled()
+        local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+        return type(utility) == "table"
+            and utility.PauseScript ~= true
+            and utility.PauseMinigameFeatures ~= true
+            and utility.AutoPlayMaster == true
+            and utility.HotPotatoAutoGiveBack == true
+            and type(minigameAutoplayState) == "table"
+            and minigameAutoplayState.HotPotato == true
+            and localPlayerHP:GetAttribute("InArena") == true
+    end
+
+    -- Always Give Back must never have a retry hole. The normal one-shot worker has a
+    -- short confirmation-grace period after its burst train; that is useful for manual
+    -- presses, but it would otherwise leave a small interval where a server debounce can
+    -- expire without a fresh touch edge. While Always Give Back is enabled, keep issuing
+    -- an immediate no-teleport burst every Heartbeat even if a worker is already busy.
+    -- When no worker is active, start the ordinary worker as well so opponent resolution
+    -- and confirmation tracking remain intact.
+    state.alwaysGiveBackConnection = RunServiceHP.Heartbeat:Connect(function()
+        if state.destroyed or not alwaysGiveBackEnabled() or finalFallbackCutoffReached() then return end
+        local character = localPlayerHP and localPlayerHP.Character
+        if hotPotatoTool(character) == nil then return end
+        if state.busy then
+            immediateManualTouchBurst()
+        else
+            handoffNow(false, nil, nil, false)
+        end
+    end)
+
+    -- Character.ChildAdded fires on the actual Tool reparent, earlier than waiting for
+    -- the next Heartbeat. Give Always Give Back a synchronous first attempt at that
+    -- exact ownership event. The Heartbeat loop above then continues without gaps.
+    local function bindAlwaysGiveBackCharacter(character)
+        if state.alwaysGiveBackChildAddedConnection then
+            pcall(function() state.alwaysGiveBackChildAddedConnection:Disconnect() end)
+            state.alwaysGiveBackChildAddedConnection = nil
+        end
+        if not character then return end
+        state.alwaysGiveBackChildAddedConnection = character.ChildAdded:Connect(function(child)
+            if state.destroyed then return end
+            if not child:IsA("Tool") or string.lower(child.Name) ~= "hot potato" then return end
+
+            -- Last-second acquisition is a terminal-risk event. Notify the independent
+            -- loss-prevention controller synchronously from the actual Tool reparent,
+            -- before Always Give Back or any handoff worker can consume time.
+            local criticalAcquire = rawget(_G, "__TUFFHUB_HOT_POTATO_CRITICAL_ACQUIRE")
+            if type(criticalAcquire) == "function" then
+                local ok, handled = pcall(criticalAcquire, child)
+                if ok and handled == true then
+                    return
+                end
+            end
+
+            if finalFallbackCutoffReached() then return end
+
+            local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+            local autoplayFinalReturn = type(utility) == "table"
+                and utility.PauseScript ~= true
+                and utility.PauseMinigameFeatures ~= true
+                and utility.AutoPlayMaster == true
+                and type(minigameAutoplayState) == "table"
+                and minigameAutoplayState.HotPotato == true
+                and localPlayerHP:GetAttribute("InArena") == true
+            local displayedTime = hotPotatoDisplayedTime(child)
+
+            -- If the opponent gives us the potato during the final displayed second,
+            -- autoplay must react from this exact Tool-reparent event even when Always
+            -- Give Back is disabled. Waiting for the next general minigame evaluation
+            -- wastes a physics frame in the most time-sensitive possession of the round.
+            if autoplayFinalReturn and displayedTime ~= nil and displayedTime <= 1 then
+                immediateManualTouchBurst()
+                if state.busy ~= true then
+                    handoffNow(true, os.clock(), os.clock() + 0.95, true)
+                end
+                return
+            end
+
+            if not alwaysGiveBackEnabled() then return end
+            -- Normal Always Give Back remains an anytime-return feature. Firing now costs
+            -- no visible movement and guarantees there is no client-side delay; repeated
+            -- Heartbeat attempts continue until the first server-legal touch is accepted.
+            immediateManualTouchBurst()
+            if state.busy ~= true then
+                handoffNow(false, nil, nil, false)
+            end
+        end)
+    end
+    bindAlwaysGiveBackCharacter(localPlayerHP and localPlayerHP.Character)
+    state.alwaysGiveBackCharacterAddedConnection = localPlayerHP.CharacterAdded:Connect(function(character)
+        bindAlwaysGiveBackCharacter(character)
+    end)
+
+    state.returnShieldConnection = RunServiceHP.Heartbeat:Connect(function()
+        if state.destroyed then return end
+        local character = localPlayerHP and localPlayerHP.Character
+        local localTool = hotPotatoTool(character)
+        if localTool ~= nil then
+            if state.returnShieldActive then clearReturnShield() end
+            return
+        end
+        -- Do not suppress an opponent who started with the potato. The shield is
+        -- specifically armed by one of our confirmed transfers and then maintained
+        -- until ownership returns to us or the arena ends.
+        if state.returnShieldActive ~= true then return end
+        local opponent = resolveOpponent()
+        local opponentCharacter = opponent and opponent.Character
+        local opponentTool = opponentCharacter and hotPotatoTool(opponentCharacter) or nil
+        if not opponentTool then
+            if localPlayerHP:GetAttribute("InArena") ~= true then
+                clearReturnShield()
+            end
+            return
+        end
+        armReturnShield(opponentTool, opponent)
+
+        -- No positional quarantine here. Return suppression is touch-only so the
+        -- opponent-held potato is never moved or visually teleported by this client.
+    end)
+
+    state.persistentConnection = RunServiceHP.Heartbeat:Connect(function()
+        if state.destroyed or state.persistentArmed ~= true then return end
+        local now = os.clock()
+        if finalFallbackCutoffReached() then
+            state.persistentArmed = false
+            state.persistentUntilAt = -math.huge
+            return
+        end
+        if now >= (tonumber(state.persistentUntilAt) or -math.huge) then
+            state.persistentArmed = false
+            state.persistentUntilAt = -math.huge
+            return
+        end
+        local character = localPlayerHP and localPlayerHP.Character
+        local tool = hotPotatoTool(character)
+        if tool ~= nil then
+            state.persistentLastSeenAt = now
+            -- If the opponent returns the potato during the armed final window,
+            -- restart immediately and keep producing fresh contacts until it transfers.
+            if state.busy ~= true then
+                handoffNow(true, now, state.persistentUntilAt, true)
+            end
+            return
+        end
+
+        local opponent = resolveOpponent()
+        local opponentCharacter = opponent and opponent.Character
+        if opponentCharacter and hotPotatoTool(opponentCharacter) ~= nil then
+            state.persistentLastSeenAt = now
+            return
+        end
+
+        -- Disarm only once the arena/session has clearly ended. This prevents the armed
+        -- state from leaking into a later match while preserving it through replication
+        -- gaps during the current exchange.
+        if localPlayerHP:GetAttribute("InArena") ~= true
+            and now - (tonumber(state.persistentLastSeenAt) or -math.huge) > 1.25
+        then
+            state.persistentArmed = false
+        end
+    end)
+
+    state.TransferConfirmedAfter = function(since)
+        since = tonumber(since) or -math.huge
+        if (tonumber(state.lastConfirmedTransferAt) or -math.huge) >= since then
+            return true
+        end
+        local character = localPlayerHP and localPlayerHP.Character
+        if hotPotatoTool(character) ~= nil then
+            return false
+        end
+        local opponent = resolveOpponent()
+        local opponentCharacter = opponent and opponent.Character
+        local opponentTool = opponentCharacter and hotPotatoTool(opponentCharacter) or nil
+        if opponentTool ~= nil then
+            recordConfirmedTransfer(os.clock())
+            armReturnShield(opponentTool, opponent)
+            return (tonumber(state.lastConfirmedTransferAt) or -math.huge) >= since
+        end
+        return false
+    end
+
+    state.SetFinalFallbackWindow = function(required, allowAt, expiresAt, reason, transferWindowViable)
+        local enabling = required == true
+        local requestedAllowAt = tonumber(allowAt) or -math.huge
+        local requestedExpiresAt = tonumber(expiresAt) or math.huge
+        if enabling and state.finalFallbackRequired == true then
+            -- Repeated emergency evaluations must never slide the leave edge forward.
+            -- Preserve the earliest armed cutoff while extending cleanup metadata only.
+            state.finalFallbackAt = math.min(
+                tonumber(state.finalFallbackAt) or requestedAllowAt,
+                requestedAllowAt
+            )
+            state.finalFallbackExpiresAt = math.max(
+                tonumber(state.finalFallbackExpiresAt) or requestedExpiresAt,
+                requestedExpiresAt
+            )
+        else
+            state.finalFallbackRequired = enabling
+            state.finalFallbackAt = requestedAllowAt
+            state.finalFallbackExpiresAt = requestedExpiresAt
+        end
+        state.finalFallbackReason = reason
+        state.finalTransferWindowViable = transferWindowViable == true
+        return true
+    end
+
+    state.ClearFinalFallbackWindow = function()
+        state.finalFallbackRequired = false
+        state.finalFallbackAt = -math.huge
+        state.finalFallbackExpiresAt = -math.huge
+        state.finalFallbackReason = nil
+        state.finalTransferWindowViable = false
+        return true
+    end
+
+    -- Hot Potato may run repeatedly without re-executing TuffHub. Round/session state
+    -- must therefore be explicitly reset; otherwise an expired fallback cutoff from the
+    -- previous game makes finalFallbackCutoffReached() permanently true and causes Q and
+    -- automatic handoff to return immediately in the next game.
+    state.ResetRound = function(opponent)
+        if state.destroyed then return false end
+
+        state.roundGeneration = (tonumber(state.roundGeneration) or 0) + 1
+        state.pendingFinalGeneration = (tonumber(state.pendingFinalGeneration) or 0) + 1
+        state.pendingFinalFireAt = nil
+        state.pendingFinalDeadlineAt = nil
+        state.pendingFinalPersistent = false
+
+        state.busy = false
+        state.activeWorkerSerial = nil
+        state.persistentArmed = false
+        state.persistentUntilAt = -math.huge
+        state.persistentLastSeenAt = -math.huge
+
+        state.finalFallbackRequired = false
+        state.finalFallbackAt = -math.huge
+        state.finalFallbackExpiresAt = -math.huge
+        state.finalFallbackReason = nil
+        state.finalTransferWindowViable = false
+
+        state.lastAttemptStartedAt = -math.huge
+        state.lastAttemptSentAt = -math.huge
+        state.lastConfirmedTransferAt = -math.huge
+        state.lastAttemptOpponentUserId = nil
+        state.lastLatencyRecordedAttemptAt = -math.huge
+
+        clearReturnShield()
+
+        if validOpponent(opponent) then
+            state.cachedOpponentUserId = opponent.UserId
+        else
+            state.cachedOpponentUserId = nil
+        end
+
+        local character = localPlayerHP and localPlayerHP.Character
+        state.localHolding = hotPotatoTool(character) ~= nil
+        state.holderChangedAt = os.clock()
+        return true
+    end
+
+    state.AutoLeaveAllowed = function(reason)
+        if state.destroyed then
+            return false
+        end
+        -- Never trust only the cached holder flag at the emergency edge. A reparent can
+        -- race the Heartbeat that updates state.localHolding. The actual Tool parent is
+        -- authoritative for whether this client is still at risk.
+        local character = localPlayerHP and localPlayerHP.Character
+        local actuallyHolding = hotPotatoTool(character) ~= nil
+        if state.localHolding ~= true and not actuallyHolding then
+            return false
+        end
+        if state.finalFallbackRequired ~= true then
+            return false
+        end
+        local now = os.clock()
+        if now < (tonumber(state.finalFallbackAt) or -math.huge) then
+            return false
+        end
+        -- Do not time this permission out while we still physically own the Tool.
+        -- If departure is delayed, repeated emergency attempts are safer than silently
+        -- allowing handoff logic to resume after an arbitrary expiry timestamp.
+        return true
+    end
+
+    state.LastAttemptSentAt = function()
+        return tonumber(state.lastAttemptSentAt) or -math.huge
+    end
+
+    state.CancelAutomaticHandoffWindow = function()
+        state.persistentArmed = false
+        state.persistentUntilAt = -math.huge
+        state.pendingFinalGeneration = (tonumber(state.pendingFinalGeneration) or 0) + 1
+        return true
+    end
+    state.SetOpponent = function(player)
+        if validOpponent(player) then
+            state.cachedOpponentUserId = player.UserId
+            return true
+        end
+        return false
+    end
+
+    -- Independent lifecycle reset. Loss protection also calls ResetRound from its
+    -- session/round tracker, but InArena gives the handoff controller its own guarantee
+    -- that a completed arena cannot poison the next game even if replication tears down
+    -- in an unusual order.
+    state.arenaLifecycleConnection = localPlayerHP:GetAttributeChangedSignal("InArena"):Connect(function()
+        if state.destroyed then return end
+        local inArena = localPlayerHP:GetAttribute("InArena") == true
+        if inArena == state.lastArenaActive then return end
+        state.lastArenaActive = inArena
+        state.ResetRound(nil)
+    end)
+
+    state.HandoffNow = function(finalSecondFast, requestedFireAt, requestedDeadlineAt)
+        return handoffNow(
+            finalSecondFast == true,
+            requestedFireAt,
+            requestedDeadlineAt,
+            finalSecondFast == true
+        )
+    end
+    state.HandoffAt = function(absoluteClockTime, absoluteDeadlineAt)
+        return handoffNow(true, absoluteClockTime, absoluteDeadlineAt, true)
+    end
+    state.EarliestFinalSendAt = function(_pingSeconds)
+        -- No guessed local cooldown. The retry train itself handles any server-side
+        -- rejection/cooldown by continuing to emit fresh contacts until the deadline.
+        return os.clock()
+    end
+    state.PredictedConfirmLatency = predictedConfirmationLatency
+    state.ConfirmationSampleCount = function()
+        return math.max(0, math.floor(tonumber(state.transferLatencySamples) or 0))
+    end
+
+    local function manualGiveBackEnabled()
+        local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+        return type(utility) == "table"
+            and utility.PauseScript ~= true
+            and utility.PauseMinigameFeatures ~= true
+            and utility.AutoPlayMaster == true
+            and utility.HotPotatoPressButtonToGiveBack == true
+            and type(minigameAutoplayState) == "table"
+            and minigameAutoplayState.HotPotato == true
+    end
+
+    state.inputConnection = UserInputServiceHP.InputBegan:Connect(function(input, processed)
+        -- Touch/mobile uses the dedicated on-screen button instead of a keyboard
+        -- selector. Desktop keeps the configured Give Back key.
+        if UserInputServiceHP.TouchEnabled then return end
+        if state.destroyed or processed then return end
+        if UserInputServiceHP:GetFocusedTextBox() then return end
+        if not manualGiveBackEnabled() then return end
+        local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+        local keyName = tostring(utility.HotPotatoGiveBackKey or "Q")
+        local okKey, configuredKey = pcall(function() return Enum.KeyCode[keyName] end)
+        if not okKey or configuredKey == nil or input.KeyCode ~= configuredKey then return end
+        -- Manual give-back is deliberately one-shot; it never arms Always Give Back.
+        handoffNow(false, nil, nil, false)
+    end)
+
+    if UserInputServiceHP.TouchEnabled then
+        local mobileButton = Instance.new("TextButton")
+        mobileButton.Name = "HotPotatoGiveBackMobileButton"
+        mobileButton.AnchorPoint = Vector2.new(0.5, 0.5)
+        mobileButton.Position = UDim2.new(1, -78, 1, -190)
+        mobileButton.Size = UDim2.fromOffset(64, 64)
+        mobileButton.BackgroundColor3 = BLACK
+        mobileButton.BackgroundTransparency = 0
+        mobileButton.BorderSizePixel = 0
+        mobileButton.AutoButtonColor = false
+        mobileButton.Text = "GIVE\nBACK"
+        mobileButton.TextColor3 = Color3.new(1, 1, 1)
+        mobileButton.TextWrapped = true
+        mobileButton.FontFace = MENU_FONT_BOLD_FACE
+        mobileButton.TextSize = 13
+        mobileButton.Visible = false
+        mobileButton.ZIndex = 60000
+        mobileButton.Parent = screenGui
+
+        local mobileCorner = Instance.new("UICorner")
+        mobileCorner.CornerRadius = UDim.new(0, 10)
+        mobileCorner.Parent = mobileButton
+
+        local mobileStroke = Instance.new("UIStroke")
+        mobileStroke.Color = LINE_COLOR
+        mobileStroke.Thickness = 1
+        mobileStroke.Transparency = 0
+        mobileStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        mobileStroke.LineJoinMode = Enum.LineJoinMode.Round
+        mobileStroke.Parent = mobileButton
+
+        state.mobileButton = mobileButton
+        state.mobileButtonActivatedConnection = mobileButton.Activated:Connect(function()
+            if state.destroyed or not manualGiveBackEnabled() then return end
+            -- The mobile control is the same one-shot manual action as the desktop key.
+            handoffNow(false, nil, nil, false)
+        end)
+
+        state.mobileButtonVisibilityConnection = RunServiceHP.Heartbeat:Connect(function()
+            if state.destroyed or not mobileButton.Parent then return end
+            local visible = false
+            if manualGiveBackEnabled() and localPlayerHP:GetAttribute("InArena") == true then
+                local localCharacter = localPlayerHP.Character
+                local opponent = resolveOpponent()
+                local opponentCharacter = opponent and opponent.Character
+                visible = hotPotatoTool(localCharacter) ~= nil
+                    or (opponentCharacter ~= nil and hotPotatoTool(opponentCharacter) ~= nil)
+            end
+            mobileButton.Visible = visible
+        end)
+    end
+
+    state.Destroy = function()
+        if state.destroyed then return end
+        state.destroyed = true
+        state.busy = false
+        if state.inputConnection then
+            pcall(function() state.inputConnection:Disconnect() end)
+            state.inputConnection = nil
+        end
+        if state.holderConnection then
+            pcall(function() state.holderConnection:Disconnect() end)
+            state.holderConnection = nil
+        end
+        if state.persistentConnection then
+            pcall(function() state.persistentConnection:Disconnect() end)
+            state.persistentConnection = nil
+        end
+        if state.returnShieldConnection then
+            pcall(function() state.returnShieldConnection:Disconnect() end)
+            state.returnShieldConnection = nil
+        end
+        if state.alwaysGiveBackConnection then
+            pcall(function() state.alwaysGiveBackConnection:Disconnect() end)
+            state.alwaysGiveBackConnection = nil
+        end
+        if state.alwaysGiveBackChildAddedConnection then
+            pcall(function() state.alwaysGiveBackChildAddedConnection:Disconnect() end)
+            state.alwaysGiveBackChildAddedConnection = nil
+        end
+        if state.alwaysGiveBackCharacterAddedConnection then
+            pcall(function() state.alwaysGiveBackCharacterAddedConnection:Disconnect() end)
+            state.alwaysGiveBackCharacterAddedConnection = nil
+        end
+        if state.arenaLifecycleConnection then
+            pcall(function() state.arenaLifecycleConnection:Disconnect() end)
+            state.arenaLifecycleConnection = nil
+        end
+        clearReturnShield()
+        if state.mobileButtonActivatedConnection then
+            pcall(function() state.mobileButtonActivatedConnection:Disconnect() end)
+            state.mobileButtonActivatedConnection = nil
+        end
+        if state.mobileButtonVisibilityConnection then
+            pcall(function() state.mobileButtonVisibilityConnection:Disconnect() end)
+            state.mobileButtonVisibilityConnection = nil
+        end
+        if state.mobileButton then
+            pcall(function() state.mobileButton:Destroy() end)
+            state.mobileButton = nil
+        end
+        if state.destroyConnection then
+            pcall(function() state.destroyConnection:Disconnect() end)
+            state.destroyConnection = nil
+        end
+        if rawget(_G, GLOBAL_KEY) == state then
+            rawset(_G, GLOBAL_KEY, nil)
+        end
+    end
+
+    state.destroyConnection = screenGui.Destroying:Connect(state.Destroy)
+end
 end)
 end
 task.spawn(function()
@@ -31125,6 +32787,7 @@ if not LocalPlayer then
     Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
     LocalPlayer = Players.LocalPlayer
 end
+-- [10] Loss / Disconnect Protection -----------------------------------------
 local function requireWhenReadyLOSS(moduleScript)
     while screenGui.Parent do
         local ok, result = pcall(require, moduleScript)
@@ -31175,7 +32838,7 @@ if type(FootballDraftConfig) == "table" and type(BrainrotsConfig) == "table" the
         end
     end
 end
-local GLOBAL_KEY = "__TSUNAMI_CLINCH_LOSS_HOP_V27"
+local GLOBAL_KEY = "__TSUNAMI_CLINCH_LOSS_HOP_V28"
 local LEGACY_GLOBAL_KEYS = {
     "__TSUNAMI_CLINCH_LOSS_HOP_V1",
     "__TSUNAMI_CLINCH_LOSS_HOP_V2",
@@ -31203,6 +32866,7 @@ local LEGACY_GLOBAL_KEYS = {
     "__TSUNAMI_CLINCH_LOSS_HOP_V24",
     "__TSUNAMI_CLINCH_LOSS_HOP_V25",
     "__TSUNAMI_CLINCH_LOSS_HOP_V26",
+    "__TSUNAMI_CLINCH_LOSS_HOP_V27",
     GLOBAL_KEY,
 }
 for _, key in ipairs(LEGACY_GLOBAL_KEYS) do
@@ -31229,7 +32893,14 @@ local controller = {
     lastDepartureAttemptAt = 0,
     departureAttemptCount = 0,
     kickLogged = false,
+    disconnectLogged = false,
     urgentDepartureScheduled = false,
+    -- Hot Potato departure is committed only after live possession survives a
+    -- short multi-Heartbeat confirmation guard. This prevents a just-completed
+    -- handoff from leaving behind a stale pending kick.
+    hotPotatoDepartureGuardStartedAt = nil,
+    hotPotatoDepartureGuardTool = nil,
+    hotPotatoDepartureGuardFrames = 0,
     queuedMatchResultWinnerIndex = nil,
     queuedMatchResultSet = false,
     queuedKnockoutMatchWinner = nil,
@@ -31259,6 +32930,7 @@ local SEAT_SCORE_GAMES = {
     ConnectFour = true,
     Battleship = true,
     Knockout = true,
+    HotPotato = true,
 }
 local SUPPORTED_GAMES = {
     CandyBomb = true,
@@ -31268,15 +32940,17 @@ local SUPPORTED_GAMES = {
     Battleship = true,
     Knockout = true,
     FootballDraft = true,
+    HotPotato = true,
 }
 local KICK_GAME_DISPLAY_NAMES = {
     CandyBomb = "Candy Bomb",
-    PopcornBurst = "Popcorn",
-    NumberGuess = "Number Guess",
+    PopcornBurst = "Popcorn Burst",
+    NumberGuess = "Higher Or Lower",
     ConnectFour = "Connect Four",
     Battleship = "Battleship",
     Knockout = "Knockout",
     FootballDraft = "Football Draft",
+    HotPotato = "Hot Potato",
 }
 local ROUND_START_PHASES = {
     CandyBomb = {
@@ -31302,6 +32976,9 @@ local ROUND_START_PHASES = {
     FootballDraft = {
         Drafting = true,
     },
+    HotPotato = {
+        Playing = true,
+    },
 }
 local tracker = {
     gameId = nil,
@@ -31321,6 +32998,10 @@ local tracker = {
     opponentWins = 0,
     roundStartLocalWins = nil,
     roundStartOpponentWins = nil,
+    arenaEntryMismatchSince = nil,
+    arenaEntryMismatchGameId = nil,
+    arenaEntryMismatchOpponentUserId = nil,
+    arenaEntryFailureLatched = false,
     seriesBestOfRounds = nil,
     bestOfOneCandidateSince = nil,
     votedBestOfRounds = nil,
@@ -31363,11 +33044,50 @@ local tracker = {
     popcornOpponentLastVisibleRemaining = nil,
     footballOpponentCompletedFirstObserved = false,
     footballLocalCompletedFirstObserved = false,
+    hotPotatoHolderUserId = nil,
+    hotPotatoLastNonNilHolderUserId = nil,
+    hotPotatoHolderChangedAt = nil,
+    hotPotatoLocalReceivedAt = nil,
+    hotPotatoLocalReceivedTool = nil,
+    hotPotatoCriticalAcquireSerial = 0,
+    hotPotatoLastTimer = nil,
+    hotPotatoTimerChangedAt = nil,
+    hotPotatoTimerStep = 1.0,
+    hotPotatoFinalScheduleId = 0,
+    hotPotatoFinalScheduleKey = nil,
+    hotPotatoFinalHandoffAt = nil,
+    hotPotatoFinalLeaveAt = nil,
+    hotPotatoHardFailsafeTool = nil,
+    hotPotatoHardFailsafeAt = nil,
+    hotPotatoHardFailsafeExpiresAt = nil,
+    hotPotatoHardFailsafeClinching = false,
+    -- Exact arena-boundary cache. The server decides arena survival from the
+    -- character pivot distance to Center using max(GetExtentsSize()), so Hot
+    -- Potato fall protection mirrors that rule instead of waiting for Roblox's
+    -- much lower FallenPartsDestroyHeight.
+    hotPotatoArenaModel = nil,
+    hotPotatoArenaCenter = nil,
+    hotPotatoArenaCenterPosition = nil,
+    hotPotatoArenaRadius = nil,
+    hotPotatoArenaCharacter = nil,
+    hotPotatoArenaLastInsideAt = nil,
+    hotPotatoArenaLastDistance = nil,
+    hotPotatoArenaClinching = false,
+    hotPotatoArenaDepartureLatched = false,
     connectFourAwaitingFreshRound = false,
     connectFourRoundArmed = false,
     battleshipAwaitingFreshRound = false,
     battleshipRoundArmed = false,
     gameIdTeardownSeen = false,
+
+    -- Cached death context survives the brief arena/session teardown that can
+    -- occur in the same frame as a fatal fall. It is tied to the exact
+    -- character and refreshed continuously while that character is alive in
+    -- an arena, so a clinching death cannot lose its match context.
+    localDeathContextGameId = nil,
+    localDeathContextCharacter = nil,
+    localDeathContextClinching = false,
+    localDeathContextUpdatedAt = nil,
 }
 local evaluateState
 local executePendingLossIfReady
@@ -31880,6 +33600,116 @@ local function refreshDestinationServer(force)
     end
     return controller.destinationServerId
 end
+local function localHotPotatoToolNow()
+    local character = LocalPlayer and LocalPlayer.Character
+    if not character then return nil end
+    for _, child in ipairs(character:GetChildren()) do
+        if child:IsA("Tool")
+            and child.Parent == character
+            and string.lower(child.Name) == "hot potato"
+        then
+            return child
+        end
+    end
+    return nil
+end
+
+local function hotPotatoReasonRequiresLivePossession(reason)
+    return reason == "HotPotato:FinalFailsafe"
+        or reason == "HotPotato:HardCutoff"
+end
+
+local function resetHotPotatoDepartureGuard()
+    controller.hotPotatoDepartureGuardStartedAt = nil
+    controller.hotPotatoDepartureGuardTool = nil
+    controller.hotPotatoDepartureGuardFrames = 0
+end
+
+local function cancelStaleHotPotatoDeparture(reason)
+    if not hotPotatoReasonRequiresLivePossession(reason) then
+        return false
+    end
+    if localHotPotatoToolNow() ~= nil then
+        return false
+    end
+    if hotPotatoReasonRequiresLivePossession(controller.pendingLossReason) then
+        controller.pendingLossReason = nil
+    end
+    controller.lastDepartureAttemptAt = 0
+    resetHotPotatoDepartureGuard()
+    return true
+end
+
+local function hotPotatoDepartureCommitReady(reason)
+    if not hotPotatoReasonRequiresLivePossession(reason) then
+        resetHotPotatoDepartureGuard()
+        return true
+    end
+
+    local tool = localHotPotatoToolNow()
+    if tool == nil then
+        cancelStaleHotPotatoDeparture(reason)
+        return false
+    end
+
+    local now = os.clock()
+    if controller.hotPotatoDepartureGuardTool ~= tool then
+        controller.hotPotatoDepartureGuardTool = tool
+        controller.hotPotatoDepartureGuardStartedAt = now
+        controller.hotPotatoDepartureGuardFrames = 1
+        return false
+    end
+
+    controller.hotPotatoDepartureGuardFrames =
+        math.max(1, math.floor(tonumber(controller.hotPotatoDepartureGuardFrames) or 1)) + 1
+    local startedAt = tonumber(controller.hotPotatoDepartureGuardStartedAt) or now
+    local guardSeconds = 0.045
+    pcall(function()
+        local item = autoServerHopState.RuntimeStatsService.Network.ServerStatsItem["Data Ping"]
+        local pingMs = item and tonumber(item:GetValue())
+        if pingMs then
+            -- Give a just-accepted server transfer enough time to replicate back before
+            -- committing the local kick, while preserving the Hot Potato scheduler's
+            -- final emergency reserve.
+            guardSeconds = math.clamp(0.040 + (pingMs / 1000) * 0.55, 0.050, 0.220)
+        end
+    end)
+
+    return controller.hotPotatoDepartureGuardFrames >= 2
+        and now - startedAt >= guardSeconds
+end
+
+local function hotPotatoAutoLeaveAllowed(reason)
+    local reasonGameId = type(reason) == "string" and string.match(reason, "^([^:]+)") or nil
+    if currentGameId() ~= "HotPotato" and reasonGameId ~= "HotPotato" then
+        return true
+    end
+    -- Terminal Hot Potato safeguards are already match-aware at the point where they
+    -- are armed. Do not require the replicated phase/opponent to still exist here: the
+    -- server can tear those fields down in the same frame as a fatal death or final
+    -- potato transfer. Final/HardCutoff still require the actual Tool to be parented to
+    -- our live character immediately before Kick. LocalDeath requires confirmed zero
+    -- health, while FatalFall requires a clinching Hot Potato context plus an irreversible
+    -- downward crossing toward FallenPartsDestroyHeight.
+    if reason == "HotPotato:FinalFailsafe"
+        or reason == "HotPotato:LocalDeath"
+        or reason == "HotPotato:FatalFall"
+        or reason == "HotPotato:ArenaBoundary"
+        or reason == "HotPotato:HardCutoff"
+        or reason == "HotPotato:ArenaEntryFailure"
+    then
+        return true
+    end
+    local handoffState = rawget(_G, "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
+    if type(handoffState) ~= "table" or type(handoffState.AutoLeaveAllowed) ~= "function" then
+        -- The leave-on-loss safeguard is the last line of defense. If the handoff
+        -- controller is unexpectedly unavailable, do not disable the safeguard.
+        return true
+    end
+    local ok, allowed = pcall(handoffState.AutoLeaveAllowed, reason)
+    if not ok then return true end
+    return allowed == true
+end
 local function performDisconnectAndTeleport(destinationServerId, reason)
     local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
     if type(utility) ~= "table"
@@ -31893,18 +33723,55 @@ local function performDisconnectAndTeleport(destinationServerId, reason)
     if controller.destroyed then
         return false
     end
+    local requestedReason = reason or controller.pendingLossReason or "clinching-loss"
+    if type(requestedReason) == "string" and string.match(requestedReason, ":LocalDeath$")
+        and (not controller.DeathContextActive or not controller.DeathContextActive()) then
+        controller.pendingLossReason = nil
+        return false
+    end
+    local disconnectReason = type(requestedReason) == "string"
+        and string.match(requestedReason, "^Disconnect:") ~= nil
+
+    -- Final/HardCutoff Hot Potato departures are possession-authoritative. A
+    -- pending reason from an earlier frame is never sufficient by itself. Wait
+    -- through a tiny multi-Heartbeat confirmation guard, then revalidate again
+    -- immediately before Kick so a successful handoff cannot produce a stale kick.
+    if not disconnectReason
+        and hotPotatoReasonRequiresLivePossession(requestedReason)
+        and not hotPotatoDepartureCommitReady(requestedReason)
+    then
+        return false
+    end
+
+    if not disconnectReason and not hotPotatoAutoLeaveAllowed(requestedReason) then
+        if currentGameId() == "HotPotato"
+            or (type(requestedReason) == "string" and string.match(requestedReason, "^([^:]+)") == "HotPotato")
+        then
+            controller.pendingLossReason = nil
+        end
+        return false
+    end
     local now = os.clock()
     if now - numeric(controller.lastDepartureAttemptAt, 0) < 0.05 then
         return false
     end
     controller.lastDepartureAttemptAt = now
     controller.departureAttemptCount = numeric(controller.departureAttemptCount, 0) + 1
-    local triggerReason = reason or controller.pendingLossReason or "clinching-loss"
+    local triggerReason = requestedReason
     controller.triggerReason = triggerReason
     controller.triggerObservedAt = controller.triggerObservedAt or now
     controller.kickIssuedAt = now
-    local kickedGameId = currentGameId()
-    if type(kickedGameId) ~= "string" or kickedGameId == "" then
+
+    -- No yield occurs between this final possession check and the eventual Kick
+    -- call below. If the Tool has already left our character, cancel the stale
+    -- Hot Potato departure instead of disconnecting after a successful handoff.
+    if not disconnectReason and cancelStaleHotPotatoDeparture(triggerReason) then
+        controller.kickIssuedAt = nil
+        return false
+    end
+
+    local kickedGameId = currentGameId() or tracker.gameId
+    if (type(kickedGameId) ~= "string" or kickedGameId == "") and not disconnectReason then
         if type(triggerReason) == "string" then
             kickedGameId = string.match(triggerReason, "^([^:]+)")
         end
@@ -31915,20 +33782,34 @@ local function performDisconnectAndTeleport(destinationServerId, reason)
     local kickLogSeparator = string.rep("\\", 10)
     if utility.PauseScript ~= true
         and utility.PauseMinigameFeatures ~= true
+        and not disconnectReason
         and utility.PrintKicksToTerminal == true
         and controller.kickLogged ~= true
     then
         controller.kickLogged = true
-        print("KICKED | Game: " .. tostring(kickedGameName))
-        print(kickLogSeparator)
+        local logContext = rawget(_G, "__TUFFHUB_MINIGAME_LOG_CONTEXT")
+        local printed = false
+        if type(logContext) == "table" and type(logContext.PrintEvent) == "function" then
+            local ok, result = pcall(logContext.PrintEvent, "KICKED", false, kickedGameId, nil)
+            printed = ok and result == true
+        end
+        if not printed then
+            print("KICKED | Game: " .. tostring(kickedGameName) .. " | Tokens: 0")
+            print(kickLogSeparator)
+        end
     end
     if utility.PauseScript == true or utility.PauseMinigameFeatures == true then
         controller.pendingLossReason = nil
         controller.lastDepartureAttemptAt = 0
         return false
     end
+    if not disconnectReason and cancelStaleHotPotatoDeparture(triggerReason) then
+        controller.kickIssuedAt = nil
+        return false
+    end
+
     local kickAccepted = pcall(function()
-        LocalPlayer:Kick("Lost Duel")
+        LocalPlayer:Kick(disconnectReason and "Connection Lost" or "Lost Duel")
     end)
     local teleportAccepted = false
     if type(destinationServerId) == "string"
@@ -31996,6 +33877,14 @@ local function latchClinchingLoss(reason)
     if controller.destroyed then
         return false
     end
+    if not hotPotatoAutoLeaveAllowed(reason or "clinching-loss") then
+        if currentGameId() == "HotPotato"
+            or (type(reason) == "string" and string.match(reason, "^([^:]+)") == "HotPotato")
+        then
+            controller.pendingLossReason = nil
+        end
+        return false
+    end
     controller.triggerObservedAt = controller.triggerObservedAt or os.clock()
     if controller.pendingLossReason == nil then
         controller.pendingLossReason = reason or "clinching-loss"
@@ -32007,6 +33896,1256 @@ local function latchClinchingLoss(reason)
     scheduleUrgentDeparture()
     return true
 end
+
+-- Immediate local-death protection -------------------------------------------------
+-- Any local death during a supported match requests departure. Round-result
+-- prediction remains series-aware; death protection must not depend on score arrival.
+local LOCAL_DEATH_ROUND_LOSS_GAMES = {
+    HotPotato = true,
+    Knockout = true,
+    CandyBomb = true,
+    PopcornBurst = true,
+    NumberGuess = true,
+    ConnectFour = true,
+    Battleship = true,
+    FootballDraft = true,
+}
+
+local function activeMinigameForLocalDeath()
+    local inArena = LocalPlayer:GetAttribute("InArena") == true
+    local liveGameId = currentGameId()
+    if not liveGameId and inArena then
+        liveGameId = tracker.gameId
+    end
+    if not liveGameId or not SUPPORTED_GAMES[liveGameId] then return nil end
+
+    local phase = currentPhase() or tracker.phase
+    local starts = ROUND_START_PHASES[liveGameId]
+    local active = starts and starts[phase] == true
+    if liveGameId == "Knockout" then
+        active = active or phase == "Launching" or phase == "Resolving" or phase == "Shrinking"
+    elseif liveGameId == "Battleship" then
+        active = active or phase == "Placement" or phase == "Starting"
+    end
+
+    local opponent = currentOpponent() or tracker.cachedOpponent
+    if not active
+        or typeof(opponent) ~= "Instance"
+        or not opponent:IsA("Player")
+        or opponent == LocalPlayer
+    then
+        return nil
+    end
+
+    local seat = currentSeatIndex() or tracker.cachedSeatIndex
+    if seat ~= 1 and seat ~= 2 and not inArena then return nil end
+    return liveGameId
+end
+controller.DeathContextActive = function()
+    local evidence = controller.deathDepartureEvidence
+    if not evidence or os.clock() - evidence.at > 0.90 then return false end
+    local character = evidence.character
+    if not character then return false end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health > 0 then return false end
+
+    -- CharacterRemoving can detach the dead character before the Kick call executes.
+    -- A brand-new healthy character invalidates the evidence, but the absence of a new
+    -- character must not cancel a death that was already observed at Health <= 0.
+    local currentCharacter = LocalPlayer.Character
+    if currentCharacter and currentCharacter ~= character then
+        local currentHumanoid = currentCharacter:FindFirstChildOfClass("Humanoid")
+        if currentHumanoid and currentHumanoid.Health > 0 then
+            return false
+        end
+    end
+    return true
+end
+
+local function roundLossWouldClinchMatch(gameId)
+    if not gameId or SUPPORTED_GAMES[gameId] ~= true then
+        return false
+    end
+
+    local seatIndex = currentSeatIndex() or tracker.cachedSeatIndex
+    local bestOf = currentBestOfRounds()
+        or tracker.seriesBestOfRounds
+        or tracker.votedBestOfRounds
+    local requiredWins = bestOf ~= nil and winsRequired(bestOf) or tracker.cachedRequiredWins
+    if requiredWins == nil then
+        -- Unknown series state is never enough evidence to disconnect pre-result.
+        return false
+    end
+
+    requiredWins = math.max(1, math.floor(numeric(requiredWins, 1)))
+    local _, liveOpponentWins = readSeriesScores(gameId, seatIndex)
+    liveOpponentWins = math.max(0, math.floor(numeric(liveOpponentWins, 0)))
+    if liveOpponentWins >= requiredWins then
+        return true
+    end
+
+    -- Use the score captured at the beginning of this round. Some games maintain a
+    -- more specific round baseline, so prefer it when available.
+    local beforeRound = tracker.roundStartOpponentWins
+    if gameId == "PopcornBurst" then
+        beforeRound = tracker.popcornRoundStartOpponentWins or beforeRound
+    elseif gameId == "CandyBomb" then
+        beforeRound = tracker.candyRoundStartOpponentWins or beforeRound
+    end
+    if beforeRound == nil then
+        return liveOpponentWins >= requiredWins - 1
+    end
+    beforeRound = math.max(0, math.floor(numeric(beforeRound, 0)))
+    return beforeRound == requiredWins - 1
+end
+
+local function localDeathWouldClinchMatch(gameId)
+    if not gameId or LOCAL_DEATH_ROUND_LOSS_GAMES[gameId] ~= true then
+        return false
+    end
+    return roundLossWouldClinchMatch(gameId)
+end
+
+local LOCAL_DEATH_CONTEXT_MAX_AGE = 2.0
+
+local function refreshLocalDeathContext(gameId)
+    local character = LocalPlayer.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if not gameId or activeMinigameForLocalDeath() ~= gameId then
+        -- Healthy teardown ends the evidence immediately. A dead character may still
+        -- have a queued HealthChanged/Died callback after the arena/session fields clear.
+        if not humanoid or humanoid.Health > 0 then
+            controller.arenaDeathEvidence = nil
+            controller.deathDepartureEvidence = nil
+            tracker.localDeathContextGameId = nil
+            tracker.localDeathContextCharacter = nil
+            tracker.localDeathContextClinching = false
+            tracker.localDeathContextUpdatedAt = nil
+        end
+        return false
+    end
+    if not character or not humanoid or humanoid.Health <= 0 then
+        return false
+    end
+    -- Table games do not require InArena. They do require a live supported game context;
+    -- cached opponent/seat information is allowed because replication can briefly omit the
+    -- private opponent object between arena lifecycle updates.
+    if LocalPlayer:GetAttribute("InArena") ~= true
+        and currentGameId() ~= gameId
+    then
+        return false
+    end
+
+    local clinching = localDeathWouldClinchMatch(gameId)
+    tracker.localDeathContextGameId = gameId
+    tracker.localDeathContextCharacter = character
+    tracker.localDeathContextClinching = clinching == true
+    tracker.localDeathContextUpdatedAt = os.clock()
+
+    local root = character:FindFirstChild("HumanoidRootPart")
+    if root and LocalPlayer:GetAttribute("InArena") == true
+        and (gameId == "HotPotato" or gameId == "Knockout") then
+        controller.arenaDeathEvidence = {
+            character = character,
+            gameId = gameId,
+            clinching = clinching == true,
+            position = root.Position,
+            at = os.clock(),
+        }
+    else
+        controller.arenaDeathEvidence = nil
+    end
+    return true
+end
+
+local function cachedLocalDeathContext(character)
+    local now = os.clock()
+    local evidence = controller.arenaDeathEvidence
+    if evidence
+        and evidence.character == character
+        and evidence.clinching == true
+        and now - evidence.at <= 0.75
+    then
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        local liveGame = currentGameId()
+        -- Do not require the live ActiveMinigame object here. That object is exactly
+        -- what can disappear during the fatal frame. The cached evidence was captured
+        -- while the character was alive in a confirmed clinching round.
+        if humanoid and humanoid.Health <= 0
+            and (liveGame == nil or liveGame == evidence.gameId)
+            and (not root or (root.Position - evidence.position).Magnitude <= 48)
+        then
+            return evidence.gameId
+        end
+    end
+
+    if not character
+        or tracker.localDeathContextCharacter ~= character
+        or tracker.localDeathContextClinching ~= true
+    then
+        return nil
+    end
+    local updatedAt = tonumber(tracker.localDeathContextUpdatedAt)
+    if not updatedAt or now - updatedAt > LOCAL_DEATH_CONTEXT_MAX_AGE then
+        return nil
+    end
+    local gameId = tracker.localDeathContextGameId
+    if not gameId or LOCAL_DEATH_ROUND_LOSS_GAMES[gameId] ~= true then
+        return nil
+    end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health > 0 then
+        return nil
+    end
+    local liveGame = currentGameId()
+    if liveGame ~= nil and liveGame ~= gameId then
+        return nil
+    end
+    return gameId
+end
+
+-- Hot Potato arena-boundary protection ---------------------------------------------
+-- The game's ArenaModule does not define survival by FallenPartsDestroyHeight. Its
+-- getTotalAlive() checks Character:GetPivot().Position against Center.Position and
+-- considers the player eliminated once that distance is >= max(arena:GetExtentsSize()).
+-- Mirror that exact server rule locally and project a short distance ahead while the
+-- character is irreversibly falling so the kick happens before the server's periodic
+-- alive check can award the round.
+local function hotPotatoArenaCandidate(model)
+    if typeof(model) ~= "Instance" or not model:IsA("Model") or model.Parent ~= workspace then
+        return nil, nil
+    end
+    local center = model:FindFirstChild("Center")
+    local spawns = model:FindFirstChild("Spawns")
+    if not center or not center:IsA("BasePart") or not spawns then
+        return nil, nil
+    end
+    local ok, size = pcall(model.GetExtentsSize, model)
+    if not ok or typeof(size) ~= "Vector3" then return nil, nil end
+    local radius = math.max(size.X, size.Y, size.Z)
+    if radius <= 0 or radius ~= radius then return nil, nil end
+    return center, radius
+end
+
+local function characterPivotPosition(character)
+    if not character then return nil end
+    local ok, pivot = pcall(character.GetPivot, character)
+    if ok and typeof(pivot) == "CFrame" then
+        return pivot.Position
+    end
+    local root = character:FindFirstChild("HumanoidRootPart")
+    return root and root:IsA("BasePart") and root.Position or nil
+end
+
+local function clearHotPotatoArenaCache(clearIdentity)
+    tracker.hotPotatoArenaLastInsideAt = nil
+    tracker.hotPotatoArenaLastDistance = nil
+    tracker.hotPotatoArenaClinching = false
+    tracker.hotPotatoArenaDepartureLatched = false
+    if clearIdentity then
+        tracker.hotPotatoArenaModel = nil
+        tracker.hotPotatoArenaCenter = nil
+        tracker.hotPotatoArenaCenterPosition = nil
+        tracker.hotPotatoArenaRadius = nil
+        tracker.hotPotatoArenaCharacter = nil
+    end
+end
+
+local function refreshHotPotatoArenaCache(character)
+    character = character or LocalPlayer.Character
+    if not character then return nil, nil, nil end
+    local gameId = currentGameId() or tracker.gameId
+    if gameId ~= "HotPotato" then return nil, nil, nil end
+
+    local position = characterPivotPosition(character)
+    if not position then return nil, nil, nil end
+
+    local model = tracker.hotPotatoArenaModel
+    local center = tracker.hotPotatoArenaCenter
+    local radius = tonumber(tracker.hotPotatoArenaRadius)
+    if model and center and model.Parent == workspace and center.Parent == model
+        and center:IsA("BasePart") and radius and radius > 0
+    then
+        tracker.hotPotatoArenaCenterPosition = center.Position
+        tracker.hotPotatoArenaCharacter = character
+        local distance = (position - center.Position).Magnitude
+        tracker.hotPotatoArenaLastDistance = distance
+        if distance < radius then
+            tracker.hotPotatoArenaLastInsideAt = os.clock()
+            if localDeathWouldClinchMatch("HotPotato") then
+                tracker.hotPotatoArenaClinching = true
+            end
+        end
+        return center.Position, radius, distance
+    end
+
+    -- ArenaModule parents every active arena clone directly to workspace. If we
+    -- are already outside because the script bound during the fall, identify the
+    -- correct duel from the opponent, who is still inside that same arena.
+    local opponent = currentOpponent() or tracker.cachedOpponent
+    local opponentPosition = nil
+    if typeof(opponent) == "Instance" and opponent:IsA("Player") and opponent ~= LocalPlayer then
+        opponentPosition = characterPivotPosition(opponent.Character)
+    end
+
+    local bestModel, bestCenter, bestRadius, bestDistance, bestRatio, bestLocalInside
+    for _, candidate in ipairs(workspace:GetChildren()) do
+        if candidate:IsA("Model") then
+            local candidateCenter, candidateRadius = hotPotatoArenaCandidate(candidate)
+            if candidateCenter and candidateRadius then
+                local distance = (position - candidateCenter.Position).Magnitude
+                local localInside = distance < candidateRadius
+                local opponentDistance = opponentPosition
+                    and (opponentPosition - candidateCenter.Position).Magnitude
+                    or math.huge
+                local opponentInside = opponentDistance < candidateRadius
+                if localInside or opponentInside then
+                    local ratio = localInside
+                        and (distance / candidateRadius)
+                        or (1 + opponentDistance / candidateRadius)
+                    if bestRatio == nil or ratio < bestRatio then
+                        bestModel = candidate
+                        bestCenter = candidateCenter
+                        bestRadius = candidateRadius
+                        bestDistance = distance
+                        bestRatio = ratio
+                        bestLocalInside = localInside
+                    end
+                end
+            end
+        end
+    end
+
+    if bestModel then
+        tracker.hotPotatoArenaModel = bestModel
+        tracker.hotPotatoArenaCenter = bestCenter
+        tracker.hotPotatoArenaCenterPosition = bestCenter.Position
+        tracker.hotPotatoArenaRadius = bestRadius
+        tracker.hotPotatoArenaCharacter = character
+        if bestLocalInside then
+            tracker.hotPotatoArenaLastInsideAt = os.clock()
+        end
+        tracker.hotPotatoArenaLastDistance = bestDistance
+        if localDeathWouldClinchMatch("HotPotato") then
+            tracker.hotPotatoArenaClinching = true
+        end
+        return bestCenter.Position, bestRadius, bestDistance
+    end
+
+    -- Once positively identified, keep the immutable center/radius for the outgoing
+    -- fall even if the model starts tearing down in the same frame. The short age
+    -- guard prevents stale data from leaking into a later round.
+    local cachedPosition = tracker.hotPotatoArenaCenterPosition
+    local cachedRadius = tonumber(tracker.hotPotatoArenaRadius)
+    local lastInsideAt = tonumber(tracker.hotPotatoArenaLastInsideAt)
+    if tracker.hotPotatoArenaCharacter == character
+        and typeof(cachedPosition) == "Vector3"
+        and cachedRadius and cachedRadius > 0
+        and lastInsideAt and os.clock() - lastInsideAt <= 1.25
+    then
+        local distance = (position - cachedPosition).Magnitude
+        tracker.hotPotatoArenaLastDistance = distance
+        return cachedPosition, cachedRadius, distance
+    end
+    return nil, nil, nil
+end
+
+local function hotPotatoClinchingContext(character)
+    if not character then return false end
+    if tracker.hotPotatoArenaCharacter == character
+        and tracker.hotPotatoArenaClinching == true
+    then
+        return true
+    end
+    local now = os.clock()
+    if tracker.localDeathContextGameId == "HotPotato"
+        and tracker.localDeathContextCharacter == character
+        and tracker.localDeathContextClinching == true
+        and tonumber(tracker.localDeathContextUpdatedAt) ~= nil
+        and now - tonumber(tracker.localDeathContextUpdatedAt) <= LOCAL_DEATH_CONTEXT_MAX_AGE
+    then
+        return true
+    end
+    return (currentGameId() == "HotPotato" or tracker.gameId == "HotPotato")
+        and localDeathWouldClinchMatch("HotPotato")
+end
+
+local function hotPotatoArenaBoundaryWouldClinch(character)
+    character = character or LocalPlayer.Character
+    if not character then return false end
+    -- ArenaModule clears InArena before returning a player to the lobby. Requiring the
+    -- live arena attribute prevents a normal post-round teleport from looking like an
+    -- out-of-bounds elimination relative to the cached arena center.
+    if LocalPlayer:GetAttribute("InArena") ~= true then return false end
+    if character ~= LocalPlayer.Character
+        and tracker.hotPotatoArenaCharacter ~= character
+        and tracker.localDeathContextCharacter ~= character
+    then
+        return false
+    end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local root = character:FindFirstChild("HumanoidRootPart")
+    if not humanoid or humanoid.Health <= 0 or not root or not root:IsA("BasePart") then
+        return false
+    end
+
+    local centerPosition, radius, distance = refreshHotPotatoArenaCache(character)
+    if typeof(centerPosition) ~= "Vector3" or not radius or not distance then
+        return false
+    end
+    if not hotPotatoClinchingContext(character) then
+        return false
+    end
+
+    -- InArena is set just before ArenaModule performs its delayed spawn pivot. Do not
+    -- treat that brief pre-teleport position as a fall. Once we have positively seen the
+    -- character inside this arena, the cache is authoritative; otherwise respect the
+    -- game's own TeleportGraceUntil window before using opponent-based recovery.
+    local lastInsideAt = tonumber(tracker.hotPotatoArenaLastInsideAt)
+    local recentlyInside = lastInsideAt ~= nil and os.clock() - lastInsideAt <= 1.25
+    if not recentlyInside then
+        local graceUntil = tonumber(LocalPlayer:GetAttribute("TeleportGraceUntil"))
+        if graceUntil ~= nil and workspace:GetServerTimeNow() <= graceUntil then
+            return false
+        end
+    end
+
+    -- This is the server's exact elimination boundary. No velocity inference is needed
+    -- once crossed: ArenaModule's next getTotalAlive() pass will exclude the player.
+    if distance >= radius then
+        return true
+    end
+
+    -- Fire slightly before the exact boundary only for a clearly irreversible outward
+    -- fall. The projection compensates for replication/ping and the server's independent
+    -- alive-check cadence without kicking for ordinary movement on the platform.
+    local position = characterPivotPosition(character)
+    if not position then return false end
+    local okVelocity, velocity = pcall(function()
+        return root.AssemblyLinearVelocity
+    end)
+    if not okVelocity or typeof(velocity) ~= "Vector3" then return false end
+    local radial = position - centerPosition
+    local radialMagnitude = radial.Magnitude
+    local outwardSpeed = 0
+    if radialMagnitude > 0.001 then
+        outwardSpeed = radial.Unit:Dot(velocity)
+    end
+    if velocity.Y >= -4 or outwardSpeed <= 2 then
+        return false
+    end
+    -- max(GetExtentsSize()) is intentionally much larger than the arena's ordinary
+    -- playable half-extents. Only predict ahead once the character is already near the
+    -- outer survival shell; this avoids treating normal jumps or drops between the Hot
+    -- Potato map's internal platforms as fatal falls.
+    if distance < radius * 0.85 then
+        return false
+    end
+
+    local pingSeconds = 0.08
+    pcall(function()
+        local item = autoServerHopState.RuntimeStatsService.Network.ServerStatsItem["Data Ping"]
+        local pingMs = item and tonumber(item:GetValue())
+        if pingMs then
+            pingSeconds = math.clamp(pingMs / 1000, 0.015, 2.0)
+        end
+    end)
+    local leadSeconds = math.clamp(0.34 + pingSeconds * 0.65, 0.34, 0.85)
+    local gravity = math.max(0, tonumber(workspace.Gravity) or 196.2)
+    local projected = position
+        + velocity * leadSeconds
+        + Vector3.new(0, -0.5 * gravity * leadSeconds * leadSeconds, 0)
+    local projectedDistance = (projected - centerPosition).Magnitude
+    local nearBoundaryMargin = math.clamp(
+        4 + math.max(0, outwardSpeed) * 0.06,
+        4,
+        14
+    )
+
+    return projectedDistance >= radius
+        or distance >= radius - nearBoundaryMargin
+end
+
+local function triggerHotPotatoArenaBoundaryDeparture(character)
+    if controller.destroyed or tracker.hotPotatoArenaDepartureLatched == true then
+        return false
+    end
+    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    if type(utility) ~= "table"
+        or utility.PauseScript == true
+        or utility.PauseMinigameFeatures == true
+        or utility.LeaveWhenAboutToLose ~= true
+    then
+        return false
+    end
+
+    character = character or LocalPlayer.Character
+    if not hotPotatoArenaBoundaryWouldClinch(character) then return false end
+
+    tracker.hotPotatoArenaDepartureLatched = true
+    local reason = "HotPotato:ArenaBoundary"
+    controller.pendingLossReason = reason
+    controller.triggerObservedAt = controller.triggerObservedAt or os.clock()
+    performDisconnectAndTeleport(controller.destinationServerId, reason)
+    scheduleUrgentDeparture()
+    return true
+end
+
+-- Hot Potato fatal-fall protection --------------------------------------------------
+-- Roblox may destroy character parts at FallenPartsDestroyHeight before the local
+-- Humanoid reports Health <= 0. In a clinching Hot Potato round, detect that
+-- irreversible downward crossing shortly before the destroy plane so autoleave can
+-- commit while the character and match context still exist. Earlier series rounds
+-- are never protected by this path.
+local function hotPotatoFatalFallLeadSeconds()
+    local leadSeconds = 0.22
+    pcall(function()
+        local item = autoServerHopState.RuntimeStatsService.Network.ServerStatsItem["Data Ping"]
+        local pingMs = item and tonumber(item:GetValue())
+        if pingMs then
+            leadSeconds = math.clamp(
+                0.20 + (pingMs / 1000) * 0.75,
+                0.20,
+                0.50
+            )
+        end
+    end)
+    return leadSeconds
+end
+
+local function hotPotatoFatalFallWouldClinch(character)
+    if not character then return false end
+    if character ~= LocalPlayer.Character
+        and tracker.localDeathContextCharacter ~= character
+    then
+        return false
+    end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local root = character:FindFirstChild("HumanoidRootPart")
+    if not humanoid or humanoid.Health <= 0 or not root or not root:IsA("BasePart") then
+        return false
+    end
+
+    local now = os.clock()
+    local cachedClinching = tracker.localDeathContextGameId == "HotPotato"
+        and tracker.localDeathContextCharacter == character
+        and tracker.localDeathContextClinching == true
+        and tonumber(tracker.localDeathContextUpdatedAt) ~= nil
+        and now - tonumber(tracker.localDeathContextUpdatedAt) <= LOCAL_DEATH_CONTEXT_MAX_AGE
+
+    local liveGame = currentGameId()
+    if liveGame ~= nil and liveGame ~= "HotPotato" then return false end
+    if liveGame ~= "HotPotato" and not cachedClinching then return false end
+    if not cachedClinching and not localDeathWouldClinchMatch("HotPotato") then
+        return false
+    end
+
+    local destroyHeight = tonumber(workspace.FallenPartsDestroyHeight)
+    if destroyHeight == nil or destroyHeight ~= destroyHeight then return false end
+
+    local velocityY = tonumber(root.AssemblyLinearVelocity.Y) or 0
+    if velocityY >= -2 then return false end
+
+    local leadSeconds = hotPotatoFatalFallLeadSeconds()
+    local gravity = math.max(0, tonumber(workspace.Gravity) or 196.2)
+    local currentY = root.Position.Y
+    local projectedY = currentY
+        + velocityY * leadSeconds
+        - 0.5 * gravity * leadSeconds * leadSeconds
+    local safetyMargin = math.clamp(
+        math.max(48, -velocityY * leadSeconds),
+        48,
+        160
+    )
+
+    return currentY <= destroyHeight + safetyMargin
+        or projectedY <= destroyHeight + 8
+end
+
+local function triggerHotPotatoFatalFallDeparture(character)
+    if controller.destroyed then return false end
+    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    if type(utility) ~= "table"
+        or utility.PauseScript == true
+        or utility.PauseMinigameFeatures == true
+        or utility.LeaveWhenAboutToLose ~= true
+    then
+        return false
+    end
+
+    character = character or LocalPlayer.Character
+    if not hotPotatoFatalFallWouldClinch(character) then return false end
+
+    local reason = "HotPotato:FatalFall"
+    controller.pendingLossReason = reason
+    controller.triggerObservedAt = controller.triggerObservedAt or os.clock()
+    performDisconnectAndTeleport(controller.destinationServerId, reason)
+    scheduleUrgentDeparture()
+    return true
+end
+
+local function triggerImmediateLocalDeathDeparture(character)
+    if controller.destroyed then return false end
+    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    if type(utility) ~= "table"
+        or utility.PauseScript == true
+        or utility.PauseMinigameFeatures == true
+        or utility.LeaveWhenAboutToLose ~= true
+    then
+        return false
+    end
+
+    character = character or LocalPlayer.Character
+    if not character then return false end
+    if character ~= LocalPlayer.Character
+        and tracker.localDeathContextCharacter ~= character
+        and not (controller.arenaDeathEvidence and controller.arenaDeathEvidence.character == character)
+    then
+        return false
+    end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health > 0 then return false end
+
+    -- Prefer the live match context while it still exists, but only leave when the
+    -- death would clinch the series. If the server tears ActiveMinigame/InArena down on
+    -- the fatal frame, fall back to the clinching context cached while this exact
+    -- character was alive. Hot Potato death never depends on Tool possession.
+    local gameId = activeMinigameForLocalDeath()
+    local clinching = gameId ~= nil and localDeathWouldClinchMatch(gameId)
+    if not clinching then
+        gameId = cachedLocalDeathContext(character)
+        clinching = gameId ~= nil
+    end
+    if not gameId or not clinching then
+        return false
+    end
+
+    local reason = tostring(gameId) .. ":LocalDeath"
+    controller.deathDepartureEvidence = {
+        character = character,
+        gameId = gameId,
+        at = os.clock(),
+    }
+    controller.pendingLossReason = reason
+    controller.triggerObservedAt = controller.triggerObservedAt or os.clock()
+    performDisconnectAndTeleport(controller.destinationServerId, reason)
+    scheduleUrgentDeparture()
+    return true
+end
+
+local function bindImmediateLocalDeath(character)
+    if not character then return end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then
+        local ok, found = pcall(function()
+            return character:WaitForChild("Humanoid", 8)
+        end)
+        humanoid = ok and found or nil
+    end
+    if not humanoid or not humanoid:IsA("Humanoid") then return end
+
+    local fired = false
+    local function onDeath()
+        if fired or humanoid.Health > 0 then return end
+        fired = triggerImmediateLocalDeathDeparture(character) == true
+    end
+
+    addConnection(humanoid.Died:Connect(function()
+        if fired then return end
+        fired = triggerImmediateLocalDeathDeparture(character) == true
+    end))
+    addConnection(humanoid.HealthChanged:Connect(function(health)
+        if tonumber(health) and health <= 0 then
+            onDeath()
+        end
+    end))
+    addConnection(humanoid:GetPropertyChangedSignal("Health"):Connect(function()
+        if humanoid.Health <= 0 then
+            onDeath()
+        end
+    end))
+    addConnection(humanoid.StateChanged:Connect(function(_, newState)
+        if newState == Enum.HumanoidStateType.Dead then
+            onDeath()
+        end
+    end))
+
+    -- Cover execution/rebind after death has already occurred.
+    if humanoid.Health <= 0 then
+        task.defer(onDeath)
+    end
+end
+
+addConnection(LocalPlayer.CharacterAdded:Connect(function(character)
+    controller.arenaDeathEvidence = nil
+    controller.deathDepartureEvidence = nil
+    tracker.localDeathContextGameId = nil
+    tracker.localDeathContextCharacter = nil
+    tracker.localDeathContextClinching = false
+    tracker.localDeathContextUpdatedAt = nil
+    clearHotPotatoArenaCache(true)
+    task.defer(bindImmediateLocalDeath, character)
+end))
+
+-- Capture the round context as soon as arena entry replicates. The normal state
+-- evaluator keeps refreshing it afterward, but this closes the tiny gap between
+-- the arena teleport and the next evaluator tick.
+addConnection(LocalPlayer:GetAttributeChangedSignal("InArena"):Connect(function()
+    if LocalPlayer:GetAttribute("InArena") == true then
+        local gameId = currentGameId() or tracker.gameId
+        if gameId then
+            refreshLocalDeathContext(gameId)
+            if gameId == "HotPotato" then
+                refreshHotPotatoArenaCache(LocalPlayer.Character)
+            end
+        end
+    end
+end))
+
+-- Some Roblox character teardown paths can remove the character immediately
+-- after death. Treat removal as a backup death signal only when the Humanoid is
+-- already dead; a healthy respawn/arena cleanup must never trigger this path.
+addConnection(LocalPlayer.CharacterRemoving:Connect(function(character)
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if humanoid and humanoid.Health <= 0 then
+        triggerImmediateLocalDeathDeparture(character)
+    else
+        -- ArenaModule can eliminate an out-of-bounds player while Health is still > 0.
+        -- Re-run the exact arena-boundary check before falling back to destroy-height.
+        if not triggerHotPotatoArenaBoundaryDeparture(character) then
+            triggerHotPotatoFatalFallDeparture(character)
+        end
+    end
+end))
+
+if LocalPlayer.Character then
+    task.defer(bindImmediateLocalDeath, LocalPlayer.Character)
+    if LocalPlayer:GetAttribute("InArena") == true then
+        local gameId = currentGameId() or tracker.gameId
+        if gameId then
+            refreshLocalDeathContext(gameId)
+            if gameId == "HotPotato" then
+                refreshHotPotatoArenaCache(LocalPlayer.Character)
+            end
+        end
+    end
+end
+
+-- Arena-entry failure protection ---------------------------------------------------
+-- The arena controller sets InArena and TeleportGraceUntil before moving a player to
+-- the spawn. If the opponent has entered a fresh arena teleport while the local player
+-- still has not, the server can award the round automatically. Only protect this when
+-- losing the current round would clinch the entire best-of series.
+local ARENA_ENTRY_MISMATCH_MIN_SECONDS = 0.14
+local ARENA_ENTRY_MISMATCH_MAX_SECONDS = 0.30
+
+local function resetArenaEntryWatchdog()
+    tracker.arenaEntryMismatchSince = nil
+    tracker.arenaEntryMismatchGameId = nil
+    tracker.arenaEntryMismatchOpponentUserId = nil
+    tracker.arenaEntryFailureLatched = false
+end
+
+local function arenaEntryMismatchConfirmSeconds()
+    local pingSeconds = 0.08
+    pcall(function()
+        local item = autoServerHopState.RuntimeStatsService.Network.ServerStatsItem["Data Ping"]
+        local value = item and tonumber(item:GetValue())
+        if value then
+            pingSeconds = math.clamp(value / 1000, 0.015, 0.35)
+        end
+    end)
+    -- The server itself schedules the physical PivotTo about 0.1 s after setting
+    -- InArena. A little more than that avoids treating normal attribute replication
+    -- ordering as a failed teleport while still leaving essentially immediately.
+    return math.clamp(
+        0.115 + pingSeconds * 0.35,
+        ARENA_ENTRY_MISMATCH_MIN_SECONDS,
+        ARENA_ENTRY_MISMATCH_MAX_SECONDS
+    )
+end
+
+local function freshArenaTeleportEvidence(player)
+    if typeof(player) ~= "Instance" or not player:IsA("Player") then
+        return false
+    end
+    if player:GetAttribute("InArena") ~= true then
+        return false
+    end
+    local graceUntil = tonumber(player:GetAttribute("TeleportGraceUntil"))
+    if graceUntil == nil then
+        -- InArena is still sufficient evidence on older/alternate arena revisions.
+        return true
+    end
+    local serverNow
+    pcall(function()
+        serverNow = workspace:GetServerTimeNow()
+    end)
+    if tonumber(serverNow) == nil then
+        return true
+    end
+    -- Accept a small amount of replication delay after the two-second grace expires.
+    return graceUntil >= serverNow - 0.35
+end
+
+local function localArenaEntryConfirmed(opponent)
+    if LocalPlayer:GetAttribute("InArena") ~= true then return false end
+    local character = LocalPlayer.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if not root or not humanoid or humanoid.Health <= 0 then return false end
+    local otherCharacter = opponent and opponent.Character
+    local otherRoot = otherCharacter and otherCharacter:FindFirstChild("HumanoidRootPart")
+    -- Attributes are written before PivotTo. Gross separation catches a player
+    -- stranded in the plaza even when both InArena flags have already replicated.
+    -- Missing opponent geometry is unknown, not evidence of teleport failure.
+    if otherRoot and (root.Position - otherRoot.Position).Magnitude > 1024 then return false end
+    return true
+end
+
+local function evaluateArenaEntryFailure()
+    if controller.destroyed then
+        return
+    end
+    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    if type(utility) ~= "table"
+        or utility.PauseScript == true
+        or utility.PauseMinigameFeatures == true
+        or utility.LeaveWhenAboutToLose ~= true
+    then
+        resetArenaEntryWatchdog()
+        return
+    end
+
+    local gameId = currentGameId()
+    if not gameId or SUPPORTED_GAMES[gameId] ~= true then
+        resetArenaEntryWatchdog()
+        return
+    end
+
+    local opponent = currentOpponent() or tracker.cachedOpponent
+    if typeof(opponent) ~= "Instance"
+        or not opponent:IsA("Player")
+        or opponent == LocalPlayer
+        or opponent.Parent ~= Players
+    then
+        resetArenaEntryWatchdog()
+        return
+    end
+
+    -- Success on our side cancels the watchdog immediately. Likewise, do not arm until
+    -- the opponent has concrete fresh arena-entry evidence.
+    if localArenaEntryConfirmed(opponent)
+        or not freshArenaTeleportEvidence(opponent)
+    then
+        resetArenaEntryWatchdog()
+        return
+    end
+
+    if not roundLossWouldClinchMatch(gameId) then
+        resetArenaEntryWatchdog()
+        return
+    end
+
+    local now = os.clock()
+    local opponentUserId = opponent.UserId
+    if tracker.arenaEntryMismatchGameId ~= gameId
+        or tracker.arenaEntryMismatchOpponentUserId ~= opponentUserId
+        or tracker.arenaEntryMismatchSince == nil
+    then
+        tracker.arenaEntryMismatchGameId = gameId
+        tracker.arenaEntryMismatchOpponentUserId = opponentUserId
+        tracker.arenaEntryMismatchSince = now
+        tracker.arenaEntryFailureLatched = false
+        return
+    end
+
+    if tracker.arenaEntryFailureLatched == true then
+        executePendingLossIfReady()
+        return
+    end
+
+    local confirmationSeconds = arenaEntryMismatchConfirmSeconds()
+    if LocalPlayer:GetAttribute("InArena") == true then
+        confirmationSeconds = math.max(0.45, confirmationSeconds)
+    end
+    if now - tracker.arenaEntryMismatchSince < confirmationSeconds then
+        return
+    end
+
+    -- Final synchronous recheck immediately before latching the departure. If our
+    -- InArena attribute arrived during the confirmation interval, never disconnect.
+    local liveOpponent = currentOpponent() or tracker.cachedOpponent
+    if currentGameId() ~= gameId
+        or localArenaEntryConfirmed(opponent)
+        or liveOpponent ~= opponent
+        or not freshArenaTeleportEvidence(opponent)
+        or not roundLossWouldClinchMatch(gameId)
+    then
+        resetArenaEntryWatchdog()
+        return
+    end
+
+    tracker.arenaEntryFailureLatched = true
+    latchClinchingLoss(gameId .. ":ArenaEntryFailure")
+end
+
+addConnection(RunService.Heartbeat:Connect(evaluateArenaEntryFailure))
+
+-- Critical Hot Potato receive guard. This is deliberately event-driven by the actual
+-- Character.ChildAdded Tool reparent so a final-second opponent -> local transfer does
+-- not have to wait for the next state-evaluation frame. Receiving the Tool is NOT by
+-- itself grounds to leave: before the shared hard cutoff, handoff always gets priority.
+-- Only possession at/after that cutoff is allowed to invoke Leave When About To Lose.
+-- Timer parsing lives before the event-driven acquire guard so a potato received
+-- while the hub is still finishing initialization cannot hit an unassigned callback.
+-- This was previously a forward declaration whose later assignment could be missed;
+-- the surrounding pcall swallowed that error and allowed a terminal receive to fall
+-- through into normal handoff logic.
+local function hotPotatoTimerValue(tool)
+    if not tool then
+        return nil
+    end
+    local handle = tool:FindFirstChild("Handle")
+    if not handle then
+        return nil
+    end
+    for _, descendant in ipairs(handle:GetDescendants()) do
+        if descendant:IsA("TextLabel") or descendant:IsA("TextButton") then
+            local text = tostring(descendant.Text or "")
+            local value = tonumber(text) or tonumber(string.match(text, "%-?%d+%.?%d*"))
+            if value ~= nil and (descendant.Name == "TimeLeft" or value >= 0) then
+                return value
+            end
+        end
+    end
+    return nil
+end
+
+local function hotPotatoPingSeconds()
+    local pingSeconds = 0.08
+    pcall(function()
+        local item = autoServerHopState.RuntimeStatsService.Network.ServerStatsItem["Data Ping"]
+        local value = item and item:GetValue()
+        if tonumber(value) then
+            pingSeconds = math.clamp(tonumber(value) / 1000, 0.015, 2.0)
+        end
+    end)
+    return pingSeconds
+end
+
+local function hotPotatoFallbackLead(pingSeconds)
+    -- Reserve time for possession confirmation, network transit and a delayed frame.
+    -- Loss protection intentionally takes priority over a last-instant handoff.
+    return math.clamp(0.55 + (tonumber(pingSeconds) or 0.08), 0.60, 2.55)
+end
+
+local function hotPotatoPredictedExpiry(timerValue, changedAt, pingSeconds)
+    timerValue = tonumber(timerValue)
+    changedAt = tonumber(changedAt)
+    if timerValue == nil or changedAt == nil then return nil end
+    -- Server Hot Potato writes the displayed timer, then waits about one second before
+    -- subtracting/checking zero. Therefore even a freshly observed displayed 0 still has
+    -- a final server wait window; treating 0 as immediate expiry makes the fallback race
+    -- the transfer instead of serving as the true last resort.
+    local step = math.clamp(tonumber(tracker.hotPotatoTimerStep) or 1.0, 1.00, 1.35)
+    return changedAt
+        + step * math.max(1, timerValue)
+        - ((tonumber(pingSeconds) or 0.08) * 0.5)
+end
+
+local function hotPotatoTerminalContextActive()
+    if currentGameId() == "HotPotato" or tracker.gameId == "HotPotato" then
+        return true
+    end
+    if LocalPlayer:GetAttribute("InArena") == true and tracker.hotPotatoLastTimer ~= nil then
+        return true
+    end
+    -- The replicated phase/session can disappear in the same final frame in which the
+    -- Tool reparents or the character dies. Preserve only a very short terminal tail
+    -- backed by a recently observed Hot Potato timer; round/session reset clears it.
+    local changedAt = tonumber(tracker.hotPotatoTimerChangedAt)
+    return tracker.hotPotatoLastTimer ~= nil
+        and changedAt ~= nil
+        and os.clock() - changedAt <= 2.25
+end
+
+local function hotPotatoHardDeadlineReady(tool, now)
+    local deadline = tonumber(tracker.hotPotatoHardFailsafeAt)
+    if not tool or tool ~= tracker.hotPotatoHardFailsafeTool
+        or not deadline or now < deadline or not hotPotatoTerminalContextActive() then
+        return false
+    end
+    local timer = hotPotatoTimerValue(tool)
+    -- The same Tool instance may be reused. A restarted countdown invalidates
+    -- the expired round's deadline before the regular evaluator catches up.
+    return timer == nil or timer <= 1
+end
+
+local function forceHotPotatoEmergencyLeave(reason, tool, expiresAt)
+    if not hotPotatoTerminalContextActive() then return false end
+    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    if controller.destroyed
+        or type(utility) ~= "table"
+        or utility.LeaveWhenAboutToLose ~= true
+        or utility.PauseScript == true
+        or utility.PauseMinigameFeatures == true
+    then
+        return false
+    end
+    local character = LocalPlayer.Character
+    if typeof(tool) ~= "Instance"
+        or not tool:IsA("Tool")
+        or string.lower(tool.Name) ~= "hot potato"
+        or tool.Parent ~= character
+    then
+        return false
+    end
+
+    -- Holding the potato at the hard cutoff is only terminal when losing this round
+    -- would also lose the best-of series. Once that fact has been positively cached for
+    -- this exact endgame window, keep it through the final replication teardown instead
+    -- of asking a disappearing ActiveMinigame object to prove it again.
+    local cachedClinching = tracker.localDeathContextGameId == "HotPotato"
+        and tracker.localDeathContextCharacter == LocalPlayer.Character
+        and tracker.localDeathContextClinching == true
+        and tonumber(tracker.localDeathContextUpdatedAt) ~= nil
+        and os.clock() - tonumber(tracker.localDeathContextUpdatedAt) <= LOCAL_DEATH_CONTEXT_MAX_AGE
+    local clinching = tracker.hotPotatoHardFailsafeClinching == true
+        or cachedClinching
+        or localDeathWouldClinchMatch("HotPotato")
+    if not clinching then
+        if hotPotatoReasonRequiresLivePossession(controller.pendingLossReason) then
+            controller.pendingLossReason = nil
+        end
+        controller.lastDepartureAttemptAt = 0
+        resetHotPotatoDepartureGuard()
+        tracker.hotPotatoHardFailsafeClinching = false
+        return false
+    end
+
+    local now = os.clock()
+    local finalExpiresAt = math.max(now + 0.25, tonumber(expiresAt) or (now + 1.5))
+    tracker.hotPotatoHardFailsafeTool = tool
+    tracker.hotPotatoHardFailsafeAt = now
+    tracker.hotPotatoHardFailsafeExpiresAt = finalExpiresAt
+    tracker.hotPotatoHardFailsafeClinching = true
+
+    local handoffState = rawget(_G, "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
+    if type(handoffState) == "table" then
+        if type(handoffState.SetFinalFallbackWindow) == "function" then
+            pcall(
+                handoffState.SetFinalFallbackWindow,
+                true,
+                now,
+                finalExpiresAt,
+                reason,
+                false
+            )
+        end
+        -- Do not cancel the final handoff pump here. The departure controller still
+        -- has to pass its possession-confirmation guard before Kick; keep using those
+        -- last physics frames for fresh transfer attempts. Ownership change during the
+        -- guard cancels the pending departure automatically.
+    end
+
+    return latchClinchingLoss(reason) == true
+end
+
+local function hotPotatoCriticalAcquire(tool)
+    if controller.destroyed then
+        return false
+    end
+    -- The replicated game id/phase can clear before the Tool is removed at round end.
+    -- Recent Hot Potato timer state plus actual Tool possession is authoritative here.
+    if not hotPotatoTerminalContextActive() then
+        return false
+    end
+    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    if type(utility) ~= "table"
+        or utility.LeaveWhenAboutToLose ~= true
+        or utility.PauseScript == true
+        or utility.PauseMinigameFeatures == true
+    then
+        return false
+    end
+    local character = LocalPlayer.Character
+    if typeof(tool) ~= "Instance" or not tool:IsA("Tool")
+        or string.lower(tool.Name) ~= "hot potato"
+        or tool.Parent ~= character
+    then
+        return false
+    end
+
+    local now = os.clock()
+    tracker.hotPotatoCriticalAcquireSerial = (tracker.hotPotatoCriticalAcquireSerial or 0) + 1
+    local acquireSerial = tracker.hotPotatoCriticalAcquireSerial
+    local timerValue = hotPotatoTimerValue(tool)
+    local trackedTimer = tonumber(tracker.hotPotatoLastTimer)
+    local changedAt = tonumber(tracker.hotPotatoTimerChangedAt)
+    local pingSeconds = hotPotatoPingSeconds()
+
+    -- ChildAdded can precede the TimerGui descendants by a physics frame. Prefer the
+    -- live label when available, otherwise use the timer that was already being tracked
+    -- while the opponent held the same Tool.
+    local observedTimer = timerValue ~= nil and timerValue or trackedTimer
+    local observedChangedAt = changedAt
+    if timerValue ~= nil and timerValue ~= trackedTimer then
+        observedChangedAt = now
+        tracker.hotPotatoLastTimer = timerValue
+        tracker.hotPotatoTimerChangedAt = now
+    elseif observedChangedAt == nil and observedTimer ~= nil then
+        observedChangedAt = now
+        tracker.hotPotatoTimerChangedAt = now
+    end
+
+    tracker.hotPotatoLocalReceivedAt = now
+    tracker.hotPotatoLocalReceivedTool = tool
+
+    -- If the Tool reparent arrived before its timer UI and we have no prior timer sample,
+    -- re-check for a few physics frames. This closes the exact ChildAdded -> TimerGui race
+    -- without treating an unknown-time receive as a terminal loss.
+    if observedTimer == nil then
+        task.spawn(function()
+            local probeUntil = os.clock() + 0.32
+            while not controller.destroyed
+                and tracker.hotPotatoCriticalAcquireSerial == acquireSerial
+                and tracker.hotPotatoLocalReceivedTool == tool
+                and tool.Parent == LocalPlayer.Character
+                and os.clock() < probeUntil
+            do
+                RunService.Heartbeat:Wait()
+                if hotPotatoTimerValue(tool) ~= nil then
+                    hotPotatoCriticalAcquire(tool)
+                    return
+                end
+            end
+        end)
+        return false
+    end
+
+    -- This event-driven guard is only for the final displayed second. Earlier receives
+    -- stay under the normal Hot Potato scheduler.
+    if observedTimer > 1 then
+        return false
+    end
+
+    local predictedExpiryAt = hotPotatoPredictedExpiry(
+        observedTimer,
+        observedChangedAt or now,
+        pingSeconds
+    )
+    if predictedExpiryAt == nil then
+        return false
+    end
+
+    local fallbackLead = hotPotatoFallbackLead(pingSeconds)
+    local hardCutoffAt = predictedExpiryAt - fallbackLead
+    local fallbackExpiresAt = predictedExpiryAt + 0.75
+
+    -- Give transfer absolute priority. A final receive gets an immediate synchronous
+    -- burst plus the persistent final worker even if the general state evaluator has not
+    -- seen the new holder yet. This is independent from Always Give Back.
+    local autoplayEnabled = utility.AutoPlayMaster == true
+        and type(minigameAutoplayState) == "table"
+        and minigameAutoplayState.HotPotato == true
+    local handoffState = rawget(_G, "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
+    if autoplayEnabled and type(handoffState) == "table" then
+        if type(handoffState.HandoffNow) == "function" then
+            pcall(handoffState.HandoffNow, false, nil, nil)
+            pcall(
+                handoffState.HandoffNow,
+                true,
+                now,
+                math.max(now + 0.12, predictedExpiryAt + 0.16)
+            )
+        elseif type(handoffState.HandoffAt) == "function" then
+            pcall(
+                handoffState.HandoffAt,
+                now,
+                math.max(now + 0.12, predictedExpiryAt + 0.16)
+            )
+        end
+    end
+
+    -- Non-clinching rounds never auto-leave. Use the live series calculation first,
+    -- then the continuously refreshed clinching context so a same-frame session teardown
+    -- cannot turn a known final round into "unknown" after the Tool reparents.
+    local cachedClinching = tracker.localDeathContextGameId == "HotPotato"
+        and tracker.localDeathContextCharacter == LocalPlayer.Character
+        and tracker.localDeathContextClinching == true
+        and tonumber(tracker.localDeathContextUpdatedAt) ~= nil
+        and os.clock() - tonumber(tracker.localDeathContextUpdatedAt) <= LOCAL_DEATH_CONTEXT_MAX_AGE
+    if not cachedClinching and not localDeathWouldClinchMatch("HotPotato") then
+        return false
+    end
+
+    -- Arm the last-resort departure from this exact receive event. Do not rely on the
+    -- next general evaluator frame: ActiveMinigame can already be tearing down by then.
+    tracker.hotPotatoHardFailsafeTool = tool
+    tracker.hotPotatoHardFailsafeAt = hardCutoffAt
+    tracker.hotPotatoHardFailsafeExpiresAt = fallbackExpiresAt
+    tracker.hotPotatoHardFailsafeClinching = true
+    if type(handoffState) == "table" and type(handoffState.SetFinalFallbackWindow) == "function" then
+        pcall(
+            handoffState.SetFinalFallbackWindow,
+            true,
+            hardCutoffAt,
+            fallbackExpiresAt,
+            "HotPotato:FinalFailsafe",
+            true
+        )
+    end
+
+    task.spawn(function()
+        while not controller.destroyed
+            and tracker.hotPotatoCriticalAcquireSerial == acquireSerial
+            and tracker.hotPotatoLocalReceivedTool == tool
+            and tool.Parent == LocalPlayer.Character
+            and os.clock() < hardCutoffAt
+        do
+            RunService.Heartbeat:Wait()
+        end
+        if controller.destroyed
+            or tracker.hotPotatoCriticalAcquireSerial ~= acquireSerial
+            or tracker.hotPotatoLocalReceivedTool ~= tool
+            or tool.Parent ~= LocalPlayer.Character
+        then
+            return
+        end
+
+        -- Keep trying the emergency departure on consecutive physics frames until the
+        -- Tool leaves our character or the short terminal window ends. The departure
+        -- path itself re-checks Tool ownership immediately before Kick, so a transfer
+        -- that lands during the guard cancels the kick.
+        local hardStopAt = math.max(os.clock() + 0.18, predictedExpiryAt + 0.20)
+        repeat
+            if tool.Parent ~= LocalPlayer.Character then return end
+            forceHotPotatoEmergencyLeave(
+                "HotPotato:FinalFailsafe",
+                tool,
+                fallbackExpiresAt
+            )
+            if controller.destroyed or tool.Parent ~= LocalPlayer.Character then return end
+            RunService.Heartbeat:Wait()
+        until os.clock() >= hardStopAt
+    end)
+
+    if now >= hardCutoffAt then
+        return forceHotPotatoEmergencyLeave(
+            "HotPotato:HardCutoff",
+            tool,
+            fallbackExpiresAt
+        ) == true
+    end
+    return false
+end
+rawset(_G, "__TUFFHUB_HOT_POTATO_CRITICAL_ACQUIRE", hotPotatoCriticalAcquire)
+
 local function isOpponentPlayer(value, opponent)
     if typeof(value) ~= "Instance" or not value:IsA("Player") then
         return false
@@ -32026,6 +35165,20 @@ local function publicWinnerIdentity(value)
     return typeof(value) .. ":" .. tostring(value)
 end
 local function resetTracker(gameId)
+    local previousGameId = tracker.gameId
+    if previousGameId == "HotPotato" or gameId == "HotPotato" then
+        local handoffState = rawget(_G, "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
+        if type(handoffState) == "table" and type(handoffState.ResetRound) == "function" then
+            pcall(handoffState.ResetRound, gameId == "HotPotato" and currentOpponent() or nil)
+        end
+        if type(controller.pendingLossReason) == "string"
+            and string.sub(controller.pendingLossReason, 1, 10) == "HotPotato:"
+        then
+            controller.pendingLossReason = nil
+        end
+        controller.lastDepartureAttemptAt = 0
+        resetHotPotatoDepartureGuard()
+    end
     tracker.gameId = gameId
     tracker.initialized = false
     tracker.phase = currentPhase()
@@ -32045,6 +35198,10 @@ local function resetTracker(gameId)
     tracker.opponentWins = 0
     tracker.roundStartLocalWins = nil
     tracker.roundStartOpponentWins = nil
+    tracker.arenaEntryMismatchSince = nil
+    tracker.arenaEntryMismatchGameId = nil
+    tracker.arenaEntryMismatchOpponentUserId = nil
+    tracker.arenaEntryFailureLatched = false
     tracker.seriesBestOfRounds = nil
     tracker.bestOfOneCandidateSince = nil
     tracker.candyBombsHit = 0
@@ -32086,11 +35243,33 @@ local function resetTracker(gameId)
     tracker.popcornOpponentLastVisibleRemaining = nil
     tracker.footballOpponentCompletedFirstObserved = false
     tracker.footballLocalCompletedFirstObserved = false
+    tracker.hotPotatoHolderUserId = nil
+    tracker.hotPotatoLastNonNilHolderUserId = nil
+    tracker.hotPotatoHolderChangedAt = nil
+    tracker.hotPotatoLocalReceivedAt = nil
+    tracker.hotPotatoLocalReceivedTool = nil
+    tracker.hotPotatoCriticalAcquireSerial = (tracker.hotPotatoCriticalAcquireSerial or 0) + 1
+    tracker.hotPotatoLastTimer = nil
+    tracker.hotPotatoTimerChangedAt = nil
+    tracker.hotPotatoTimerStep = 1.0
+    tracker.hotPotatoFinalScheduleId = (tracker.hotPotatoFinalScheduleId or 0) + 1
+    tracker.hotPotatoFinalScheduleKey = nil
+    tracker.hotPotatoFinalHandoffAt = nil
+    tracker.hotPotatoFinalLeaveAt = nil
+    tracker.hotPotatoHardFailsafeTool = nil
+    tracker.hotPotatoHardFailsafeAt = nil
+    tracker.hotPotatoHardFailsafeExpiresAt = nil
+    tracker.hotPotatoHardFailsafeClinching = false
+    clearHotPotatoArenaCache(true)
     tracker.connectFourAwaitingFreshRound = false
     tracker.connectFourRoundArmed = false
     tracker.battleshipAwaitingFreshRound = false
     tracker.battleshipRoundArmed = false
     tracker.gameIdTeardownSeen = false
+    tracker.localDeathContextGameId = nil
+    tracker.localDeathContextCharacter = nil
+    tracker.localDeathContextClinching = false
+    tracker.localDeathContextUpdatedAt = nil
 end
 local function hasConnectFourWin(grid, targetSeat)
     if grid == nil or targetSeat == nil then
@@ -32829,7 +36008,7 @@ local function clinchPossibleFromRoundLoss(opponentWins, requiredWins)
     end
     local beforeRound = tracker.roundStartOpponentWins
     if beforeRound == nil then
-        return false
+        return numeric(opponentWins, -1) >= requiredWins - 1
     end
     beforeRound = math.max(0, math.floor(numeric(beforeRound, 0)))
     return beforeRound == requiredWins - 1
@@ -32843,12 +36022,8 @@ local function exactRoundLossClinches(opponentWins, requiredWins)
 end
 local function armCandyRoundFromCurrentSeries()
     local bestOf = currentBestOfRounds()
-    if bestOf == nil then
-        tracker.candyRoundStartOpponentWins = nil
-        tracker.candyClinchRoundArmed = false
-        return
-    end
-    local requiredWins = winsRequired(bestOf)
+    local requiredWins = bestOf and winsRequired(bestOf) or tracker.cachedRequiredWins
+    if requiredWins == nil then return end
     local seatIndex = currentSeatIndex()
     local _, opponentWins = readSeriesScores("CandyBomb", seatIndex)
     tracker.candyRoundStartOpponentWins = opponentWins
@@ -32933,7 +36108,8 @@ local function processCandyBomb(s)
         beginFreshCandyRound()
     end
     local observedBombs = syncCandyBombBoardCount()
-    if tracker.candyClinchRoundArmed == true
+    if (tracker.candyClinchRoundArmed == true
+            or exactRoundLossClinches(s.opponentWins, s.requiredWins))
         and tracker.candyAwaitingFreshBoard ~= true
         and tracker.candyBoardFreshConfirmed == true
         and math.max(
@@ -32961,6 +36137,17 @@ local function processNumberGuess(s)
         return
     end
     local count = safeSequenceLength(guessLog, 256)
+    -- Replication can mutate the latest entry or deliver the series score after
+    -- the log. Recheck its value even when the sequence length did not change.
+    local latest = safeIndex(guessLog, count)
+    if s.phase == "Guessing"
+        and safeIndex(latest, "response") == "Correct"
+        and numeric(safeIndex(latest, "guesserIndex"), nil) == s.opponentSeat
+        and exactRoundLossClinches(s.opponentWins, s.requiredWins) then
+        tracker.guessCount = count
+        latchClinchingLoss("NumberGuess:ExistingCorrect")
+        return
+    end
     if tracker.guessCount == nil then
         tracker.guessCount = count
         local lastEntry = safeIndex(guessLog, count)
@@ -32992,6 +36179,7 @@ local function processNumberGuess(s)
     tracker.guessCount = count
 end
 local function processConnectFour(s)
+    if s.phase ~= "Playing" and s.phase ~= "Finished" then return end
     if s.opponentSeat == nil then
         return
     end
@@ -33020,6 +36208,7 @@ local function processBattleship(s)
         tracker.battleshipRoundArmed = false
         return
     end
+    if s.phase ~= "Firing" and s.phase ~= "Finished" then return end
     local allCellsHit = ownBattleshipsAllHitByOpponentShots(s.seatIndex)
     local allSunk = ownBattleshipsAllSunk(s.seatIndex)
     if tracker.battleshipAwaitingFreshRound then
@@ -33306,6 +36495,11 @@ local function knockoutResolutionPayloadProvesLoss(resolution, seatIndex, oppone
         and opponentSurvivors > 0
 end
 local function processKnockout(s)
+    if s.phase == "Starting" or s.phase == "Aiming" then
+        tracker.knockoutOpponentLossPending = false
+        tracker.knockoutPendingRoundStartOpponentWins = nil
+        return
+    end
     if clinchPossibleFromRoundLoss(s.opponentWins, s.requiredWins) then
         local outcome = knockoutFinalResolutionOutcome(s)
         if outcome and outcome.opponentGuaranteedRoundWin then
@@ -33346,6 +36540,10 @@ local function processFootballDraft(s)
     local draft = readFootballDraftState(s.seatIndex)
     if not draft then
         return
+    end
+    if not draft.myCompleted and not draft.opponentCompleted then
+        tracker.footballOpponentCompletedFirstObserved = false
+        tracker.footballLocalCompletedFirstObserved = false
     end
     if draft.opponentCompleted and not draft.myCompleted then
         tracker.footballOpponentCompletedFirstObserved = true
@@ -33392,6 +36590,7 @@ local function processPopcorn(s)
     if tracker.popcornBestOfRounds ~= nil then
         popcornRequiredWins = winsRequired(tracker.popcornBestOfRounds)
     end
+    popcornRequiredWins = popcornRequiredWins or s.requiredWins or tracker.cachedRequiredWins
     local myState = readPopcornPrivateState("myState")
     local opponentState = readPopcornPrivateState("opponentState")
     local myTotalSlots, myRemaining = readPopcornKernelCounts(s.seatIndex)
@@ -33591,6 +36790,448 @@ local function processPopcorn(s)
     tracker.popcornOpponentLastActiveKernelSlot = opponentState.activeKernelSlot
     tracker.popcornOpponentLastResultCell = popcornResultCell(opponentState)
 end
+local function hotPotatoTool(character)
+    if not character then
+        return nil
+    end
+    local direct = character:FindFirstChild("Hot Potato")
+    if direct and direct:IsA("Tool") then
+        return direct
+    end
+    for _, child in ipairs(character:GetChildren()) do
+        if child:IsA("Tool") and string.lower(child.Name) == "hot potato" then
+            return child
+        end
+    end
+    return nil
+end
+local function hotPotatoArenaOpponent()
+    local opponent = currentOpponent()
+    if opponent then return opponent end
+    local localCharacter = LocalPlayer.Character
+    local localRoot = localCharacter and localCharacter:FindFirstChild("HumanoidRootPart")
+    if not localRoot then return nil end
+    local localInArena = LocalPlayer:GetAttribute("InArena") == true
+    local bestPlayer, bestScore, bestDistance
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local character = player.Character
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            local root = character and character:FindFirstChild("HumanoidRootPart")
+            if humanoid and humanoid.Health > 0 and root then
+                local distance = (root.Position - localRoot.Position).Magnitude
+                local playerInArena = player:GetAttribute("InArena") == true
+                local score = distance
+                    - ((localInArena and playerInArena) and 10000 or (playerInArena and 2500 or 0))
+                    - (hotPotatoTool(character) and 20000 or 0)
+                if bestScore == nil or score < bestScore then
+                    bestPlayer = player
+                    bestScore = score
+                    bestDistance = distance
+                end
+            end
+        end
+    end
+    if bestPlayer then
+        local markedArena = bestPlayer:GetAttribute("InArena") == true
+        local carriesPotato = hotPotatoTool(bestPlayer.Character) ~= nil
+        if markedArena or carriesPotato or (bestDistance and bestDistance <= 220) then
+            return bestPlayer
+        end
+    end
+    return nil
+end
+local function processHotPotato(s)
+    if not s or s.gameId ~= "HotPotato" then
+        return
+    end
+    local localCharacter = LocalPlayer.Character
+    local opponent = s.opponent or hotPotatoArenaOpponent()
+    local opponentCharacter = opponent and opponent.Character
+    local localHumanoid = localCharacter and localCharacter:FindFirstChildOfClass("Humanoid")
+    local localRoot = localCharacter and localCharacter:FindFirstChild("HumanoidRootPart")
+    local opponentRoot = opponentCharacter and opponentCharacter:FindFirstChild("HumanoidRootPart")
+    if localHumanoid and localHumanoid.Health <= 0 then
+        triggerImmediateLocalDeathDeparture(localCharacter)
+        return
+    end
+    local myTool = hotPotatoTool(localCharacter)
+    local opponentTool = hotPotatoTool(opponentCharacter)
+    local activeTool = myTool or opponentTool
+    local holder = myTool and LocalPlayer or (opponentTool and opponent or nil)
+    local holderUserId = holder and holder.UserId or nil
+    local now = os.clock()
+    if holderUserId ~= tracker.hotPotatoHolderUserId then
+        local previousNonNilHolderUserId = tracker.hotPotatoLastNonNilHolderUserId
+        tracker.hotPotatoHolderUserId = holderUserId
+        tracker.hotPotatoHolderChangedAt = now
+        -- swapTool briefly unequips the Tool before deferring the new Character parent,
+        -- so preserve the last non-nil holder across that transient nil gap. This lets
+        -- us distinguish an initial spawn from an actual opponent -> local transfer.
+        if holderUserId ~= nil then
+            if holder == LocalPlayer
+                and previousNonNilHolderUserId ~= nil
+                and previousNonNilHolderUserId ~= LocalPlayer.UserId
+            then
+                tracker.hotPotatoLocalReceivedAt = now
+                tracker.hotPotatoLocalReceivedTool = myTool
+            elseif holder ~= LocalPlayer then
+                tracker.hotPotatoLocalReceivedAt = nil
+                tracker.hotPotatoLocalReceivedTool = nil
+            end
+            tracker.hotPotatoLastNonNilHolderUserId = holderUserId
+        end
+    end
+    -- The same Tool and TimerGui survive transfers, so observe its cadence while
+    -- either player holds it. This keeps the final-second deadline synchronized.
+    local timerValue = hotPotatoTimerValue(activeTool)
+    if timerValue ~= nil then
+        if tracker.hotPotatoLastTimer == nil then
+            tracker.hotPotatoLastTimer = timerValue
+            tracker.hotPotatoTimerChangedAt = now
+        elseif timerValue ~= tracker.hotPotatoLastTimer then
+            local previousChangedAt = tracker.hotPotatoTimerChangedAt
+            if previousChangedAt ~= nil
+                and timerValue < tracker.hotPotatoLastTimer
+                and tracker.hotPotatoLastTimer - timerValue <= 2
+            then
+                local observedStep = now - previousChangedAt
+                if observedStep >= 0.60 and observedStep <= 1.60 then
+                    tracker.hotPotatoTimerStep = math.clamp(
+                        tracker.hotPotatoTimerStep * 0.35 + observedStep * 0.65,
+                        1.00,
+                        1.35
+                    )
+                end
+            end
+            tracker.hotPotatoLastTimer = timerValue
+            tracker.hotPotatoTimerChangedAt = now
+        end
+    end
+    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    local autoLeaveEnabled = type(utility) == "table"
+        and utility.LeaveWhenAboutToLose == true
+        and utility.PauseScript ~= true
+        and utility.PauseMinigameFeatures ~= true
+    local hotPotatoAutoplayEnabled = type(utility) == "table"
+        and utility.AutoPlayMaster == true
+        and utility.PauseScript ~= true
+        and utility.PauseMinigameFeatures ~= true
+        and type(minigameAutoplayState) == "table"
+        and minigameAutoplayState.HotPotato == true
+    local alwaysGiveBackEnabled = hotPotatoAutoplayEnabled
+        and utility.HotPotatoAutoGiveBack == true
+
+    -- Endgame timing is based on observed countdown cadence plus live network latency.
+    -- The saved game implementation locks accepted transfers for one second. Therefore a
+    -- successful pass inside the final second cannot be legally returned before explosion.
+    -- We exploit that protection while still leaving a separate emergency cutoff.
+    if (hotPotatoAutoplayEnabled or autoLeaveEnabled)
+        and holder == LocalPlayer
+        and myTool
+        and timerValue ~= nil
+        and timerValue <= 2
+    then
+        local changedAt = tracker.hotPotatoTimerChangedAt or now
+        local pingSeconds = hotPotatoPingSeconds()
+        local inboundEstimate = pingSeconds * 0.5
+        local serverExpiryAt = hotPotatoPredictedExpiry(timerValue, changedAt, pingSeconds)
+            or (changedAt + math.max(1, timerValue) - inboundEstimate)
+        -- Never let an old timer-change timestamp turn a still-visible 2-second state
+        -- into an immediate kick. The display can replicate after the timestamp model,
+        -- so give a visible value above 1 a conservative minimum live window. This
+        -- preserves handoff-first behavior while the independent hard cutoff still
+        -- protects the final fraction of the round.
+        if timerValue > 1 then
+            serverExpiryAt = math.max(serverExpiryAt, now + 0.92)
+        end
+        local handoffState = rawget(_G, "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
+        if type(handoffState) == "table" and type(handoffState.SetOpponent) == "function" then
+            pcall(handoffState.SetOpponent, opponent)
+        end
+
+        -- The handoff gets first priority. Auto-leave owns only the final emergency
+        -- margin; the pass begins earlier inside the server-protected final second so
+        -- ordinary rounds resolve by transfer rather than by fallback departure.
+        local fallbackLead = hotPotatoFallbackLead(pingSeconds)
+        local predictedConfirm = pingSeconds + 0.018
+        if type(handoffState) == "table" and type(handoffState.PredictedConfirmLatency) == "function" then
+            local ok, value = pcall(handoffState.PredictedConfirmLatency, pingSeconds)
+            if ok and tonumber(value) then
+                predictedConfirm = tonumber(value)
+            end
+        end
+        local confirmationSamples = 0
+        if type(handoffState) == "table" and type(handoffState.ConfirmationSampleCount) == "function" then
+            local ok, value = pcall(handoffState.ConfirmationSampleCount)
+            if ok and tonumber(value) then
+                confirmationSamples = math.max(0, math.floor(tonumber(value)))
+            end
+        end
+
+        -- Handoff must be the normal outcome; auto-leave is only the emergency outcome.
+        -- The server sets a one-second global transfer debounce immediately after an
+        -- accepted pass. Therefore a pass accepted inside the final second is protected
+        -- from being returned before the explosion. Use that protected interval to give
+        -- the server many physics frames to accept/replicate the transfer instead of
+        -- squeezing the handoff into only a few frames immediately before auto-leave.
+        local schedulerGuard = confirmationSamples >= 3
+            and math.clamp(0.014 + pingSeconds * 0.040, 0.016, 0.032)
+            or math.clamp(0.020 + pingSeconds * 0.055, 0.022, 0.042)
+        local confirmationBudget = math.clamp(
+            predictedConfirm + schedulerGuard,
+            confirmationSamples >= 3 and 0.060 or 0.080,
+            0.420
+        )
+
+        -- Start just inside the server's no-return second. This is the earliest point
+        -- that remains protected against a legal return under the observed server rule,
+        -- and it maximizes the number of physics frames available for a successful pass
+        -- before the true last-resort leave edge.
+        local reliabilityLead = math.clamp(
+            math.max(
+                0.965,
+                fallbackLead + confirmationBudget + 0.30
+            ),
+            0.965,
+            0.985
+        )
+        local handoffAt = math.max(now, serverExpiryAt - reliabilityLead)
+        local fallbackAt = math.max(now, serverExpiryAt - fallbackLead)
+        local fallbackExpiresAt = serverExpiryAt + 0.75
+
+        -- HARD CUTOFF: after fallbackAt, possession itself is terminal.
+        -- Do not spend another frame resolving an opponent, waiting for a handoff worker,
+        -- or attempting a touch. This is intentionally independent from currentGameId(),
+        -- which can clear during the final server transition while the Tool is still ours.
+        if autoLeaveEnabled and localDeathWouldClinchMatch("HotPotato")
+            and now >= fallbackAt and hotPotatoTool(LocalPlayer.Character) ~= nil then
+            forceHotPotatoEmergencyLeave(
+                "HotPotato:HardCutoff",
+                myTool,
+                fallbackExpiresAt
+            )
+            return
+        end
+
+        -- If the opponent returns the Tool during the final window, never kick early
+        -- based on a theoretical debounce/latency calculation. Record the receive for
+        -- diagnostics and keep pulsing until the actual hard cutoff. The cutoff itself
+        -- remains authoritative: if we still hold the Tool there, emergency leave wins.
+        -- Holder-transition timestamps remain diagnostic only. They never authorize
+        -- an early leave; only the shared hard cutoff can do that.
+
+        -- Keep pulsing past the leave edge/estimated zero. If Leave When About To Lose
+        -- is disabled, this still maximizes the chance that a late legal contact wins.
+        local attemptDeadlineAt = math.max(
+            fallbackAt + 0.16,
+            serverExpiryAt + math.clamp(0.090 + pingSeconds * 0.14, 0.090, 0.140)
+        )
+        local definitelyImpossible = false
+        local fallbackClinching = autoLeaveEnabled
+            and localDeathWouldClinchMatch("HotPotato")
+        if fallbackClinching then
+            tracker.hotPotatoHardFailsafeTool = myTool
+            tracker.hotPotatoHardFailsafeAt = fallbackAt
+            tracker.hotPotatoHardFailsafeExpiresAt = fallbackExpiresAt
+            -- The hard Hot Potato escape is match-aware. It is armed only when losing
+            -- this round would clinch the opponent's series; earlier rounds keep every
+            -- handoff attempt active but never disconnect at the cutoff.
+            tracker.hotPotatoHardFailsafeClinching = true
+        elseif tracker.hotPotatoHardFailsafeTool == myTool then
+            tracker.hotPotatoHardFailsafeTool = nil
+            tracker.hotPotatoHardFailsafeAt = nil
+            tracker.hotPotatoHardFailsafeExpiresAt = nil
+            tracker.hotPotatoHardFailsafeClinching = false
+        else
+            tracker.hotPotatoHardFailsafeClinching = false
+        end
+
+        if type(handoffState) == "table" then
+            if fallbackClinching and type(handoffState.SetFinalFallbackWindow) == "function" then
+                pcall(
+                    handoffState.SetFinalFallbackWindow,
+                    true,
+                    fallbackAt,
+                    fallbackExpiresAt,
+                    "HotPotato:FinalFailsafe",
+                    not definitelyImpossible
+                )
+            elseif type(handoffState.ClearFinalFallbackWindow) == "function" then
+                pcall(handoffState.ClearFinalFallbackWindow)
+            end
+        end
+
+        local scheduleKey = tostring(holderUserId or 0)
+            .. ":" .. tostring(timerValue)
+            .. ":" .. string.format("%.4f", changedAt)
+            .. ":F" .. (hotPotatoAutoplayEnabled and "1" or "0")
+            .. ":S" .. (alwaysGiveBackEnabled and "1" or "0")
+            .. ":L" .. (autoLeaveEnabled and "1" or "0")
+            .. ":C" .. (fallbackClinching and "1" or "0")
+
+        if tracker.hotPotatoFinalScheduleKey ~= scheduleKey then
+            tracker.hotPotatoFinalScheduleId = (tracker.hotPotatoFinalScheduleId or 0) + 1
+            local scheduleId = tracker.hotPotatoFinalScheduleId
+            tracker.hotPotatoFinalScheduleKey = scheduleKey
+            tracker.hotPotatoFinalHandoffAt = handoffAt
+            tracker.hotPotatoFinalLeaveAt = fallbackAt
+            local autoFinalHandoffAtSchedule = hotPotatoAutoplayEnabled
+            local autoLeaveAtSchedule = fallbackClinching
+            local scheduleStartedAt = now
+
+            task.spawn(function()
+                local scheduledHandoff = not autoFinalHandoffAtSchedule
+
+                -- Wait here, not inside the handoff controller. This keeps the controller
+                -- free for manual/return events and lets a newer timer/holder schedule
+                -- invalidate this task cleanly before any stale final worker becomes busy.
+                while not scheduledHandoff
+                    and not controller.destroyed
+                    and tracker.hotPotatoFinalScheduleId == scheduleId
+                    and hotPotatoTool(LocalPlayer.Character) ~= nil
+                    and os.clock() < handoffAt
+                do
+                    RunService.Heartbeat:Wait()
+                end
+
+                local liveHandoffState = rawget(_G, "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
+                while not controller.destroyed
+                    and tracker.hotPotatoFinalScheduleId == scheduleId
+                    and hotPotatoTool(LocalPlayer.Character) ~= nil
+                    and os.clock() < attemptDeadlineAt
+                    and not scheduledHandoff
+                do
+                    if type(liveHandoffState) == "table" then
+                        if type(liveHandoffState.HandoffNow) == "function" then
+                            local ok, accepted = pcall(
+                                liveHandoffState.HandoffNow,
+                                true,
+                                os.clock(),
+                                attemptDeadlineAt
+                            )
+                            scheduledHandoff = ok and accepted == true
+                        elseif type(liveHandoffState.HandoffAt) == "function" then
+                            local ok, accepted = pcall(
+                                liveHandoffState.HandoffAt,
+                                os.clock(),
+                                attemptDeadlineAt
+                            )
+                            scheduledHandoff = ok and accepted == true
+                        end
+                    end
+                    if not scheduledHandoff then
+                        RunService.Heartbeat:Wait()
+                        liveHandoffState = rawget(_G, "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
+                    end
+                end
+
+                -- The handoff has priority until the hard fallback edge. If we still own
+                -- the authoritative Tool at that edge, Leave When About To Lose must fire
+                -- regardless of whether the predicted transfer window looked viable.
+                local fallbackRequired = autoLeaveAtSchedule
+
+                while not controller.destroyed
+                    and tracker.hotPotatoFinalScheduleId == scheduleId
+                do
+                    liveHandoffState = rawget(_G, "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
+                    if type(liveHandoffState) == "table"
+                        and type(liveHandoffState.TransferConfirmedAfter) == "function"
+                    then
+                        local ok, confirmed = pcall(liveHandoffState.TransferConfirmedAfter, scheduleStartedAt)
+                        if ok and confirmed == true then
+                            -- Keep the hard failsafe timestamp dormant while the opponent
+                            -- holds the Tool. If they return it before explosion, the same
+                            -- deadline becomes active again immediately.
+                            return
+                        end
+                    end
+
+                    local localTool = hotPotatoTool(LocalPlayer.Character)
+                    local liveOpponent = hotPotatoArenaOpponent()
+                    local opponentToolNow = liveOpponent and hotPotatoTool(liveOpponent.Character) or nil
+                    if localTool == nil or opponentToolNow ~= nil then
+                        -- Successful transfer: leave the failsafe window stored but inert.
+                        -- AutoLeaveAllowed requires localHolding, so this cannot kick while
+                        -- the opponent owns the Tool, yet it is ready if they return it.
+                        return
+                    end
+
+                    if os.clock() >= fallbackAt then
+                        break
+                    end
+                    RunService.Heartbeat:Wait()
+                end
+
+                if controller.destroyed
+                    or tracker.hotPotatoFinalScheduleId ~= scheduleId
+                then
+                    return
+                end
+                local liveUtility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+                if type(liveUtility) ~= "table"
+                    or liveUtility.LeaveWhenAboutToLose ~= true
+                    or liveUtility.PauseScript == true
+                    or liveUtility.PauseMinigameFeatures == true
+                then
+                    return
+                end
+                if fallbackRequired and hotPotatoTool(LocalPlayer.Character) ~= nil then
+                    -- Hard terminal edge. Retry on consecutive physics frames while we
+                    -- still own the actual Tool. This path is independent from the handoff
+                    -- controller, so a stale/broken transfer worker cannot suppress escape.
+                    local hardStopAt = serverExpiryAt + 0.20
+                    repeat
+                        local localTool = hotPotatoTool(LocalPlayer.Character)
+                        if localTool == nil then break end
+                        forceHotPotatoEmergencyLeave(
+                            "HotPotato:FinalFailsafe",
+                            localTool,
+                            hardStopAt
+                        )
+                        if controller.destroyed or hotPotatoTool(LocalPlayer.Character) == nil then break end
+                        RunService.Heartbeat:Wait()
+                    until os.clock() >= hardStopAt
+                end
+            end)
+        end
+        return
+    end
+
+    -- Any holder/timer transition invalidates a stale final-second task immediately.
+    if tracker.hotPotatoFinalScheduleKey ~= nil
+        and (holder ~= LocalPlayer or not myTool or timerValue == nil or timerValue > 2)
+    then
+        tracker.hotPotatoFinalScheduleId = (tracker.hotPotatoFinalScheduleId or 0) + 1
+        tracker.hotPotatoFinalScheduleKey = nil
+        tracker.hotPotatoFinalHandoffAt = nil
+        tracker.hotPotatoFinalLeaveAt = nil
+        -- Do not clear the handoff controller's hard failsafe here solely because
+        -- possession changed. It is inert while the opponent holds the Tool and must
+        -- remain available if the same Tool is returned in the final fraction of a second.
+        local localToolNow = hotPotatoTool(LocalPlayer.Character)
+        local safeNewCountdown = timerValue ~= nil and timerValue > 2
+        local terminalContextFinished = timerValue == nil
+            and localToolNow == nil
+            and not hotPotatoTerminalContextActive()
+        if safeNewCountdown or terminalContextFinished then
+            tracker.hotPotatoHardFailsafeTool = nil
+            tracker.hotPotatoHardFailsafeAt = nil
+            tracker.hotPotatoHardFailsafeExpiresAt = nil
+            tracker.hotPotatoHardFailsafeClinching = false
+            local handoffState = rawget(_G, "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
+            if type(handoffState) == "table" then
+                if type(handoffState.ClearFinalFallbackWindow) == "function" then
+                    pcall(handoffState.ClearFinalFallbackWindow)
+                end
+                if type(handoffState.CancelAutomaticHandoffWindow) == "function" then
+                    pcall(handoffState.CancelAutomaticHandoffWindow)
+                end
+            end
+        end
+    end
+end
+
 local function processPublicWinnerTransition(s)
     local winner = tryIndex({ "session", "public", "winner" })
     local identity = publicWinnerIdentity(winner)
@@ -33671,6 +37312,8 @@ local function evaluateCachedTerminalState()
         processFootballDraft(s)
     elseif cachedGameId == "PopcornBurst" then
         processPopcorn(s)
+    elseif cachedGameId == "HotPotato" then
+        processHotPotato(s)
     end
     if requiredWins ~= nil and opponentWins >= requiredWins then
         latchClinchingLoss(cachedGameId .. ":SeriesScoreTeardown")
@@ -33708,7 +37351,7 @@ evaluateState = function()
     local requiredWins = if bestOf ~= nil then winsRequired(bestOf) else nil
     if requiredWins ~= nil then
         tracker.cachedRequiredWins = requiredWins
-    elseif gameId == "Knockout" then
+    else
         requiredWins = tracker.cachedRequiredWins
     end
     local localWins, opponentWins = readSeriesScores(gameId, seatIndex)
@@ -33785,12 +37428,48 @@ evaluateState = function()
             tracker.knockoutOpponentLossPending = false
             tracker.knockoutPendingRoundStartOpponentWins = nil
             table.clear(tracker.knockoutRoundPuckTeams)
+        elseif gameId == "FootballDraft" then
+            tracker.footballOpponentCompletedFirstObserved = false
+            tracker.footballLocalCompletedFirstObserved = false
         elseif gameId == "ConnectFour" then
             tracker.connectFourAwaitingFreshRound = true
             tracker.connectFourRoundArmed = false
         elseif gameId == "Battleship" then
             tracker.battleshipAwaitingFreshRound = true
             tracker.battleshipRoundArmed = false
+        elseif gameId == "HotPotato" then
+            tracker.hotPotatoHolderUserId = nil
+            tracker.hotPotatoHolderChangedAt = nil
+            tracker.hotPotatoLocalReceivedAt = nil
+            tracker.hotPotatoLocalReceivedTool = nil
+            tracker.hotPotatoCriticalAcquireSerial = (tracker.hotPotatoCriticalAcquireSerial or 0) + 1
+            tracker.hotPotatoLastTimer = nil
+            tracker.hotPotatoTimerChangedAt = nil
+            tracker.hotPotatoTimerStep = 1.0
+            tracker.hotPotatoFinalScheduleId = (tracker.hotPotatoFinalScheduleId or 0) + 1
+            tracker.hotPotatoFinalScheduleKey = nil
+            tracker.hotPotatoFinalHandoffAt = nil
+            tracker.hotPotatoFinalLeaveAt = nil
+            tracker.hotPotatoHardFailsafeTool = nil
+            tracker.hotPotatoHardFailsafeAt = nil
+            tracker.hotPotatoHardFailsafeExpiresAt = nil
+            tracker.hotPotatoHardFailsafeClinching = false
+            tracker.hotPotatoArenaLastInsideAt = nil
+            tracker.hotPotatoArenaLastDistance = nil
+            tracker.hotPotatoArenaClinching = false
+            tracker.hotPotatoArenaDepartureLatched = false
+
+            local handoffState = rawget(_G, "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
+            if type(handoffState) == "table" and type(handoffState.ResetRound) == "function" then
+                pcall(handoffState.ResetRound, opponent)
+            end
+            if type(controller.pendingLossReason) == "string"
+                and string.sub(controller.pendingLossReason, 1, 10) == "HotPotato:"
+            then
+                controller.pendingLossReason = nil
+            end
+            controller.lastDepartureAttemptAt = 0
+            resetHotPotatoDepartureGuard()
         end
     elseif tracker.roundStartOpponentWins == nil then
         tracker.roundStartLocalWins = localWins
@@ -33804,9 +37483,11 @@ evaluateState = function()
     then
         cacheKnockoutRoundPucks(s)
     end
-    if gameId ~= "PopcornBurst"
-        and gameId ~= "CandyBomb"
-        and requiredWins ~= nil
+    -- Cache clinching/death context while the live character is positively in
+    -- the arena. This must happen after round-start score baselines are updated.
+    refreshLocalDeathContext(gameId)
+
+    if requiredWins ~= nil
         and opponentWins >= requiredWins
     then
         latchClinchingLoss(gameId .. ":SeriesScore")
@@ -33825,6 +37506,8 @@ evaluateState = function()
         processFootballDraft(s)
     elseif gameId == "PopcornBurst" then
         processPopcorn(s)
+    elseif gameId == "HotPotato" then
+        processHotPotato(s)
     end
     processPublicWinnerTransition(s)
     processKnockoutMatchWinnerFallback(s)
@@ -33974,6 +37657,10 @@ for _, path in ipairs({
     local ok, listener = pcall(function()
         return ActiveMinigame:Listen(path, function(value)
             local leaf = path[#path]
+            if currentGameId() ~= "Knockout" then
+                controller.evaluationRequested = true
+                return
+            end
             if leaf == "matchWinner" then
                 controller.queuedKnockoutMatchWinner = value
                 controller.queuedKnockoutMatchWinnerSet = true
@@ -33993,6 +37680,7 @@ for _, path in ipairs({
                     beforeRound = tracker.opponentWins
                 end
                 if tonumber(value) ~= nil
+                    and currentPhase() ~= "Starting" and currentPhase() ~= "Aiming"
                     and tonumber(value) == tonumber(opponentSeat)
                     and requiredWins ~= nil
                     and beforeRound ~= nil
@@ -34010,6 +37698,7 @@ for _, path in ipairs({
                 end
                 cacheKnockoutReplicatedPuckTeams(seatIndex, opponentSeat)
                 if requiredWins ~= nil
+                    and currentPhase() ~= "Starting" and currentPhase() ~= "Aiming"
                     and beforeRound ~= nil
                     and math.max(0, math.floor(numeric(beforeRound, 0))) == requiredWins - 1
                     and knockoutResolutionPayloadProvesLoss(value, seatIndex, opponentSeat)
@@ -34127,6 +37816,7 @@ do
     local ok, listener = pcall(function()
         return ActiveMinigame:Listen({ "session", "public", "grid" }, function(grid)
             if tracker.gameId == "ConnectFour"
+                and currentGameId() == "ConnectFour" and currentPhase() == "Playing"
                 and tracker.cachedOpponentSeat ~= nil
                 and tracker.connectFourAwaitingFreshRound ~= true
                 and cachedClinchRoundReady()
@@ -34141,6 +37831,7 @@ do
 end
 local function fastBattleshipTerminalCheck()
     if tracker.gameId ~= "Battleship"
+        or currentGameId() ~= "Battleship" or currentPhase() ~= "Firing"
         or tracker.battleshipAwaitingFreshRound == true
         or not cachedClinchRoundReady()
     then
@@ -34410,7 +38101,7 @@ local function consumeQueuedReplicatorSignals()
         controller.queuedKnockoutLastRoundWinnerSet = false
         local value = numeric(controller.queuedKnockoutLastRoundWinner, nil)
         controller.queuedKnockoutLastRoundWinner = nil
-        if knockoutContext then
+        if knockoutContext and currentPhase() ~= "Starting" and currentPhase() ~= "Aiming" then
             local opponentSeat = opponentSeatIndex(currentSeatIndex())
                 or tracker.cachedOpponentSeat
             local requiredWins = tracker.cachedRequiredWins
@@ -34428,6 +38119,69 @@ local function consumeQueuedReplicatorSignals()
         end
     end
 end
+do
+    local GuiServiceLOSS = game:GetService("GuiService")
+    local disconnectHandledMessageLOSS = nil
+    local function isConnectionLossMessageLOSS(message)
+        if type(message) ~= "string" or message == "" then return false end
+        local text = string.lower(message)
+        if string.find(text, "kicked", 1, true)
+            or string.find(text, "error code: 267", 1, true)
+            or string.find(text, "error code: 268", 1, true)
+        then
+            return false
+        end
+        return string.find(text, "error code: 277", 1, true) ~= nil
+            or string.find(text, "error code: 279", 1, true) ~= nil
+            or string.find(text, "error code: 266", 1, true) ~= nil
+            or string.find(text, "server shut", 1, true) ~= nil
+            or string.find(text, "server shutdown", 1, true) ~= nil
+            or string.find(text, "failed to connect", 1, true) ~= nil
+            or string.find(text, "connection timed out", 1, true) ~= nil
+            or string.find(text, "lost connection", 1, true) ~= nil
+            or string.find(text, "internet connection", 1, true) ~= nil
+            or (
+                string.find(text, "disconnect", 1, true) ~= nil
+                and string.find(text, "same account", 1, true) == nil
+            )
+    end
+    addConnection(GuiServiceLOSS.ErrorMessageChanged:Connect(function(message)
+        if controller.destroyed or not isConnectionLossMessageLOSS(message) then return end
+        if disconnectHandledMessageLOSS == message then return end
+        disconnectHandledMessageLOSS = message
+        local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+        if type(utility) ~= "table" or utility.PauseScript == true then return end
+
+        if utility.PauseMinigameFeatures ~= true
+            and utility.PrintDisconnectsToTerminal == true
+            and controller.disconnectLogged ~= true
+        then
+            controller.disconnectLogged = true
+            local logContext = rawget(_G, "__TUFFHUB_MINIGAME_LOG_CONTEXT")
+            local gameId = currentGameId() or tracker.gameId
+            local printed = false
+            if type(logContext) == "table" and type(logContext.PrintEvent) == "function" then
+                local ok, result = pcall(logContext.PrintEvent, "DISCONNECT", false, gameId, nil)
+                printed = ok and result == true
+            end
+            if not printed then
+                print("DISCONNECT | Game: " .. tostring(KICK_GAME_DISPLAY_NAMES[gameId] or gameId or "Unknown") .. " | Tokens: 0")
+                print(string.rep("\\", 10))
+            end
+        end
+
+        -- Leave When About To Lose also acts as a disconnect escape. This is driven by
+        -- Roblox's concrete connection-loss error signal, not by ping-spike guessing.
+        if utility.LeaveWhenAboutToLose == true
+            and utility.PauseMinigameFeatures ~= true
+        then
+            controller.pendingLossReason = "Disconnect:ConnectionLoss"
+            controller.triggerObservedAt = controller.triggerObservedAt or os.clock()
+            performDisconnectAndTeleport(controller.destinationServerId, controller.pendingLossReason)
+            scheduleUrgentDeparture()
+        end
+    end))
+end
 addConnection(TeleportService.TeleportInitFailed:Connect(function(player)
     if player == LocalPlayer and controller.pendingLossReason ~= nil then
         controller.triggered = false
@@ -34442,19 +38196,100 @@ do
     addConnection(RunService.Heartbeat:Connect(function()
         if controller.destroyed then return end
         local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
-        local enabled = type(utility) == "table"
+        local leaveEnabled = type(utility) == "table"
             and utility.LeaveWhenAboutToLose == true
             and utility.PauseScript ~= true
             and utility.PauseMinigameFeatures ~= true
+        local hotPotatoAutoplayEnabled = type(utility) == "table"
+            and utility.AutoPlayMaster == true
+            and utility.PauseScript ~= true
+            and utility.PauseMinigameFeatures ~= true
+            and type(minigameAutoplayState) == "table"
+            and minigameAutoplayState.HotPotato == true
+            and currentGameId() == "HotPotato"
+        local enabled = leaveEnabled or hotPotatoAutoplayEnabled
         if not enabled then
             controller.evaluationRequested = false
             nextFallbackEvaluationAt = 0
             return
         end
-        if controller.pendingLossReason ~= nil then
-            executePendingLossIfReady()
-        end
         local now = os.clock()
+        if leaveEnabled then
+            local character = LocalPlayer.Character
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            if humanoid and humanoid.Health <= 0 then
+                triggerImmediateLocalDeathDeparture(character)
+            elseif triggerHotPotatoArenaBoundaryDeparture(character) then
+                -- Exact server arena-loss boundary handled synchronously.
+            elseif not triggerHotPotatoFatalFallDeparture(character) then
+                refreshLocalDeathContext(currentGameId())
+                if currentGameId() == "HotPotato" or tracker.gameId == "HotPotato" then
+                    refreshHotPotatoArenaCache(character)
+                end
+            end
+            local localTool = hotPotatoTool(LocalPlayer.Character)
+            local hardAt = tonumber(tracker.hotPotatoHardFailsafeAt)
+            local hardExpiresAt = tonumber(tracker.hotPotatoHardFailsafeExpiresAt)
+            if hotPotatoHardDeadlineReady(localTool, now) then
+                -- Retry only the current round's tool and countdown, never a new
+                -- round that happens to reuse the same Tool instance.
+                forceHotPotatoEmergencyLeave(
+                    "HotPotato:FinalFailsafe",
+                    localTool,
+                    math.max(now + 0.75, hardExpiresAt or 0)
+                )
+            elseif hardAt and hardExpiresAt and now > hardExpiresAt and localTool == nil then
+                tracker.hotPotatoHardFailsafeTool = nil
+                tracker.hotPotatoHardFailsafeAt = nil
+                tracker.hotPotatoHardFailsafeExpiresAt = nil
+                tracker.hotPotatoHardFailsafeClinching = false
+            elseif localTool ~= nil and hotPotatoTerminalContextActive() then
+                -- Independent reconstruction path: even if the scheduled endgame task
+                -- never armed tracker.hotPotatoHardFailsafeAt, derive the same cutoff
+                -- directly from the live Tool timer and observed countdown cadence.
+                local liveTimer = hotPotatoTimerValue(localTool)
+                if liveTimer ~= nil and liveTimer <= 1 then
+                    local trackedTimer = tonumber(tracker.hotPotatoLastTimer)
+                    local changedAt = tonumber(tracker.hotPotatoTimerChangedAt)
+
+                    -- The server writes TimerGui first and only then waits ~1 second
+                    -- before subtracting/checking explosion. A displayed 0 is therefore
+                    -- NOT an immediate-loss signal. If this Heartbeat sees a newer timer
+                    -- value than the normal observer has processed, start that value's
+                    -- final-second clock now instead of inheriting a stale timestamp.
+                    if liveTimer ~= trackedTimer then
+                        tracker.hotPotatoLastTimer = liveTimer
+                        tracker.hotPotatoTimerChangedAt = now
+                        changedAt = now
+                    elseif changedAt == nil then
+                        tracker.hotPotatoTimerChangedAt = now
+                        changedAt = now
+                    end
+
+                    local pingSeconds = hotPotatoPingSeconds()
+                    local serverExpiryAt = hotPotatoPredictedExpiry(
+                        liveTimer,
+                        changedAt,
+                        pingSeconds
+                    )
+                    if serverExpiryAt ~= nil then
+                        local fallbackLead = hotPotatoFallbackLead(pingSeconds)
+                        if now >= serverExpiryAt - fallbackLead then
+                            forceHotPotatoEmergencyLeave(
+                                "HotPotato:HardCutoff",
+                                localTool,
+                                serverExpiryAt + 0.75
+                            )
+                        end
+                    end
+                end
+            end
+        end
+        if controller.pendingLossReason ~= nil then
+            if not cancelStaleHotPotatoDeparture(controller.pendingLossReason) then
+                executePendingLossIfReady()
+            end
+        end
         local shouldEvaluate = controller.evaluationRequested == true
             or now >= nextFallbackEvaluationAt
         if not shouldEvaluate then return end
@@ -34463,11 +38298,19 @@ do
         local gameId = currentGameId()
         local activeSupportedGame = gameId and SUPPORTED_GAMES[gameId] == true
         -- Event listeners request an immediate evaluation. The fallback poll is
-        -- 30 Hz during an active supported game and 4 Hz otherwise.
-        nextFallbackEvaluationAt = now + (activeSupportedGame and 0.05 or 0.25)
+        -- One evaluation per Heartbeat during supported games, 4 Hz otherwise.
+        nextFallbackEvaluationAt = now + (
+            gameId == "HotPotato" and 0
+            or (activeSupportedGame and 0 or 0.25)
+        )
         evaluateState()
         if controller.pendingLossReason ~= nil then
-            executePendingLossIfReady()
+            if cancelStaleHotPotatoDeparture(controller.pendingLossReason) then
+                -- Ownership changed before departure commit. The handoff won the
+                -- race, so discard the stale Hot Potato fallback permanently.
+            else
+                executePendingLossIfReady()
+            end
         end
     end))
 end
@@ -34516,6 +38359,9 @@ function controller:Destroy()
     table.clear(self.connections)
     if rawget(_G, GLOBAL_KEY) == self then
         rawset(_G, GLOBAL_KEY, nil)
+    end
+    if rawget(_G, "__TUFFHUB_HOT_POTATO_CRITICAL_ACQUIRE") == hotPotatoCriticalAcquire then
+        rawset(_G, "__TUFFHUB_HOT_POTATO_CRITICAL_ACQUIRE", nil)
     end
 end
 end)
