@@ -149,43 +149,44 @@ UI.DESKTOP_GUI_HEIGHT = 600
 UI.MOBILE_GUI_WIDTH = 500
 UI.MOBILE_GUI_HEIGHT = 300
 UI.FONT_SIZE_SCALE = 0.90
+-- GUI layout is selected by device/platform only. Viewport dimensions must never
+-- change the logical sizing: starting Roblox in a small desktop window should
+-- render the exact same desktop UI as fullscreen, and mobile keeps its existing
+-- dedicated sizing regardless of phone/tablet resolution or orientation.
+UI.MOBILE_DEVICE_LAYOUT = (function()
+	local platform
+	pcall(function()
+		platform = UserInputService:GetPlatform()
+	end)
+	if platform == Enum.Platform.IOS or platform == Enum.Platform.Android then
+		return true
+	end
+	if platform ~= nil and platform ~= Enum.Platform.None then
+		return false
+	end
+	-- Fallback for environments where GetPlatform is unavailable/obscured.
+	return UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+end)()
 local function isPhonePanelLayout()
-	local currentCamera = workspace.CurrentCamera or camera
-	local currentViewport = currentCamera and currentCamera.ViewportSize or viewportSize
-	return UserInputService.TouchEnabled
-		and math.min(currentViewport.X, currentViewport.Y) < 700
+	return UI.MOBILE_DEVICE_LAYOUT
 end
-local px = (function()
-	local startupPhoneLayout = UserInputService.TouchEnabled
-		and math.min(viewportSize.X, viewportSize.Y) < 700
-	local scale = startupPhoneLayout
-		and math.clamp(
-			0.90 * (math.min(viewportSize.X, viewportSize.Y) / 390),
-			0.82,
-			1.00
-		)
-		or (viewportSize.Y / 768)
-	return function(value)
-		if value == 0 then return 0 end
-		local scaled = math.floor((value * scale) + 0.5)
-		if value > 0 then return math.max(1, scaled) end
-		return math.min(-1, scaled)
-	end
-end)()
-local responsiveTextSize = (function()
-	local startupPhoneLayout = UserInputService.TouchEnabled
-		and math.min(viewportSize.X, viewportSize.Y) < 700
-	local referenceHeight = startupPhoneLayout and 844 or 768
-	local scale = startupPhoneLayout
-		and math.clamp(1.02 * (viewportSize.Y / referenceHeight), 0.96, 1.08)
-		or (UI.FONT_SIZE_SCALE * (viewportSize.Y / referenceHeight))
-	return function(baseSize)
-		return math.max(
-			1,
-			math.floor((baseSize * scale) + 0.5)
-		)
-	end
-end)()
+-- Preserve the established reference sizing, but make it invariant to viewport
+-- size. Desktop previously reached these values at the 768px reference height;
+-- mobile previously reached them around the 390x844 reference device.
+UI.DEVICE_PIXEL_SCALE = UI.MOBILE_DEVICE_LAYOUT and 0.90 or 1.00
+UI.DEVICE_TEXT_SCALE = UI.MOBILE_DEVICE_LAYOUT and 1.02 or UI.FONT_SIZE_SCALE
+local px = function(value)
+	if value == 0 then return 0 end
+	local scaled = math.floor((value * UI.DEVICE_PIXEL_SCALE) + 0.5)
+	if value > 0 then return math.max(1, scaled) end
+	return math.min(-1, scaled)
+end
+local responsiveTextSize = function(baseSize)
+	return math.max(
+		1,
+		math.floor((baseSize * UI.DEVICE_TEXT_SCALE) + 0.5)
+	)
+end
 local function setResponsiveTextSize(object, baseSize)
 	object.TextSize = responsiveTextSize(baseSize)
 end
@@ -1781,6 +1782,144 @@ if MINIGAME_MODE then
 		end
 		-- Other item classes currently have no exposed specific-rule attributes.
 		return true
+	end
+	-- Simple Autofarm may advance beyond Infinity only after every unprotected
+	-- Brainrot has reached Infinity+ and every unprotected non-Brainrot item is gone.
+	-- Locked items are always treated as protected for this progression gate, and
+	-- the normal Auto Delete protection settings are honored as additional exemptions.
+	autoServerHopState.SimpleAutofarmProgressionInventoryState = function()
+		local result = {
+			Ready = false,
+			LowestUnprotectedBrainrot = nil,
+			HighestUnprotectedBrainrot = nil,
+			UnprotectedBrainrotCount = 0,
+			UnprotectedNonBrainrotCount = 0,
+		}
+		local Replicator, GetItemType, EconomyMath, ItemToString
+		local okModules = pcall(function()
+			Replicator = require(
+				ReplicatedStorage:WaitForChild("Client")
+					:WaitForChild("Modules")
+					:WaitForChild("ReplicatorClient")
+			)
+			GetItemType = require(
+				ReplicatedStorage:WaitForChild("Shared")
+					:WaitForChild("utils")
+					:WaitForChild("GetItemType")
+			)
+			EconomyMath = require(
+				ReplicatedStorage:WaitForChild("Shared")
+					:WaitForChild("utils")
+					:WaitForChild("EconomyMath")
+			)
+			ItemToString = require(
+				ReplicatedStorage:WaitForChild("Shared")
+					:WaitForChild("utils")
+					:WaitForChild("ItemToString")
+			)
+		end)
+		if not okModules or not Replicator or type(GetItemType) ~= "function" then return result end
+		local playerData = safeRepGet(Replicator, "PlayerData")
+		local inventory = playerData and safeTryIndex(playerData, {"Inventory"})
+		if type(inventory) ~= "table" then return result end
+		local utility = autoServerHopState.Utility
+		local rarityRank = {}
+		for index, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do rarityRank[rarity] = index end
+
+		local function effectiveRarity(item)
+			if type(item) ~= "table" then return nil end
+			local sub = type(item.sub) == "table" and item.sub or nil
+			local rarity = item.rarity or item.Rarity or (sub and (sub.rarity or sub.Rarity))
+			if type(rarity) ~= "string" or not rarityRank[rarity] then
+				local name = item.name or (sub and sub.name)
+				local okRarity, resolved = pcall(EconomyMath.GetBrainrotRarity, name)
+				rarity = okRarity and resolved or nil
+			end
+			local metaMarked = item.meta == true or item.Meta == true or item.isMeta == true or item.IsMeta == true
+				or (sub and (sub.meta == true or sub.Meta == true or sub.isMeta == true or sub.IsMeta == true))
+			if rarity == "Infinity" and metaMarked then rarity = "Meta" end
+			return rarityRank[rarity] and rarity or nil
+		end
+
+		local function specificRuleMatches(item, rule, kind)
+			if type(rule) ~= "table" or rule.Item == nil or tostring(rule.Item) == "" then return false end
+			local sub = type(item.sub) == "table" and item.sub or {}
+			local display
+			if type(ItemToString) == "function" then
+				pcall(function()
+					display = ItemToString(item, {rich=false, displayLevel=false, displayMutation=false})
+				end)
+			end
+			local candidates = {display, item.name, sub.name, item.displayName, item.DisplayName, sub.gearType, sub.GearType}
+			if kind == "LuckyBlock" then
+				local luckyType = tostring(sub.luckyBlockType or sub.LuckyBlockType or "Default")
+				candidates[#candidates + 1] = luckyType == "Default" and "Lucky Block" or (luckyType .. " Lucky Block")
+			end
+			for _, candidate in ipairs(candidates) do
+				if candidate ~= nil
+					and autoServerHopState.SpecificItemNamesEquivalent(candidate, rule.Item)
+					and autoServerHopState.ItemMatchesSpecificRule(item, rule)
+				then
+					return true
+				end
+			end
+			return false
+		end
+
+		local function protectedForProgression(item, kind, rarity)
+			if type(item) ~= "table" then return true end
+			if item.locked == true then return true end
+			if utility.NeverDeleteNonBrainrots == true and kind ~= "Brainrot" then return true end
+			if utility.NeverDeleteRaritiesEnabled == true
+				and rarity ~= nil
+				and type(utility.NeverDeleteRarities) == "table"
+				and utility.NeverDeleteRarities[rarity] == true
+			then
+				return true
+			end
+			if utility.NeverDeleteEnabled == true then
+				for _, rule in ipairs(type(utility.NeverDeleteSpecificItems) == "table" and utility.NeverDeleteSpecificItems or {}) do
+					if specificRuleMatches(item, rule, kind) then return true end
+				end
+			end
+			local mutation = autoServerHopState.ItemMutation(item)
+			if mutation and type(utility.AvoidDeletingMutations) == "table" and utility.AvoidDeletingMutations[mutation] == true then return true end
+			if type(utility.AvoidDeletingTraits) == "table" then
+				for trait in pairs(autoServerHopState.ItemTraits(item)) do
+					if utility.AvoidDeletingTraits[tostring(trait)] == true then return true end
+				end
+			end
+			if kind == "Brainrot" and utility.AvoidDeletingSignedBrainrots == true
+				and autoServerHopState.ItemSignature(item) == "Signed" then return true end
+			local sizeName = autoServerHopState.ItemSizeName(item)
+			if sizeName and type(utility.AvoidDeletingSizes) == "table" and utility.AvoidDeletingSizes[sizeName] == true then return true end
+			local level = autoServerHopState.ItemLevel(item)
+			if level ~= nil and type(utility.AvoidDeletingLevels) == "table"
+				and utility.AvoidDeletingLevels[tostring(math.floor(level + 0.5))] == true then return true end
+			return false
+		end
+
+		for _, item in pairs(inventory) do
+			if type(item) == "table" then
+				local okKind, kind = pcall(GetItemType, item)
+				if not okKind then kind = autoServerHopState.ItemKind(item) end
+				kind = kind and tostring(kind) or nil
+				local rarity = kind == "Brainrot" and effectiveRarity(item) or nil
+				if not protectedForProgression(item, kind, rarity) then
+					if kind == "Brainrot" and rarityRank[rarity] then
+						result.UnprotectedBrainrotCount += 1
+						local lowest = result.LowestUnprotectedBrainrot
+						if not lowest or rarityRank[rarity] < rarityRank[lowest] then result.LowestUnprotectedBrainrot = rarity end
+						local highest = result.HighestUnprotectedBrainrot
+						if not highest or rarityRank[rarity] > rarityRank[highest] then result.HighestUnprotectedBrainrot = rarity end
+					else
+						result.UnprotectedNonBrainrotCount += 1
+					end
+				end
+			end
+		end
+		result.Ready = true
+		return result
 	end
 	autoServerHopState.ToolMatchesSpecificRule = function(tool, rule)
 		if typeof(tool) ~= "Instance" or not tool:IsA("Tool") or type(rule) ~= "table" then return false end
@@ -4432,9 +4571,9 @@ screenGui.ResetOnSpawn = false
 screenGui.DisplayOrder = 1000000
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = guiParent
--- Startup and server-hop freeze runs after normal character controls so no
--- automation/control path can make the character walk, sit, or drift while a
--- stay/hop decision is pending.
+-- While a server hop is pending, automation remains blocked but manual character
+-- movement stays fully available. The only character-level restriction is seating:
+-- a pending departure must not let a table/seat start a new minigame lifecycle.
 do
 	local localPlayerFreeze = Players.LocalPlayer
 	local bindName = "DroidHubServerFreeze_" .. tostring(localPlayerFreeze and localPlayerFreeze.UserId or 0)
@@ -4443,40 +4582,84 @@ do
 		bindName,
 		Enum.RenderPriority.Character.Value + 200,
 		function()
-			if not screenGui.Parent then return end
-			local hardFreeze = autoServerHopState.RuntimeServerHopHardFreeze == true
-			if autoServerHopState.Utility.PauseScript == true then return end
-			if not hardFreeze then
-				if autoServerHopState.RuntimeServerHopPending ~= true
-					or autoServerHopState.RefreshActiveSessionStartupBypass() == true
-				then return end
+			if not screenGui.Parent or autoServerHopState.Utility.PauseScript == true then return end
+			if autoServerHopState.RuntimeServerHopPending ~= true
+				and autoServerHopState.RuntimeServerHopHardFreeze ~= true
+			then
+				return
 			end
 			local character = localPlayerFreeze and localPlayerFreeze.Character
 			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-			local root = character and character:FindFirstChild("HumanoidRootPart")
-			if humanoid then
+			if humanoid and (humanoid.Sit == true or humanoid.SeatPart ~= nil) then
 				humanoid.Sit = false
-				if root then
-					pcall(function() humanoid:MoveTo(root.Position) end)
-					if hardFreeze then
-						pcall(function()
-							local locked = autoServerHopState.RuntimeServerHopFreezeCFrame
-							if typeof(locked) ~= "CFrame" then
-								locked = root.CFrame
-								autoServerHopState.RuntimeServerHopFreezeCFrame = locked
-							end
-							-- A committed hop is a true hard stop: cancel horizontal/vertical
-							-- momentum and hold the exact transform until teleport wins.
-							root.CFrame = locked
-							root.AssemblyLinearVelocity = Vector3.zero
-							root.AssemblyAngularVelocity = Vector3.zero
-						end)
-					end
-				end
-				humanoid:Move(Vector3.zero, false)
+				pcall(humanoid.ChangeState, humanoid, Enum.HumanoidStateType.GettingUp)
 			end
 		end
 	)
+	-- A manual prompt can replicate queue state before the local Seat is visibly occupied.
+	-- Cancel only a fresh waiting-table queue. Existing negotiation/voting/arena/game
+	-- lifecycles are left alone so a hop requested mid-session can finish safely.
+	task.spawn(function()
+		local replicatorGuard
+		local leaveQueueGuard
+		local declineGuard
+		local lastLeaveAt = 0
+		local lastDeclineAt = 0
+		local pendingInitialized = false
+		local preservedNegotiationGuid
+		while screenGui.Parent do
+			local pending = autoServerHopState.RuntimeServerHopPending == true
+				or autoServerHopState.RuntimeServerHopHardFreeze == true
+			if pending and autoServerHopState.Utility.PauseScript ~= true then
+				if not replicatorGuard or not leaveQueueGuard or not declineGuard then
+					pcall(function()
+						replicatorGuard = replicatorGuard or require(
+							ReplicatedStorage:WaitForChild("Client")
+								:WaitForChild("Modules")
+								:WaitForChild("ReplicatorClient")
+						)
+						local remotes = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Remotes"))
+						leaveQueueGuard = remotes and remotes.MinigameLeaveQueue or leaveQueueGuard
+						declineGuard = remotes and remotes.NegotiationDecline or declineGuard
+					end)
+				end
+				if replicatorGuard then
+					local active = safeRepGet(replicatorGuard, "ActiveMinigame")
+					local negotiation = safeRepGet(replicatorGuard, "ActiveNegotiation")
+					local negotiationGuid = safeTryIndex(negotiation, {"guid"})
+					if not pendingInitialized then
+						pendingInitialized = true
+						preservedNegotiationGuid = negotiationGuid
+					end
+					local newNegotiation = negotiationGuid ~= nil and (
+						preservedNegotiationGuid == nil
+						or tostring(negotiationGuid) ~= tostring(preservedNegotiationGuid)
+					)
+					if newNegotiation and declineGuard and os.clock() - lastDeclineAt >= 0.20 then
+						lastDeclineAt = os.clock()
+						pcall(function() declineGuard:FireServer() end)
+					end
+					local queued = safeTryIndex(active, {"queued"}) == true
+					local preexistingNegotiation = negotiationGuid ~= nil
+						and preservedNegotiationGuid ~= nil
+						and tostring(negotiationGuid) == tostring(preservedNegotiationGuid)
+					local committedLifecycle = preexistingNegotiation
+						or safeTryIndex(active, {"phase"}) ~= nil
+						or safeTryIndex(active, {"session", "gameId"}) ~= nil
+						or type(safeTryIndex(active, {"voting"})) == "table"
+						or (localPlayerFreeze and localPlayerFreeze:GetAttribute("InArena") == true)
+					if queued and not committedLifecycle and leaveQueueGuard and os.clock() - lastLeaveAt >= 0.20 then
+						lastLeaveAt = os.clock()
+						pcall(function() leaveQueueGuard:FireServer() end)
+					end
+				end
+			else
+				pendingInitialized = false
+				preservedNegotiationGuid = nil
+			end
+			task.wait(pending and 0.06 or 0.30)
+		end
+	end)
 	screenGui.Destroying:Connect(function()
 		pcall(RunService.UnbindFromRenderStep, RunService, bindName)
 	end)
@@ -4720,19 +4903,11 @@ window.Position = U2S(0.5, 0.5)
 local function applyDeviceWindowSize(
 	recenter
 )
-	local currentCamera = workspace.CurrentCamera or camera
-	local currentViewport = currentCamera and currentCamera.ViewportSize or viewportSize
 	local responsiveWindowScale = window:FindFirstChild("ResponsiveWindowScale")
-	local viewportX = math.max(320, tonumber(currentViewport.X) or 1920)
-	local viewportY = math.max(240, tonumber(currentViewport.Y) or 1080)
-	local phoneLayout = UserInputService.TouchEnabled
-		and math.min(viewportX, viewportY) < 700
-	local renderedWidth = phoneLayout and UI.MOBILE_GUI_WIDTH or UI.DESKTOP_GUI_WIDTH
-	local renderedHeight = phoneLayout and UI.MOBILE_GUI_HEIGHT or UI.DESKTOP_GUI_HEIGHT
-	-- Keep UI controls/text at their established logical size while Roblox is
-	-- resized. Scaling the entire Window a second time made every child shrink
-	-- on smaller desktop windows even though the Window itself was already being
-	-- resized to a viewport percentage. Let the panel layout reflow/scroll instead.
+	local renderedWidth = UI.MOBILE_DEVICE_LAYOUT and UI.MOBILE_GUI_WIDTH or UI.DESKTOP_GUI_WIDTH
+	local renderedHeight = UI.MOBILE_DEVICE_LAYOUT and UI.MOBILE_GUI_HEIGHT or UI.DESKTOP_GUI_HEIGHT
+	-- Device-fixed GUI: viewport resize events may recenter the window, but they
+	-- never alter its dimensions or scale.
 	if responsiveWindowScale then
 		responsiveWindowScale.Scale = 1
 	end
@@ -7577,28 +7752,9 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		local buttonBottom = button.AbsolutePosition.Y + button.AbsoluteSize.Y
 		local windowBottom = window.AbsolutePosition.Y + window.AbsoluteSize.Y
 		local roomBelow = math.max(0, windowBottom - buttonBottom)
-		if roomBelow < desiredHeight then
-			if autoServerHopState.RuntimeDropdownWindowBaseHeight == nil then
-				autoServerHopState.RuntimeDropdownWindowBaseHeight = window.Size.Y.Offset
-			end
-			local currentCamera = workspace.CurrentCamera or camera
-			local viewport = currentCamera and currentCamera.ViewportSize or viewportSize
-			local renderScale = currentWindowRenderScale()
-			local maxLogicalHeight = math.max(
-				window.Size.Y.Offset,
-				math.floor((math.max(240, viewport.Y) * 0.92) / renderScale)
-			)
-			local deficit = desiredHeight - roomBelow
-			local growBy = math.ceil((deficit * 2) / renderScale)
-			window.Size = U2O(
-				window.Size.X.Offset,
-				math.min(maxLogicalHeight, window.Size.Y.Offset + growBy)
-			)
-			buttonBottom = button.AbsolutePosition.Y + button.AbsoluteSize.Y
-			windowBottom = window.AbsolutePosition.Y + window.AbsoluteSize.Y
-			roomBelow = math.max(0, windowBottom - buttonBottom)
-		end
 		if roomBelow >= desiredHeight then return end
+		-- Keep the device-fixed Window size. Make room by scrolling the content
+		-- upward instead of enlarging the GUI based on viewport height.
 		local maxCanvasY = math.max(0, rightContent.AbsoluteCanvasSize.Y - rightContent.AbsoluteSize.Y)
 		local needed = desiredHeight - roomBelow
 		rightContent.CanvasPosition = V2(
@@ -13422,10 +13578,9 @@ local function syncRightPanelGeometry(
 			- (UI.CONTENT_SIDE_PADDING * 2)
 			- (UI.PANEL_SCROLL_EDGE_INSET * 2)
 		)
-	local responsiveWindowScale = window:FindFirstChild("ResponsiveWindowScale")
-	local renderedPanelScale = responsiveWindowScale and responsiveWindowScale.Scale or 1
+	-- Panel column mode follows the device layout only. A narrow desktop Roblox
+	-- window must not silently switch the desktop GUI into the mobile layout.
 	local singleColumn = isPhonePanelLayout()
-		or (usablePanelWidth * renderedPanelScale) < 460
 	-- If the content has reached the one-column breakpoint, reclaim the sidebar
 	-- space automatically. Re-run geometry once with the collapsed sidebar so
 	-- every dependent width/position is calculated from the final layout.
@@ -13794,6 +13949,13 @@ if MINIGAME_MODE then
 					local metaIndex = rarityIndex.Meta
 					local paradoxIndex = rarityIndex.Paradox
 					local eternalIndex = rarityIndex.Eternal
+					local progressionState = autoServerHopState.SimpleAutofarmProgressionInventoryState()
+					if type(progressionState) ~= "table" or progressionState.Ready ~= true then
+						task.wait(0.20)
+						continue
+					end
+					local progressionLowestIndex = rarityIndex[progressionState.LowestUnprotectedBrainrot]
+					local unprotectedNonBrainrots = math.max(0, math.floor(tonumber(progressionState.UnprotectedNonBrainrotCount) or 0))
 					local hasInfinityOrHigher = false
 					for index = infinityIndex, eternalIndex do
 						if math.max(0, math.floor(tonumber(counts[BRAINROT_RARITY_OPTIONS[index]]) or 0)) > 0 then
@@ -13801,20 +13963,27 @@ if MINIGAME_MODE then
 							break
 						end
 					end
+					local inventoryCleanForMeta = unprotectedNonBrainrots == 0
+						and (progressionLowestIndex == nil or progressionLowestIndex >= infinityIndex)
 					local targetIndex
 					if not hasInfinityOrHigher and highestIndex < infinityIndex then
 						-- Before the first Infinity, only seek the best rarity already owned and
 						-- anything higher. This keeps wagers realistic while never stepping down.
 						targetIndex = highestIndex
-					elseif lowestIndex < infinityIndex then
-						-- Once Infinity is obtained, finish upgrading every remaining Brainrot.
+					elseif not inventoryCleanForMeta then
+						-- Meta+ is blocked until every unprotected Brainrot is Infinity+ and
+						-- every unprotected non-Brainrot has been removed. Locked/delete-protected
+						-- inventory is intentionally ignored by this progression gate.
 						targetIndex = infinityIndex
-					elseif lowestIndex < metaIndex then
-						targetIndex = metaIndex
-					elseif lowestIndex < paradoxIndex then
-						targetIndex = paradoxIndex
 					else
-						targetIndex = eternalIndex
+						local progressionFloorIndex = progressionLowestIndex or highestIndex
+						if progressionFloorIndex < metaIndex then
+							targetIndex = metaIndex
+						elseif progressionFloorIndex < paradoxIndex then
+							targetIndex = paradoxIndex
+						else
+							targetIndex = eternalIndex
+						end
 					end
 					local targetRarity = BRAINROT_RARITY_OPTIONS[targetIndex]
 					local changed = autoServerHopState.RuntimeSimpleAutofarmTargetRarity ~= targetRarity
@@ -13826,7 +13995,9 @@ if MINIGAME_MODE then
 						autoServerHopState.RuntimeSimpleAutofarmBaselineBrainrots = math.max(1, math.floor(tonumber(total) or 1))
 					end
 
-					local allEternal = lowestIndex >= eternalIndex
+					local allEternal = inventoryCleanForMeta
+						and hasInfinityOrHigher
+						and (progressionLowestIndex == nil or progressionLowestIndex >= eternalIndex)
 					autoServerHopState.RuntimeSimpleAutofarmAllEternal = allEternal
 
 					for _, responseRarity in ipairs(BRAINROT_RARITY_OPTIONS) do
@@ -14191,14 +14362,11 @@ end
 	restoreButton.AnchorPoint = V2(0.5, 0)
 	restoreButton.Position = U2(0.5, 0, 0, px(10))
 	local function syncRestoreButtonSize()
-		local squarePixels = math.max(
-			1,
-			roundPixel(((workspace.CurrentCamera or camera) and (workspace.CurrentCamera or camera).ViewportSize.Y or viewportSize.Y) * 0.10)
-		)
+		-- Fixed per-device minimized button size; do not resize with the viewport.
+		local squarePixels = UI.MOBILE_DEVICE_LAYOUT and 84 or 76
 		restoreButton.Size = U2O(squarePixels, squarePixels)
 	end
 	syncRestoreButtonSize()
-	camera:GetPropertyChangedSignal("ViewportSize"):Connect(syncRestoreButtonSize)
 	restoreButton.BackgroundColor3 = UI.BLACK
 	restoreButton.BackgroundTransparency = 0
 	restoreButton.BorderSizePixel = 0
@@ -15662,6 +15830,18 @@ if MINIGAME_MODE then
 				or (not emptyEnabled and not partnerEnabled)
 		end
 		local function stopMovementAS()
+			-- A pending server hop cancels Auto Sit navigation without consuming the
+			-- player's movement input. Other pause/abort reasons retain the normal stop.
+			if autoServerHopState.RuntimeServerHopPending == true
+				or autoServerHopState.RuntimeServerHopHardFreeze == true
+			then
+				pcall(function()
+					RunServiceAS:UnbindFromRenderStep(
+						"__DROIDHUB_AUTOSIT_MOVE_" .. tostring(LocalPlayerAS.UserId)
+					)
+				end)
+				return
+			end
 			local _, humanoid, root = characterPartsAS()
 			if humanoid then
 				humanoid:Move(Vector3.zero, false)
@@ -18245,13 +18425,13 @@ if MINIGAME_MODE then
 				and tryIndexHP(active, {"session", "gameId"}) ~= nil
 		end
 		local function stopForServerHopHP()
+			-- Server-hop state blocks scripted automation, not the player's controls.
+			-- Only break seating so a waiting table cannot capture the player mid-hop.
 			local character = LocalPlayerHP and LocalPlayerHP.Character
 			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-			local root = character and character:FindFirstChild("HumanoidRootPart")
-			if humanoid then
+			if humanoid and (humanoid.Sit == true or humanoid.SeatPart ~= nil) then
 				humanoid.Sit = false
-				humanoid:Move(Vector3.zero, false)
-				if root then pcall(function() humanoid:MoveTo(root.Position) end) end
+				pcall(humanoid.ChangeState, humanoid, Enum.HumanoidStateType.GettingUp)
 			end
 		end
 		local function hopPreparationBlockedHP(active, forcedManual)
@@ -19730,18 +19910,9 @@ if MINIGAME_MODE then
 		local function neverDeleteADI(item)
 			local state = autoServerHopState and autoServerHopState.Utility
 			if not state or type(item) ~= "table" then return false end
-			-- Regular Mode never unlocks a protected item implicitly. Simple Auto Farm may
-			-- unlock obsolete low-tier Brainrots when its locked-item protection is off,
-			-- otherwise one locked trash item could permanently block floor progression.
-			if item.locked == true
-				and not (
-					state.SimpleAutofarmEnabled == true
-					and state.AvoidDeletingLockedItems ~= true
-					and inventoryItemTypeADI(item) == "Brainrot"
-				)
-			then
-				return true
-			end
+			-- A Roblox inventory lock is always authoritative protection. Simple Autofarm
+			-- never unlocks/deletes a locked item just to advance its rarity floor.
+			if item.locked == true then return true end
 			local itemType = inventoryItemTypeADI(item)
 			local effectiveRarity = effectiveBrainrotRarityADI(item)
 			-- Eternal is a terminal progression reward; never discard it automatically.
@@ -21943,6 +22114,12 @@ if MINIGAME_MODE then
                     end
                 end
             end
+            -- The instant an opponent offer satisfies the reactive criteria, Opening
+            -- Offer yields ownership. This happens before the configured reaction delay
+            -- so the opening-offer worker cannot keep adding/removing items meanwhile.
+            if primaryQualifiedAO == true then
+                utilityAO._AutoOfferReactiveGuid = tostring(guid)
+            end
             for _, sourceRarity in ipairs(BRAINROT_RARITY_OPTIONS) do
                 local sourceCount = math.max(0, math.floor(tonumber(sourceCounts[sourceRarity]) or 0))
                 local config = autoOfferState[sourceRarity]
@@ -23326,6 +23503,14 @@ if MINIGAME_MODE then
 			if tryAO2(NegotiationAO2, {"player1", "ready"}) == true then return false end
 			return not autoOfferOwnsWagerAO2(expectedGuid)
 		end
+		local function waitOpeningDelayAO2(expectedGuid, seconds)
+			local deadline = os.clock() + math.max(0, tonumber(seconds) or 0)
+			while os.clock() < deadline do
+				if not openingStillActiveAO2(expectedGuid) then return false end
+				task.wait(math.min(0.02, math.max(0.001, deadline - os.clock())))
+			end
+			return openingStillActiveAO2(expectedGuid)
+		end
 		local function invokeAO2(remote, ...)
 			if autoServerHopState.Utility.PauseScript == true
 				or autoServerHopState.Utility.PauseMinigameFeatures == true
@@ -23463,7 +23648,7 @@ if MINIGAME_MODE then
 				if current == amount then return true end
 				if not openingStillActiveAO2(expectedGuid) then return false end
 				invokeAO2(OfferCurrencyAO2, amount)
-				task.wait(math.clamp(
+				local mutationDelay = math.clamp(
 					(autoServerHopState.Utility.CustomDelays == true
 						and tonumber(
 							current < amount
@@ -23473,7 +23658,8 @@ if MINIGAME_MODE then
 						or 0.45,
 					0,
 					5
-				))
+				)
+				if not waitOpeningDelayAO2(expectedGuid, mutationDelay) then return false end
 				local verifyUntil = os.clock() + 0.35
 				while openingStillActiveAO2(expectedGuid) and os.clock() < verifyUntil do
 					local replicated = math.max(
@@ -23498,13 +23684,14 @@ if MINIGAME_MODE then
 					if currentId ~= nil and not sameIdAO2(currentId, desiredId) then
 						if not openingStillActiveAO2(expectedGuid) then return false end
 						invokeAO2(SetSlotAO2, tostring(slotIndex), nil)
-						task.wait(math.clamp(
+						local mutationDelay = math.clamp(
 							(autoServerHopState.Utility.CustomDelays == true
 								and tonumber(autoServerHopState.Utility.RemoveBrainrotDelay))
 								or 0.60,
 							0,
 							5
-						))
+						)
+						if not waitOpeningDelayAO2(expectedGuid, mutationDelay) then return false end
 					end
 				end
 				for slotIndex = 1, 6 do
@@ -23514,13 +23701,14 @@ if MINIGAME_MODE then
 					if desiredId ~= nil and not sameIdAO2(currentId, desiredId) then
 						if not openingStillActiveAO2(expectedGuid) then return false end
 						invokeAO2(SetSlotAO2, tostring(slotIndex), desiredId)
-						task.wait(math.clamp(
+						local mutationDelay = math.clamp(
 							(autoServerHopState.Utility.CustomDelays == true
 								and tonumber(autoServerHopState.Utility.AddBrainrotDelay))
 								or 0.70,
 							0,
 							5
-						))
+						)
+						if not waitOpeningDelayAO2(expectedGuid, mutationDelay) then return false end
 					end
 				end
 				if not openingStillActiveAO2(expectedGuid) then return false end
