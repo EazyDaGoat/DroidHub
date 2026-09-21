@@ -13883,10 +13883,11 @@ if MINIGAME_MODE then
 						end
 						local offerConfig = autoOfferState[rarity]
 						if type(offerConfig) == "table" then
-							-- Ignore junk below the current upgrade floor even when it is bundled
-							-- with a qualifying wager; paying extra for it only slows progression.
-							offerConfig.Enabled = targeted
-							offerConfig.AlongsideOnly = false
+							-- Only target-floor Brainrots may qualify a wager by themselves.
+							-- Lower Brainrots remain response sources so, after another configured
+							-- criterion qualifies the wager, every bundled Brainrot is matched too.
+							offerConfig.Enabled = true
+							offerConfig.AlongsideOnly = not targeted
 						end
 						autoCancelState.Targets[rarity] = targeted and true or nil
 						autoCancelState.Amounts[rarity] = 1
@@ -21949,7 +21950,10 @@ if MINIGAME_MODE then
                     and sourceCount > 0
                     and type(config) == "table"
                     and config.Enabled == true
-                    and (config.AlongsideOnly ~= true or primaryQualifiedAO == true)
+                    and (
+                        primaryQualifiedAO == true
+                        or (utilityAO.SimpleAutofarmEnabled ~= true and config.AlongsideOnly ~= true)
+                    )
                 then
                     hasEnabledSource = true
                     config.OfferModeRarity = config.OfferModeRarity ~= false
@@ -22021,7 +22025,11 @@ if MINIGAME_MODE then
                             1,
                             1000000
                         )
-                        if opponentTokens >= lowestTokensToMatch then
+                        local tokenQualifiesAloneAO = opponentTokens >= lowestTokensToMatch
+                        local tokenIncludedAlongsideAO = utilityAO.SimpleAutofarmEnabled == true
+                            and primaryQualifiedAO == true
+                            and opponentTokens > 0
+                        if tokenQualifiesAloneAO or tokenIncludedAlongsideAO then
                             openingTakeoverAO = true
                             local tokenAddRatio = math.clamp(
                                 math.floor(tonumber(utilityAO.AutoOfferTokenAddRatio) or 1),
@@ -34675,6 +34683,10 @@ local tracker = {
     hotPotatoFinalScheduleKey = nil,
     hotPotatoFinalHandoffAt = nil,
     hotPotatoFinalLeaveAt = nil,
+    -- Predicted server-side explosion edge for the current final Hot Potato window.
+    -- Auto Leave uses this only to cap its confirmation wait; handoff keeps priority
+    -- until the last locally safe instant before that edge.
+    hotPotatoServerExpiryAt = nil,
     hotPotatoHardFailsafeTool = nil,
     hotPotatoHardFailsafeAt = nil,
     hotPotatoHardFailsafeExpiresAt = nil,
@@ -35298,11 +35310,22 @@ local function hotPotatoDepartureCommitReady(reason)
         local pingMs = item and tonumber(item:GetValue())
         if pingMs then
             -- Give a just-accepted server transfer enough time to replicate back before
-            -- committing the local kick, while preserving the Hot Potato scheduler's
-            -- final emergency reserve.
+            -- committing the local kick. Handoff owns this tail; Auto Leave may only
+            -- finish once the transfer has failed to reparent the authoritative Tool.
             guardSeconds = math.clamp(0.040 + (pingMs / 1000) * 0.55, 0.050, 0.220)
         end
     end)
+
+    -- Never let the replication-confirmation guard push the local disconnect beyond
+    -- the predicted server explosion edge. This preserves handoff-first behavior at
+    -- normal latency while still leaving a tiny final reserve for the actual Kick call.
+    local serverExpiryAt = tonumber(tracker.hotPotatoServerExpiryAt)
+    if serverExpiryAt and serverExpiryAt > now then
+        guardSeconds = math.min(
+            guardSeconds,
+            math.max(0, serverExpiryAt - now - 0.012)
+        )
+    end
 
     return controller.hotPotatoDepartureGuardFrames >= 2
         and now - startedAt >= guardSeconds
@@ -36376,14 +36399,7 @@ local function batBattleArenaBoundaryWouldClinch(character)
     if radialMagnitude > 0.001 then
         outwardSpeed = radial.Unit:Dot(velocity)
     end
-    if velocity.Y >= -4 or outwardSpeed <= 2 then
-        return false
-    end
-    -- max(GetExtentsSize()) is intentionally much larger than the arena's ordinary
-    -- playable half-extents. Only predict ahead once the character is already near the
-    -- outer survival shell; this avoids treating normal jumps or drops between the Hot
-    -- Potato map's internal platforms as fatal falls.
-    if distance < radius * 0.85 then
+    if velocity.Y >= -4 then
         return false
     end
 
@@ -36401,12 +36417,47 @@ local function batBattleArenaBoundaryWouldClinch(character)
         + velocity * leadSeconds
         + Vector3.new(0, -0.5 * gravity * leadSeconds * leadSeconds, 0)
     local projectedDistance = (projected - centerPosition).Magnitude
+
+    -- Horizontal launches still use the near-shell prediction. A straight-down fall
+    -- can have almost no radial outward velocity, though, so also project vertical
+    -- freefall against the exact same 3D ArenaModule survival radius. Before treating
+    -- that projection as fatal, raycast the projected drop and make sure real geometry
+    -- is not going to catch the character. This avoids leaving for an ordinary jump.
+    local projectedCrossesBoundary = projectedDistance >= radius
+    local noFloorBeforeProjectedDrop = false
+    if projectedCrossesBoundary and velocity.Y <= -7 then
+        local projectedDrop = math.max(8, position.Y - projected.Y + 4)
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        local excluded = {character}
+        local opponent = currentOpponent() or tracker.cachedOpponent
+        if typeof(opponent) == "Instance" and opponent:IsA("Player") and opponent.Character then
+            excluded[#excluded + 1] = opponent.Character
+        end
+        params.FilterDescendantsInstances = excluded
+        params.IgnoreWater = true
+        local floorHit = workspace:Raycast(
+            position + Vector3.new(0, 1.5, 0),
+            Vector3.new(0, -projectedDrop, 0),
+            params
+        )
+        noFloorBeforeProjectedDrop = floorHit == nil
+    end
+
+    if projectedCrossesBoundary and noFloorBeforeProjectedDrop then
+        return true
+    end
+
+    -- For outward launches, preserve the existing short pre-boundary margin so the
+    -- local disconnect wins the race against the server's periodic alive check.
+    if outwardSpeed <= 2 or distance < radius * 0.85 then
+        return false
+    end
     local nearBoundaryMargin = math.clamp(
         4 + math.max(0, outwardSpeed) * 0.06,
         4,
         14
     )
-
     return projectedDistance >= radius
         or distance >= radius - nearBoundaryMargin
 end
@@ -36890,9 +36941,12 @@ local function hotPotatoPingSeconds()
 end
 
 local function hotPotatoFallbackLead(pingSeconds)
-    -- Reserve time for possession confirmation, network transit and a delayed frame.
-    -- Loss protection intentionally takes priority over a last-instant handoff.
-    return math.clamp(0.55 + (tonumber(pingSeconds) or 0.08), 0.60, 2.55)
+    -- Handoff is the primary outcome. Auto Leave is only the final local-disconnect
+    -- failsafe, so reserve just enough time for a multi-frame possession recheck plus
+    -- the local Kick call. The transfer pump continues through this confirmation tail;
+    -- if ownership changes, the pending departure is canceled before Kick.
+    local ping = math.clamp(tonumber(pingSeconds) or 0.08, 0.015, 2.0)
+    return math.clamp(0.105 + ping * 0.30, 0.125, 0.42)
 end
 
 local function hotPotatoPredictedExpiry(timerValue, changedAt, pingSeconds)
@@ -37093,6 +37147,7 @@ local function hotPotatoCriticalAcquire(tool)
     if predictedExpiryAt == nil then
         return false
     end
+    tracker.hotPotatoServerExpiryAt = predictedExpiryAt
 
     local fallbackLead = hotPotatoFallbackLead(pingSeconds)
     local hardCutoffAt = predictedExpiryAt - fallbackLead
@@ -37307,6 +37362,7 @@ local function resetTracker(gameId)
     tracker.hotPotatoFinalScheduleKey = nil
     tracker.hotPotatoFinalHandoffAt = nil
     tracker.hotPotatoFinalLeaveAt = nil
+    tracker.hotPotatoServerExpiryAt = nil
     tracker.hotPotatoHardFailsafeTool = nil
     tracker.hotPotatoHardFailsafeAt = nil
     tracker.hotPotatoHardFailsafeExpiresAt = nil
@@ -39051,6 +39107,7 @@ local function processHotPotato(s)
         local handoffAt = math.max(now, serverExpiryAt - reliabilityLead)
         local fallbackAt = math.max(now, serverExpiryAt - fallbackLead)
         local fallbackExpiresAt = serverExpiryAt + 0.75
+        tracker.hotPotatoServerExpiryAt = serverExpiryAt
 
         -- HARD CUTOFF: after fallbackAt, possession itself is terminal.
         -- Do not spend another frame resolving an opponent, waiting for a handoff worker,
