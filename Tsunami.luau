@@ -1,5 +1,5 @@
 --[[
-    TUFFHUB
+    DROIDHUB
     =======
     Navigation (search these section tags):
       [01] Bootstrap & Shared Services
@@ -23,19 +23,19 @@
 -- Automatic settings persistence was removed. Configs are now the only
 -- file-backed settings mechanism. Clean up legacy autosave state/files once.
 do
-	rawset(_G, "__TUFFHUB_SAVE_SETTINGS_NOW", nil)
-	rawset(_G, "__TUFFHUB_PERSISTED_SETTINGS_V1", nil)
-	rawset(_G, "__TUFFHUB_SETTINGS_SAVE_GENERATION_V1", nil)
+	rawset(_G, "__DROIDHUB_SAVE_SETTINGS_NOW", nil)
+	rawset(_G, "__DROIDHUB_PERSISTED_SETTINGS_V1", nil)
+	rawset(_G, "__DROIDHUB_SETTINGS_SAVE_GENERATION_V1", nil)
 	pcall(function()
 		if getgenv then
-			getgenv()["__TUFFHUB_SAVE_SETTINGS_NOW"] = nil
-			getgenv()["__TUFFHUB_PERSISTED_SETTINGS_V1"] = nil
-			getgenv()["__TUFFHUB_SETTINGS_SAVE_GENERATION_V1"] = nil
+			getgenv()["__DROIDHUB_SAVE_SETTINGS_NOW"] = nil
+			getgenv()["__DROIDHUB_PERSISTED_SETTINGS_V1"] = nil
+			getgenv()["__DROIDHUB_SETTINGS_SAVE_GENERATION_V1"] = nil
 		end
 	end)
 	pcall(function()
 		if type(delfile) == "function" then
-			for _, path in ipairs({"TuffHub_Settings_v1.json", "TuffHub_Settings_v1.backup.json"}) do
+			for _, path in ipairs({"DroidHub_Settings_v1.json", "DroidHub_Settings_v1.backup.json"}) do
 				local exists = true
 				if type(isfile) == "function" then
 					local ok, value = pcall(isfile, path)
@@ -70,7 +70,36 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
-local TUFFHUB_HOP_PLACE_ID = 111917342868480
+local DROIDHUB_HOP_PLACE_ID = 111917342868480
+-- Intentional departures (server hop, Auto Leave, reconnect) must never be
+-- mistaken for a network disconnect. Store the origin JobId so a marker from
+-- the previous server cannot suppress real disconnect protection after teleport.
+local function markIntentionalDeparture(reason, seconds)
+	rawset(_G, "__DROIDHUB_INTENTIONAL_DEPARTURE", {
+		Reason = tostring(reason or "Intentional"),
+		OriginJobId = tostring(game.JobId or ""),
+		UntilUnixMs = DateTime.now().UnixTimestampMillis
+			+ math.max(1000, math.floor((tonumber(seconds) or 10) * 1000)),
+	})
+end
+local function clearIntentionalDeparture(reason)
+	local state = rawget(_G, "__DROIDHUB_INTENTIONAL_DEPARTURE")
+	if type(state) ~= "table" then return end
+	if reason == nil or tostring(state.Reason or "") == tostring(reason) then
+		rawset(_G, "__DROIDHUB_INTENTIONAL_DEPARTURE", nil)
+	end
+end
+local function intentionalDepartureActive()
+	local state = rawget(_G, "__DROIDHUB_INTENTIONAL_DEPARTURE")
+	if type(state) ~= "table" then return false end
+	if tostring(state.OriginJobId or "") ~= tostring(game.JobId or "")
+		or DateTime.now().UnixTimestampMillis > (tonumber(state.UntilUnixMs) or 0)
+	then
+		rawset(_G, "__DROIDHUB_INTENTIONAL_DEPARTURE", nil)
+		return false
+	end
+	return true
+end
 local New = Instance.new
 local function safeRepGet(rep, key)
 	if not rep or type(rep.get) ~= "function" then return nil end
@@ -114,11 +143,12 @@ end
 if viewportSize.X < 320 or viewportSize.Y < 240 then
 	viewportSize = V2(1920, 1080)
 end
-local DESKTOP_GUI_WIDTH = 800
-local DESKTOP_GUI_HEIGHT = 600
-local MOBILE_GUI_WIDTH = 500
-local MOBILE_GUI_HEIGHT = 300
-local FONT_SIZE_SCALE = 0.90
+local UI = {}
+UI.DESKTOP_GUI_WIDTH = 800
+UI.DESKTOP_GUI_HEIGHT = 600
+UI.MOBILE_GUI_WIDTH = 500
+UI.MOBILE_GUI_HEIGHT = 300
+UI.FONT_SIZE_SCALE = 0.90
 local function isPhonePanelLayout()
 	local currentCamera = workspace.CurrentCamera or camera
 	local currentViewport = currentCamera and currentCamera.ViewportSize or viewportSize
@@ -148,7 +178,7 @@ local responsiveTextSize = (function()
 	local referenceHeight = startupPhoneLayout and 844 or 768
 	local scale = startupPhoneLayout
 		and math.clamp(1.02 * (viewportSize.Y / referenceHeight), 0.96, 1.08)
-		or (FONT_SIZE_SCALE * (viewportSize.Y / referenceHeight))
+		or (UI.FONT_SIZE_SCALE * (viewportSize.Y / referenceHeight))
 	return function(baseSize)
 		return math.max(
 			1,
@@ -159,15 +189,15 @@ end)()
 local function setResponsiveTextSize(object, baseSize)
 	object.TextSize = responsiveTextSize(baseSize)
 end
-local BLACK = RGB(9, 10, 12)
-local PINK = RGB(255, 0, 98)
-local LOGO_FONT = Enum.Font.GothamBlack
-local MENU_FONT = Enum.Font.BuilderSans
-local MENU_FONT_REGULAR_FACE = Font.new("rbxasset://fonts/families/BuilderSans.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
-local MENU_FONT_FACE = MENU_FONT_REGULAR_FACE
-local MENU_FONT_SEMIBOLD_FACE = Font.new("rbxasset://fonts/families/BuilderSans.json", Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
-local MENU_FONT_BOLD_FACE = Font.new("rbxasset://fonts/families/BuilderSans.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
-local PANEL_FONT_FACE = MENU_FONT_SEMIBOLD_FACE
+UI.BLACK = RGB(9, 10, 12)
+UI.PINK = RGB(255, 0, 98)
+UI.LOGO_FONT = Enum.Font.GothamBlack
+UI.MENU_FONT = Enum.Font.BuilderSans
+UI.MENU_FONT_REGULAR_FACE = Font.new("rbxasset://fonts/families/BuilderSans.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+UI.MENU_FONT_FACE = UI.MENU_FONT_REGULAR_FACE
+UI.MENU_FONT_SEMIBOLD_FACE = Font.new("rbxasset://fonts/families/BuilderSans.json", Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+UI.MENU_FONT_BOLD_FACE = Font.new("rbxasset://fonts/families/BuilderSans.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+UI.PANEL_FONT_FACE = UI.MENU_FONT_SEMIBOLD_FACE
 local function capitalizeUiWords(value)
 	value = tostring(value or "")
 	return (string.gsub(value, "%S+", function(word)
@@ -178,15 +208,15 @@ local function capitalizeUiWords(value)
 		return (string.gsub(word, "(%a)", string.upper, 1))
 	end))
 end
-local LOGO_FONT_FACE = (function()
-	local fallback = Font.fromEnum(LOGO_FONT)
+UI.LOGO_FONT_FACE = (function()
+	local fallback = Font.fromEnum(UI.LOGO_FONT)
 	local ok, face = pcall(function()
 		local customAsset = getcustomasset or getsynasset
 		if type(writefile) ~= "function" or type(customAsset) ~= "function" then
 			return fallback
 		end
-		local ttfPath = "TuffHub_InsaniburgerRegular_v1.ttf"
-		local familyPath = "TuffHub_InsaniburgerRegular_v1.font"
+		local ttfPath = "DroidHub_InsaniburgerRegular_v1.ttf"
+		local familyPath = "DroidHub_InsaniburgerRegular_v1.font"
 		-- Cache the font file across executions; avoid a network request and disk write on every load.
 		local fontCached = false
 		if type(isfile) == "function" then
@@ -213,83 +243,83 @@ local LOGO_FONT_FACE = (function()
 		return Font.new(customAsset(familyPath))
 	end)
 	if not ok then
-		warn("TuffHub: Insaniburger failed to load; using GothamBlack fallback: " .. tostring(face))
+		warn("DroidHub: Insaniburger failed to load; using GothamBlack fallback: " .. tostring(face))
 		return fallback
 	end
 	return face
 end)()
-local CORNER_RADIUS = px(10)
-local LINE_THICKNESS = px(1)
-local LINE_TRANSPARENCY = 0.12
-local LINE_COLOR = RGB(48, 50, 57)
-local TOGGLE_KEY = Enum.KeyCode.LeftControl
-local SIDEBAR_PADDING = px(10)
-local SIDEBAR_WIDTH_SCALE = 0.205
-local COLLAPSED_SIDEBAR_WIDTH = px(58)
-local LOGO_WIDTH = px(isPhonePanelLayout() and 110 or 124)
-local LOGO_HEIGHT = px(isPhonePanelLayout() and 36 or 40)
-local LOGO_TEXT_SIZE = isPhonePanelLayout() and 33.8 or 37.5
-local LOGO_SEARCH_GAP = px(isPhonePanelLayout() and 8 or 3)
-local SEARCH_TOP_GAP = px(10)
-local SEARCH_HEIGHT = px(30)
-local SEARCH_CORNER_RADIUS = px(7)
-local SEARCH_BACKGROUND = RGB(
+UI.CORNER_RADIUS = px(10)
+UI.LINE_THICKNESS = px(1)
+UI.LINE_TRANSPARENCY = 0.12
+UI.LINE_COLOR = RGB(48, 50, 57)
+UI.TOGGLE_KEY = Enum.KeyCode.LeftControl
+UI.SIDEBAR_PADDING = px(10)
+UI.SIDEBAR_WIDTH_SCALE = 0.205
+UI.COLLAPSED_SIDEBAR_WIDTH = px(58)
+UI.LOGO_WIDTH = px(isPhonePanelLayout() and 104 or 118)
+UI.LOGO_HEIGHT = px(isPhonePanelLayout() and 36 or 40)
+UI.LOGO_TEXT_SIZE = isPhonePanelLayout() and 32.5 or 35.5
+UI.LOGO_SEARCH_GAP = px(isPhonePanelLayout() and 8 or 3)
+UI.SEARCH_TOP_GAP = px(10)
+UI.SEARCH_HEIGHT = px(30)
+UI.SEARCH_CORNER_RADIUS = px(7)
+UI.SEARCH_BACKGROUND = RGB(
 		18,
 		19,
 		23
 	)
-local SEARCH_BACKGROUND_TRANSPARENCY = 0
-local SEARCH_FOCUSED_TRANSPARENCY = 0
-local SEARCH_TEXT_SIZE = 14
-local MUTED_TEXT_COLOR = RGB(
+UI.SEARCH_BACKGROUND_TRANSPARENCY = 0
+UI.SEARCH_FOCUSED_TRANSPARENCY = 0
+UI.SEARCH_TEXT_SIZE = 14
+UI.MUTED_TEXT_COLOR = RGB(
 		126,
 		130,
 		139
 	)
-local SEARCH_TEXT_COLOR = RGB(226, 229, 235)
-local SEARCH_PLACEHOLDER_COLOR = RGB(119, 123, 132)
-local SEARCH_ICON_SIZE = px(15)
-local MENU_TOP_GAP = px(10)
-local MENU_ITEM_HEIGHT = px(36)
-local MENU_ITEM_GAP = px(5)
-local MENU_TEXT_SIZE = 14
-local MENU_CORNER_RADIUS = px(7)
-local MENU_NORMAL_TRANSPARENCY = 1
-local MENU_HOVER_TRANSPARENCY = 0.36
-local MENU_SELECTED_TRANSPARENCY = 0
-local MENU_TEXT_IDLE = RGB(133, 137, 146)
-local MENU_TEXT_SELECTED = RGB(234, 236, 241)
-local MENU_TEXT_HOVER = RGB(205, 208, 215)
-local MENU_ACTIVE_LINE_WIDTH = px(3)
-local MENU_ACTIVE_LINE_HEIGHT = px(22)
-local MENU_ICON_SIZE = px(20)
-local MENU_ICON_X = px(10)
-local MENU_TEXT_X = px(39)
-local CONTENT_SIDE_PADDING = px(12)
-local CONTENT_TOP_PADDING = px(52)
-local CONTENT_COLUMN_GAP = px(12)
-local CONTENT_ROW_GAP = px(10)
-local PANEL_SCROLL_EDGE_INSET = px(2)
-local PANEL_HEADER_HEIGHT = px(38)
-local PANEL_EXPANDED_HEIGHT = px(128)
-local PANEL_COLLAPSED_HEIGHT = PANEL_HEADER_HEIGHT
-local PANEL_CORNER_RADIUS = px(8)
-local PANEL_BACKGROUND = RGB(
+UI.SEARCH_TEXT_COLOR = RGB(226, 229, 235)
+UI.SEARCH_PLACEHOLDER_COLOR = RGB(119, 123, 132)
+UI.SEARCH_ICON_SIZE = px(15)
+UI.MENU_TOP_GAP = px(10)
+UI.MENU_ITEM_HEIGHT = px(36)
+UI.MENU_ITEM_GAP = px(5)
+UI.MENU_TEXT_SIZE = 14
+UI.MENU_CORNER_RADIUS = px(7)
+UI.MENU_NORMAL_TRANSPARENCY = 1
+UI.MENU_HOVER_TRANSPARENCY = 0.36
+UI.MENU_SELECTED_TRANSPARENCY = 0
+UI.MENU_TEXT_IDLE = RGB(133, 137, 146)
+UI.MENU_TEXT_SELECTED = RGB(234, 236, 241)
+UI.MENU_TEXT_HOVER = RGB(205, 208, 215)
+UI.MENU_ACTIVE_LINE_WIDTH = px(3)
+UI.MENU_ACTIVE_LINE_HEIGHT = px(22)
+UI.MENU_ICON_SIZE = px(20)
+UI.MENU_ICON_X = px(10)
+UI.MENU_TEXT_X = px(39)
+UI.CONTENT_SIDE_PADDING = px(12)
+UI.CONTENT_TOP_PADDING = px(52)
+UI.CONTENT_COLUMN_GAP = px(12)
+UI.CONTENT_ROW_GAP = px(10)
+UI.PANEL_SCROLL_EDGE_INSET = px(2)
+UI.PANEL_HEADER_HEIGHT = px(38)
+UI.PANEL_EXPANDED_HEIGHT = px(128)
+UI.PANEL_COLLAPSED_HEIGHT = UI.PANEL_HEADER_HEIGHT
+UI.PANEL_CORNER_RADIUS = px(8)
+UI.PANEL_BACKGROUND = RGB(
 		13,
 		14,
 		17
 	)
-local PANEL_CHEVRON_COLOR = RGB(145, 149, 158)
-local FEATURE_OFF_COLOR=RGB(19,20,24)
+UI.PANEL_CHEVRON_COLOR = RGB(145, 149, 158)
+UI.FEATURE_OFF_COLOR =RGB(19,20,24)
 -- [02] Settings, Profiles & Persistence -------------------------------------
 -- Standalone minigames build: always initialize, regardless of PlaceId/GameId.
 local MINIGAME_MODE = true
-local MINIGAME_AUTOPLAY_KEY = "__TUFFHUB_MINIGAME_AUTOPLAY"
-local AUTO_OFFER_KEY = "__TUFFHUB_AUTO_OFFER"
-local AUTO_ACCEPT_KEY = "__TUFFHUB_AUTO_ACCEPT"
-local AUTO_SIT_KEY = "__TUFFHUB_AUTO_SIT"
-local AUTO_CANCEL_KEY = "__TUFFHUB_AUTO_CANCEL"
-local AUTO_SERVER_HOP_KEY = "__TUFFHUB_AUTO_SERVER_HOP"
+local MINIGAME_AUTOPLAY_KEY = "__DROIDHUB_MINIGAME_AUTOPLAY"
+local AUTO_OFFER_KEY = "__DROIDHUB_AUTO_OFFER"
+local AUTO_ACCEPT_KEY = "__DROIDHUB_AUTO_ACCEPT"
+local AUTO_SIT_KEY = "__DROIDHUB_AUTO_SIT"
+local AUTO_CANCEL_KEY = "__DROIDHUB_AUTO_CANCEL"
+local AUTO_SERVER_HOP_KEY = "__DROIDHUB_AUTO_SERVER_HOP"
 local BRAINROT_RARITY_OPTIONS = {
 	"Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythical",
 	"Cosmic", "Secret", "Celestial", "Divine", "Infinity", "Meta", "Paradox", "Eternal",
@@ -301,6 +331,37 @@ local OUTGOING_BRAINROT_RARITY_OPTIONS = {
 }
 local RARITY_OPTIONS = table.clone(BRAINROT_RARITY_OPTIONS)
 RARITY_OPTIONS[#RARITY_OPTIONS + 1] = "Tokens"
+local FALLBACK_PRIORITY_OPTIONS = {
+    "Next Higher Rarity",
+    "Specific Items",
+    "Next Lower Rarity",
+    "Best Available Brainrots",
+    "Token Fallback",
+}
+local FALLBACK_AUTOMATIC_PRIORITY = table.clone(FALLBACK_PRIORITY_OPTIONS)
+local FALLBACK_PRIORITY_VALID = {}
+for _, fallbackName in ipairs(FALLBACK_PRIORITY_OPTIONS) do
+    FALLBACK_PRIORITY_VALID[fallbackName] = true
+end
+local function resolveFallbackPriority(customEnabled, priorityValues)
+    local resolved, seen = {}, {}
+    if customEnabled == true and type(priorityValues) == "table" then
+        for index = 1, #FALLBACK_PRIORITY_OPTIONS do
+            local value = tostring(priorityValues[index] or "")
+            if FALLBACK_PRIORITY_VALID[value] and not seen[value] then
+                seen[value] = true
+                resolved[#resolved + 1] = value
+            end
+        end
+    end
+    for _, value in ipairs(FALLBACK_AUTOMATIC_PRIORITY) do
+        if not seen[value] then
+            seen[value] = true
+            resolved[#resolved + 1] = value
+        end
+    end
+    return resolved
+end
 local minigameAutoplayState
 local autoOfferState
 local regularAutoOfferState
@@ -321,13 +382,14 @@ if MINIGAME_MODE then
 		"NumberGuess",
 		"Knockout",
 		"HotPotato",
+		"BatBattle",
 	}) do
 		minigameAutoplayState[id] = false
 	end
 	autoOfferState = {}
 	rawset(_G, AUTO_OFFER_KEY, autoOfferState)
 	regularAutoOfferState = {}
-	rawset(_G, "__TUFFHUB_REGULAR_AUTO_OFFER", regularAutoOfferState)
+	rawset(_G, "__DROIDHUB_REGULAR_AUTO_OFFER", regularAutoOfferState)
 	for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 		local function newOfferConfig()
 			return {
@@ -372,7 +434,7 @@ if MINIGAME_MODE then
 		Amount = 1,
 	}
 	tradeRequestCriteriaState = {}
-	rawset(_G, "__TUFFHUB_TRADE_REQUEST_CRITERIA", tradeRequestCriteriaState)
+	rawset(_G, "__DROIDHUB_TRADE_REQUEST_CRITERIA", tradeRequestCriteriaState)
 	for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 		tradeRequestCriteriaState[rarity] = {
 			Enabled = false,
@@ -449,7 +511,7 @@ if MINIGAME_MODE then
 		RuntimeCheckServerStartupResolved = false,
 		RuntimeManualServerHopRequested = false,
 		RuntimeManualKickRequested = false,
-		RuntimePlayedMinigameUserIds = {},
+		RuntimeQueuedMinigameUserIds = {},
 		RuntimeOwnedBrainrotOptionLabels = {},
 		RuntimeAutoSitBusy = false,
 		RuntimeBoothMutationBusy = false,
@@ -458,6 +520,9 @@ if MINIGAME_MODE then
 		RuntimeBoothMaxSlots = 3,
 		RuntimeSettingsResetEpoch = 0,
 		RuntimeSimpleAutofarmTargetRarity = nil,
+		RuntimeSimpleAutofarmTargetTokenMinimum = 0,
+		RuntimeSimpleAutofarmBaselineBrainrots = nil,
+		RuntimeSimpleAutofarmAllEternal = false,
 		RuntimeSimpleAutofarmWarningUntil = 0,
 		RecentServerIds = {},
 	}
@@ -549,9 +614,17 @@ if MINIGAME_MODE then
 		RegularFallbackOffers = false, -- next-highest lower-rarity fallback
 		RegularFallbackToNextHigherRarityBrainrot = false,
 		RegularFallbackToSpecificItems = false,
+		RegularFallbackToBestAvailableBrainrots = false,
 		RegularFallbackToTokens = false,
+		RegularFallbackCustomPriority = false,
+		RegularFallbackPriority1 = "Next Higher Rarity",
+		RegularFallbackPriority2 = "Specific Items",
+		RegularFallbackPriority3 = "Next Lower Rarity",
+		RegularFallbackPriority4 = "Best Available Brainrots",
+		RegularFallbackPriority5 = "Token Fallback",
 		RegularFallbackNextLowerRarityAmount = 1,
 		RegularFallbackNextHigherRarityAmount = 1,
+		RegularFallbackBestAvailableBrainrotAmount = 6,
 		RegularFallbackAvoidMutationsEnabled = false,
 		RegularFallbackAvoidMutations = {},
 		RegularFallbackAvoidTraitsEnabled = false,
@@ -590,9 +663,17 @@ if MINIGAME_MODE then
 		FallbackToNextLowerRarityBrainrot = false,
 		FallbackToNextHigherRarityBrainrot = false,
 		FallbackToSpecificBrainrotItem = false,
+		FallbackToBestAvailableBrainrots = false,
 		FallbackSpecificBrainrotItem = nil,
+		FallbackCustomPriority = false,
+		FallbackPriority1 = "Next Higher Rarity",
+		FallbackPriority2 = "Specific Items",
+		FallbackPriority3 = "Next Lower Rarity",
+		FallbackPriority4 = "Best Available Brainrots",
+		FallbackPriority5 = "Token Fallback",
 		FallbackNextLowerRarityAmount = 1,
 		FallbackNextHigherRarityAmount = 1,
+		FallbackBestAvailableBrainrotAmount = 6,
 		FallbackAvoidMutationsEnabled = false,
 		FallbackAvoidMutations = {},
 		FallbackAvoidTraitsEnabled = false,
@@ -676,6 +757,7 @@ if MINIGAME_MODE then
 		HoldSpecificBrainrotSizes = {},
 		HoldSpecificBrainrotLevels = {},
 		MountEquipBestBrainrot = true,
+		MountEquipBiggestBrainrot = false,
 		MountEquipSpecificBrainrot = false,
 		MountSpecificBrainrotId = nil,
 		MountSpecificBrainrotMutations = {},
@@ -716,6 +798,7 @@ if MINIGAME_MODE then
 		RemoveTokenDelay = 0.10,
 		AcceptOfferDelay = 0.45,
 		AutoChooseGame = false,
+		AdaptiveGameSelection = false,
 		GameToChoose = "Popcorn Burst",
 		MatchOpponentGame = false,
 		FallbackGameChoices = {},
@@ -856,7 +939,78 @@ if MINIGAME_MODE then
 	for slotIndex = 1, 6 do
 		autoServerHopState.Utility["RegularOpeningBrainrot" .. tostring(slotIndex)] = nil
 	end
-	rawset(_G, "__TUFFHUB_UTILITY_FEATURES", autoServerHopState.Utility)
+	rawset(_G, "__DROIDHUB_UTILITY_FEATURES", autoServerHopState.Utility)
+	-- Adaptive minigame selector. It learns completed-game win rate and duration,
+	-- then maximizes smoothed expected wins per minute. A tiny exploration bonus
+	-- prevents one early result from permanently locking the selector to one game.
+	do
+		local ADAPTIVE_STATS_PATH = "DroidHub_AdaptiveGameStats_v1.json"
+		local validGames = {
+			PopcornBurst=true, ConnectFour=true, CandyBomb=true, NumberGuess=true,
+			FootballDraft=true, Knockout=true, Battleship=true, HotPotato=true, BatBattle=true,
+		}
+		local priorDuration = {
+			PopcornBurst=35, ConnectFour=70, CandyBomb=55, NumberGuess=45,
+			FootballDraft=65, Knockout=55, Battleship=75, HotPotato=60, BatBattle=55,
+		}
+		local stats = {}
+		pcall(function()
+			if type(readfile) ~= "function" then return end
+			local raw = readfile(ADAPTIVE_STATS_PATH)
+			local decoded = HttpService:JSONDecode(raw)
+			if type(decoded) ~= "table" then return end
+			for gameId, entry in pairs(decoded) do
+				if validGames[gameId] and type(entry) == "table" then
+					stats[gameId] = {
+						Games=math.max(0,math.floor(tonumber(entry.Games) or 0)),
+						Wins=math.max(0,math.floor(tonumber(entry.Wins) or 0)),
+						TotalDuration=math.max(0,tonumber(entry.TotalDuration) or 0),
+					}
+				end
+			end
+		end)
+		autoServerHopState.RuntimeAdaptiveGameStats = stats
+		local function saveStats()
+			if type(writefile) ~= "function" then return end
+			pcall(writefile, ADAPTIVE_STATS_PATH, HttpService:JSONEncode(stats))
+		end
+		autoServerHopState.RecordAdaptiveGameResult = function(gameId, won, duration)
+			if not validGames[gameId] then return false end
+			duration = tonumber(duration)
+			if not duration or duration < 2 or duration > 900 then return false end
+			local entry = stats[gameId] or {Games=0,Wins=0,TotalDuration=0}
+			entry.Games += 1
+			if won == true then entry.Wins += 1 end
+			entry.TotalDuration += duration
+			stats[gameId] = entry
+			saveStats()
+			return true
+		end
+		autoServerHopState.BestAdaptiveGame = function(allowed, defaultGame)
+			defaultGame = validGames[defaultGame] and defaultGame or "PopcornBurst"
+			local candidates, seen = {}, {}
+			for _, gameId in ipairs(type(allowed)=="table" and allowed or {}) do
+				if validGames[gameId] and not seen[gameId] then
+					seen[gameId]=true; candidates[#candidates+1]=gameId
+				end
+			end
+			if #candidates == 0 then candidates[1] = defaultGame end
+			local bestGame, bestScore
+			for _, gameId in ipairs(candidates) do
+				local e = stats[gameId] or {Games=0,Wins=0,TotalDuration=0}
+				local games = math.max(0, tonumber(e.Games) or 0)
+				local wins = math.clamp(tonumber(e.Wins) or 0, 0, games)
+				local priorSeconds = priorDuration[gameId] or 60
+				local winRate = (wins + 1.5) / (games + 2.5)
+				local avgSeconds = ((tonumber(e.TotalDuration) or 0) + priorSeconds * 2) / (games + 2)
+				local exploration = 1 + (0.18 / math.sqrt(games + 1))
+				local score = winRate * (60 / math.max(5, avgSeconds)) * exploration
+				if games == 0 and gameId == defaultGame then score *= 1.08 end
+				if bestScore == nil or score > bestScore then bestScore, bestGame = score, gameId end
+			end
+			return bestGame or defaultGame
+		end
+	end
 	autoServerHopState.AutoOfferConfigHasResponse = function(config)
 		if type(config) ~= "table" then return false end
 		if config.OfferModeRarity ~= false then
@@ -1098,7 +1252,7 @@ if MINIGAME_MODE then
 	for index, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do simpleAutofarmRarityOrder[rarity] = index end
 	-- Immutable modules are required once; the recurring progression check only scans inventory.
 	autoServerHopState.SimpleAutofarmInventorySummary = function()
-		local counts, total, highest = {}, 0, nil
+		local counts, total, highest, lowest = {}, 0, nil, nil
 		if not simpleAutofarmInventoryModules then
 			pcall(function()
 				local client = ReplicatedStorage:WaitForChild("Client"):WaitForChild("Modules")
@@ -1111,11 +1265,11 @@ if MINIGAME_MODE then
 			end)
 		end
 		local modules = simpleAutofarmInventoryModules
-		if not modules then return total, highest, counts, false end
+		if not modules then return total, highest, counts, false, lowest end
 		local okData, playerData = pcall(modules.Replicator.get, "PlayerData")
-		if not okData or not playerData then return total, highest, counts, false end
+		if not okData or not playerData then return total, highest, counts, false, lowest end
 		local okInventory, inventory = pcall(playerData.TryIndex, playerData, {"Inventory"})
-		if not okInventory or type(inventory) ~= "table" then return total, highest, counts, false end
+		if not okInventory or type(inventory) ~= "table" then return total, highest, counts, false, lowest end
 		for _, item in pairs(inventory) do
 			if type(item) == "table" then
 				local okType, itemType = pcall(modules.GetItemType, item)
@@ -1134,11 +1288,12 @@ if MINIGAME_MODE then
 						total += 1
 						counts[rarity] = (counts[rarity] or 0) + 1
 						if not highest or simpleAutofarmRarityOrder[rarity] > simpleAutofarmRarityOrder[highest] then highest = rarity end
+						if not lowest or simpleAutofarmRarityOrder[rarity] < simpleAutofarmRarityOrder[lowest] then lowest = rarity end
 					end
 				end
 			end
 		end
-		return total, highest, counts, true
+		return total, highest, counts, true, lowest
 	end
 	autoServerHopState.HasAnyBrainrot = function()
 		local total, _, _, ready = autoServerHopState.SimpleAutofarmInventorySummary()
@@ -2089,9 +2244,9 @@ if MINIGAME_MODE then
 				10
 			)
 			if count >= threshold then
-				autoServerHopState.RuntimeTempBlacklistedUserIds =
-					autoServerHopState.RuntimeTempBlacklistedUserIds or {}
-				autoServerHopState.RuntimeTempBlacklistedUserIds[key] = true
+				autoServerHopState.RuntimeTempBlacklistedUserIds = autoServerHopState.RuntimeTempBlacklistedUserIds or {}
+				local seconds = math.clamp(tonumber(utility.AvoidSamePlayerSeconds) or 30, 1, 60)
+				autoServerHopState.RuntimeTempBlacklistedUserIds[key] = now + seconds
 			end
 		end
 		if utility.PermanentBlacklistPlayersAfterCanceledTrade == true then
@@ -2151,13 +2306,24 @@ if MINIGAME_MODE then
 		local streak = type(autoServerHopState.CanceledTradeCounts) == "table"
 			and math.max(0, math.floor(tonumber(autoServerHopState.CanceledTradeCounts[key]) or 0))
 			or 0
-		if streak >= threshold then
+		if streak < threshold then
+			if type(autoServerHopState.RuntimeTempBlacklistedUserIds) == "table" then
+				autoServerHopState.RuntimeTempBlacklistedUserIds[key] = nil
+			end
+			return false
+		end
+		local lastCancel = type(autoServerHopState.RuntimeCanceledTradeLastCountAt) == "table"
+			and tonumber(autoServerHopState.RuntimeCanceledTradeLastCountAt[key]) or nil
+		local seconds = math.clamp(tonumber(autoServerHopState.Utility.AvoidSamePlayerSeconds) or 30, 1, 60)
+		local untilAt = lastCancel and (lastCancel + seconds)
+		if untilAt and os.clock() < untilAt then
 			autoServerHopState.RuntimeTempBlacklistedUserIds = autoServerHopState.RuntimeTempBlacklistedUserIds or {}
-			autoServerHopState.RuntimeTempBlacklistedUserIds[key] = true
+			autoServerHopState.RuntimeTempBlacklistedUserIds[key] = untilAt
 			return true
 		end
-		local temporary = autoServerHopState.RuntimeTempBlacklistedUserIds
-		if type(temporary) == "table" then temporary[key] = nil end
+		if type(autoServerHopState.RuntimeTempBlacklistedUserIds) == "table" then
+			autoServerHopState.RuntimeTempBlacklistedUserIds[key] = nil
+		end
 		return false
 	end
 	autoServerHopState.MarkAvoidRecentPlayer = function(userId)
@@ -2274,9 +2440,17 @@ if MINIGAME_MODE then
 			"RegularFallbackOffers",
 			"RegularFallbackToNextHigherRarityBrainrot",
 			"RegularFallbackToSpecificItems",
+			"RegularFallbackToBestAvailableBrainrots",
 			"RegularFallbackToTokens",
+			"RegularFallbackCustomPriority",
+			"RegularFallbackPriority1",
+			"RegularFallbackPriority2",
+			"RegularFallbackPriority3",
+			"RegularFallbackPriority4",
+			"RegularFallbackPriority5",
 			"RegularFallbackNextLowerRarityAmount",
 			"RegularFallbackNextHigherRarityAmount",
+			"RegularFallbackBestAvailableBrainrotAmount",
 			"RegularFallbackAvoidMutationsEnabled",
 			"RegularFallbackAvoidMutations",
 			"RegularFallbackAvoidTraitsEnabled",
@@ -2311,9 +2485,17 @@ if MINIGAME_MODE then
 			"FallbackToNextLowerRarityBrainrot",
 			"FallbackToNextHigherRarityBrainrot",
 			"FallbackToSpecificBrainrotItem",
+			"FallbackToBestAvailableBrainrots",
 			"FallbackSpecificBrainrotItem",
+			"FallbackCustomPriority",
+			"FallbackPriority1",
+			"FallbackPriority2",
+			"FallbackPriority3",
+			"FallbackPriority4",
+			"FallbackPriority5",
 			"FallbackNextLowerRarityAmount",
 			"FallbackNextHigherRarityAmount",
+			"FallbackBestAvailableBrainrotAmount",
 			"FallbackAvoidMutationsEnabled",
 			"FallbackAvoidMutations",
 			"FallbackAvoidTraitsEnabled",
@@ -2387,6 +2569,7 @@ if MINIGAME_MODE then
 			"HoldSpecificBrainrotSizes",
 			"HoldSpecificBrainrotLevels",
 			"MountEquipBestBrainrot",
+			"MountEquipBiggestBrainrot",
 			"MountEquipSpecificBrainrot",
 			"MountSpecificBrainrotId",
 			"MountSpecificBrainrotMutations",
@@ -2426,6 +2609,7 @@ if MINIGAME_MODE then
 			"RemoveTokenDelay",
 			"AcceptOfferDelay",
 			"AutoChooseGame",
+			"AdaptiveGameSelection",
 			"GameToChoose",
 			"MatchOpponentGame",
 			"FallbackGameChoices",
@@ -2632,12 +2816,18 @@ if MINIGAME_MODE then
 			local responseTokens = {
 				Common = 100, Uncommon = 100, Rare = 100, Epic = 100,
 				Legendary = 100, Mythical = 100, Cosmic = 100, Secret = 100,
-				Celestial = 100, Divine = 500, Infinity = 1000, Meta = 2500,
-				Paradox = 25000, Eternal = 250000,
+				Celestial = 100, Divine = 250, Infinity = 500, Meta = 1000,
+				Paradox = 15000, Eternal = 250000,
+			}
+			local fallbackTokens = {
+				Common = 200, Uncommon = 200, Rare = 200, Epic = 200,
+				Legendary = 200, Mythical = 200, Cosmic = 200, Secret = 200,
+				Celestial = 200, Divine = 500, Infinity = 1000, Meta = 2000,
+				Paradox = 30000, Eternal = 500000,
 			}
 			for _, id in ipairs({
 				"ConnectFour", "FootballDraft", "CandyBomb", "Battleship",
-				"NumberGuess", "Knockout", "PopcornBurst", "HotPotato",
+				"NumberGuess", "Knockout", "PopcornBurst", "HotPotato", "BatBattle",
 			}) do
 				snapshot.MinigameAutoplay[id] = true
 			end
@@ -2664,7 +2854,7 @@ if MINIGAME_MODE then
 			utility.AutoOfferTokensEnabled = true
 			utility.AutoOfferMatchTokensWithTokens = true
 			utility.AutoOfferTokenAddRatio = 1
-			utility.AutoOfferLowestTokensToMatch = 10
+			utility.AutoOfferLowestTokensToMatch = 1000
 			utility.AutoOfferMatchTokensWithBrainrots = false
 			utility.AutoOfferBasedOnTradeChat = false
 			utility.AutoAcceptMaster = true
@@ -2673,36 +2863,46 @@ if MINIGAME_MODE then
 			utility.AutoAcceptSpecificItems = {{Item = nil, Mutations = {}, Traits = {}}}
 			if snapshot.AutoAccept.Tokens then
 				snapshot.AutoAccept.Tokens.Enabled = true
-				snapshot.AutoAccept.Tokens.Amount = 10
+				snapshot.AutoAccept.Tokens.Amount = 1000
 			end
 			snapshot.AutoSit.EmptyTables.Enabled = true
 			snapshot.AutoSit.OneOfTwo.Enabled = true
 			snapshot.AutoSit.OneOfTwo.Targets = {Tokens = true}
 			snapshot.AutoSit.OneOfTwo.Amounts = {}
-			snapshot.AutoSit.OneOfTwo.Tokens = 10
+			snapshot.AutoSit.OneOfTwo.Tokens = 1000
 			utility.AutoSitMustOwnAllSelected = false
 			utility.AutoSitMustOwnOneSelected = true
 			utility.AutoSitSpecificItems = {{Item = nil, Mutations = {}, Traits = {}}}
 			snapshot.AutoCancel.Enabled = true
 			snapshot.AutoCancel.Targets = {Tokens = true}
 			snapshot.AutoCancel.Amounts = {}
-			snapshot.AutoCancel.Tokens = 10
+			snapshot.AutoCancel.Tokens = 1000
 			utility.AutoCancelMaster = true
 			utility.AutoCancelCheckOpponentsBrainrots = true
 			utility.AutoCancelPlayerMustOwnAllSelected = false
 			utility.AutoCancelPlayerMustOwnAtLeastOneSelected = true
 			utility.AutoCancelSpecificItems = {{Item = nil, Mutations = {}, Traits = {}}}
 			utility.AutoCancelTradeTimeoutEnabled = true
-			utility.AutoCancelTradeTimeout = 30
+			utility.AutoCancelTradeTimeout = 15
 			utility.AutoCancelNoValueTimeoutEnabled = true
-			utility.AutoCancelNoValueTimeout = 15
+			utility.AutoCancelNoValueTimeout = 6
 			utility.AutoCancelBrainrotConditionDelay = 0
+			utility.CustomDelays = true
+			-- Deliberately human-paced: fast enough for throughput, slow enough to avoid instant-looking trade mutations.
+			utility.InitialJoinDelay = 0.85
+			utility.DelayAfterTradeMessage = 0.80
+			utility.ReactionDelay = 0.95
+			utility.AddBrainrotDelay = 0.22
+			utility.RemoveBrainrotDelay = 0.18
+			utility.AddTokenDelay = 0.10
+			utility.RemoveTokenDelay = 0.10
+			utility.AcceptOfferDelay = 0.45
 			snapshot.ServerHop.Enabled = true
-			snapshot.ServerHop.ServerTimeEnabled = true
+			snapshot.ServerHop.ServerTimeEnabled = false
 			snapshot.ServerHop.ServerTime = 5
 			snapshot.ServerHop.TimeSinceLastGameEnabled = true
-			snapshot.ServerHop.TimeSinceLastGame = 3
-			snapshot.ServerHop.WinWagerTimeAdded = 3
+			snapshot.ServerHop.TimeSinceLastGame = 1
+			snapshot.ServerHop.WinWagerTimeAdded = 0
 			snapshot.ServerHop.BoothPurchaseTimeAdded = 1
 			snapshot.ServerHop.LeaveIfScriptUserInServer = true
 			snapshot.ServerHop.ServerBlacklistMinutes = 30
@@ -2723,19 +2923,28 @@ if MINIGAME_MODE then
 			utility.DeleteNonBrainrotsFirst = true
 			utility.DeleteWorstBrainrotsFirst = false
 			utility.DeleteInventoryThreshold = 95
-			utility.AvoidDeletingSignedBrainrots = true
-			utility.AvoidDeletingLockedItems = true
+			utility.AvoidDeletingSignedBrainrots = false
+			utility.AvoidDeletingLockedItems = false
+			-- Opening offer is intentionally visible and human-like: show the best offerable Brainrots and all owned tokens.
 			utility.AutoshowBestBrainrots = true
 			utility.CustomOpeningOffer = false
 			utility.AutoshowAllTokens = true
 			utility.CustomOpeningTokens = false
+			-- Outside a minigame, hold the best Brainrot while mounting the physically biggest rideable Brainrot.
 			utility.AutoEquipBestBrainrot = true
 			utility.AutoEquipModeHold = false
 			utility.AutoEquipModeMount = false
 			utility.AutoEquipModeHoldMount = true
 			utility.AutoEquipUseBestBrainrot = true
 			utility.AutoEquipUseSpecificBrainrot = false
+			utility.MountEquipBiggestBrainrot = true
+			utility.AutoChat = false
+			utility.AutoTradeChat = false
+			utility.AutoAcceptTradesAcceptOffers = false
+			utility.AutoAcceptTradesAcceptRequests = false
+			utility.RegularAutoOfferMaster = false
 			utility.AutoChooseGame = true
+			utility.AdaptiveGameSelection = true
 			utility.GameToChoose = "Popcorn Burst"
 			utility.MatchOpponentGame = true
 			utility.FallbackGameChoices = {
@@ -2746,29 +2955,39 @@ if MINIGAME_MODE then
 				["Knockout"] = true,
 				["Football Draft"] = true,
 				["Hot Potato"] = true,
+				["Bat Battle"] = true,
 			}
-			utility.AutoChooseRound1Delay = 1
+			utility.AutoChooseRound1Delay = 1.0
 			utility.AutoChooseRound2Delay = 2.5
-			utility.AutoChooseRound3Delay = 5
+			utility.AutoChooseRound3Delay = 5.0
 			utility.AutoChooseRounds = true
 			utility.RoundsToChoose = "1"
 			utility.MatchOpponentRounds = true
 			utility.FallbackRoundChoices = {["3"] = true, ["5"] = true}
-			utility.AutoChooseRoundsRound1Delay = 1
+			utility.AutoChooseRoundsRound1Delay = 1.0
 			utility.AutoChooseRoundsRound2Delay = 2.5
-			utility.AutoChooseRoundsRound3Delay = 5
+			utility.AutoChooseRoundsRound3Delay = 5.0
 			utility.FallbackOffers = true
 			utility.FallbackToTokens = true
 			utility.FallbackToNextLowerRarityBrainrot = true
-			utility.FallbackToNextHigherRarityBrainrot = false
-			utility.FallbackToSpecificBrainrotItem = false
+			utility.FallbackToNextHigherRarityBrainrot = true
+			utility.FallbackToSpecificBrainrotItem = true
+			utility.FallbackToBestAvailableBrainrots = true
+			utility.FallbackCustomPriority = true
+			utility.FallbackPriority1 = "Best Available Brainrots"
+			utility.FallbackPriority2 = "Next Higher Rarity"
+			utility.FallbackPriority3 = "Next Lower Rarity"
+			utility.FallbackPriority4 = "Token Fallback"
+			utility.FallbackPriority5 = "Specific Items"
 			utility.FallbackNextLowerRarityAmount = 6
 			utility.FallbackNextHigherRarityAmount = 6
-			for rarity, amount in pairs(responseTokens) do
+			utility.FallbackBestAvailableBrainrotAmount = 6
+			for rarity, amount in pairs(fallbackTokens) do
 				utility["FallbackTokens" .. rarity] = amount
 				utility["Fallback" .. rarity .. "OfferAllTokens"] = false
 			end
-			utility.AutoBooth = true
+			-- Simple Auto Farm never runs Auto Booth; Regular Mode keeps its own booth settings.
+			utility.AutoBooth = false
 			utility.AutoBoothName = "hurry up n buy"
 			utility.AutoBoothListBestFirst = false
 			utility.AutoBoothListWorstFirst = true
@@ -2782,6 +3001,7 @@ if MINIGAME_MODE then
 			utility.TempBlacklistAfterCanceledTrades = 1
 			utility.PermanentBlacklistPlayersAfterCanceledTrade = true
 			utility.PermanentBlacklistAfterCanceledTrades = 3
+			utility.AvoidSamePlayerSeconds = 30
 			utility.LeaveWhenAboutToLose = true
 			utility.HotPotatoAutoGiveBack = false
 			utility.HotPotatoPressButtonToGiveBack = true
@@ -2793,12 +3013,13 @@ if MINIGAME_MODE then
 			utility.PrintAutoDeletesToTerminal = true
 			utility.PrintPurchasedBoothListingsToTerminal = true
 			utility.PauseMinigameFeatures = false
-			utility.MoveDelayConnectFour = 1.5
-			utility.MoveDelayFootballDraft = 1.5
-			utility.MoveDelayCandyBomb = 1.5
-			utility.MoveDelayBattleship = 1.5
-			utility.MoveDelayNumberGuess = 1.5
-			utility.MoveDelayKnockout = 1.5
+			-- One-second move pacing is fast but avoids visibly instant board/draft actions.
+			utility.MoveDelayConnectFour = 1.0
+			utility.MoveDelayFootballDraft = 1.0
+			utility.MoveDelayCandyBomb = 1.0
+			utility.MoveDelayBattleship = 1.0
+			utility.MoveDelayNumberGuess = 1.0
+			utility.MoveDelayKnockout = 1.0
 			return snapshot
 		end
 		simpleAutofarmProfile = buildSimpleAutofarmDefaultSnapshot()
@@ -3063,7 +3284,7 @@ if MINIGAME_MODE then
 			autoServerHopState.RuntimeCheckServerStartupResolved = false
 			autoServerHopState.RuntimeManualServerHopRequested = false
 			autoServerHopState.RuntimeManualKickRequested = false
-			autoServerHopState.RuntimePlayedMinigameUserIds = {}
+			autoServerHopState.RuntimeQueuedMinigameUserIds = {}
 			if autoServerHopState.Utility.EquipBestBrainrot == true
 				and autoServerHopState.Utility.EquipBestMountableBrainrot == true
 			then
@@ -3190,15 +3411,40 @@ if MINIGAME_MODE then
 			then
 				autoServerHopState.Utility.FallbackToNextLowerRarityBrainrot = true
 			end
-			if autoServerHopState.Utility.FallbackToNextLowerRarityBrainrot == true
-				and autoServerHopState.Utility.FallbackToNextHigherRarityBrainrot == true
-			then
-				autoServerHopState.Utility.FallbackToNextHigherRarityBrainrot = false
-			end
-			if autoServerHopState.Utility.RegularFallbackOffers == true
-				and autoServerHopState.Utility.RegularFallbackToNextHigherRarityBrainrot == true
-			then
-				autoServerHopState.Utility.RegularFallbackToNextHigherRarityBrainrot = false
+			-- Fallback directions are intentionally independent. Multiple fallback modes may
+			-- be enabled together; priority decides which available Brainrots are used first.
+			do
+				local function normalizePriority(prefix)
+					local customKey = prefix .. "CustomPriority"
+					if type(autoServerHopState.Utility[customKey]) ~= "boolean" then
+						autoServerHopState.Utility[customKey] = false
+					end
+					local ordered, seen = {}, {}
+					for index = 1, #FALLBACK_PRIORITY_OPTIONS do
+						local value = tostring(autoServerHopState.Utility[prefix .. "Priority" .. tostring(index)] or "")
+						if FALLBACK_PRIORITY_VALID[value] and not seen[value] then
+							seen[value] = true
+							ordered[#ordered + 1] = value
+						end
+					end
+					for _, value in ipairs(FALLBACK_AUTOMATIC_PRIORITY) do
+						if not seen[value] then
+							seen[value] = true
+							ordered[#ordered + 1] = value
+						end
+					end
+					for index = 1, #FALLBACK_PRIORITY_OPTIONS do
+						autoServerHopState.Utility[prefix .. "Priority" .. tostring(index)] = ordered[index] or FALLBACK_AUTOMATIC_PRIORITY[index]
+					end
+				end
+				normalizePriority("Fallback")
+				normalizePriority("RegularFallback")
+				autoServerHopState.Utility.FallbackBestAvailableBrainrotAmount = math.clamp(
+					math.floor(tonumber(autoServerHopState.Utility.FallbackBestAvailableBrainrotAmount) or 6), 1, 6
+				)
+				autoServerHopState.Utility.RegularFallbackBestAvailableBrainrotAmount = math.clamp(
+					math.floor(tonumber(autoServerHopState.Utility.RegularFallbackBestAvailableBrainrotAmount) or 6), 1, 6
+				)
 			end
 			-- Convert legacy singular per-rarity fallback choices to the new
 			-- multi-choice tables without discarding an existing selection.
@@ -3559,7 +3805,7 @@ if MINIGAME_MODE then
 			end
 			return ok
 		end
-		local SIMPLE_AUTOFARM_PROFILE_VERSION = 15
+		local SIMPLE_AUTOFARM_PROFILE_VERSION = 22
 		local function migrateSimpleAutofarmProfile(simple)
 			if type(simple) ~= "table" or type(simple.Profile) ~= "table" then return end
 			local version = math.floor(tonumber(simple.Version) or 1)
@@ -3568,20 +3814,21 @@ if MINIGAME_MODE then
 			local serverHop = type(profile.ServerHop) == "table" and profile.ServerHop or nil
 			local utility = serverHop and type(serverHop.Utility) == "table" and serverHop.Utility or nil
 			if not serverHop or not utility then return end
-			local responseTokens = {Common=100,Uncommon=100,Rare=100,Epic=100,Legendary=100,Mythical=100,Cosmic=100,Secret=100,Celestial=100,Divine=500,Infinity=1000,Meta=2500,Paradox=25000,Eternal=250000}
-			serverHop.Enabled=true; serverHop.ServerTimeEnabled=true; serverHop.ServerTime=5
-			serverHop.TimeSinceLastGameEnabled=true; serverHop.TimeSinceLastGame=3
-			serverHop.WinWagerTimeAdded=3; serverHop.BoothPurchaseTimeAdded=1
+			local responseTokens = {Common=100,Uncommon=100,Rare=100,Epic=100,Legendary=100,Mythical=100,Cosmic=100,Secret=100,Celestial=100,Divine=250,Infinity=500,Meta=1000,Paradox=15000,Eternal=250000}
+			local fallbackTokens = {Common=200,Uncommon=200,Rare=200,Epic=200,Legendary=200,Mythical=200,Cosmic=200,Secret=200,Celestial=200,Divine=500,Infinity=1000,Meta=2000,Paradox=30000,Eternal=500000}
+			serverHop.Enabled=true; serverHop.ServerTimeEnabled=false; serverHop.ServerTime=5
+			serverHop.TimeSinceLastGameEnabled=true; serverHop.TimeSinceLastGame=1
+			serverHop.WinWagerTimeAdded=0; serverHop.BoothPurchaseTimeAdded=1
 			serverHop.LeaveIfScriptUserInServer=true; serverHop.ServerBlacklistMinutes=30
 			local autoplay=type(profile.MinigameAutoplay)=="table" and profile.MinigameAutoplay or {}
 			profile.MinigameAutoplay=autoplay
-			for _,id in ipairs({"ConnectFour","FootballDraft","CandyBomb","Battleship","NumberGuess","Knockout","PopcornBurst","HotPotato"}) do autoplay[id]=true end
+			for _,id in ipairs({"ConnectFour","FootballDraft","CandyBomb","Battleship","NumberGuess","Knockout","PopcornBurst","HotPotato","BatBattle"}) do autoplay[id]=true end
 			utility.AutoPlayMaster=true
-			utility.AutoReconnect=true; utility.PrintWinsLossesToTerminal=true; utility.PrintKicksToTerminal=true; utility.PrintAutoDeletesToTerminal=true; utility.PrintPurchasedBoothListingsToTerminal=true
-			utility.AutoCancelTradeTimeoutEnabled=true; utility.AutoCancelTradeTimeout=30
-			utility.AutoCancelNoValueTimeoutEnabled=true; utility.AutoCancelNoValueTimeout=15; utility.AutoCancelBrainrotConditionDelay=0
+			utility.AutoReconnect=true; utility.PrintWinsLossesToTerminal=true; utility.PrintKicksToTerminal=true; utility.PrintDisconnectsToTerminal=true; utility.PrintAutoDeletesToTerminal=true; utility.PrintPurchasedBoothListingsToTerminal=true
+			utility.AutoCancelTradeTimeoutEnabled=true; utility.AutoCancelTradeTimeout=15
+			utility.AutoCancelNoValueTimeoutEnabled=true; utility.AutoCancelNoValueTimeout=6; utility.AutoCancelBrainrotConditionDelay=0; utility.CustomDelays=true; utility.InitialJoinDelay=0.85; utility.DelayAfterTradeMessage=0.80; utility.ReactionDelay=0.95; utility.AddBrainrotDelay=0.22; utility.RemoveBrainrotDelay=0.18; utility.AddTokenDelay=0.10; utility.RemoveTokenDelay=0.10; utility.AcceptOfferDelay=0.45
 			utility.AutoOfferMaster=true; utility.AutoOfferTokensEnabled=true; utility.AutoOfferMatchTokensWithTokens=true
-			utility.AutoOfferTokenAddRatio=1; utility.AutoOfferLowestTokensToMatch=10; utility.AutoOfferMatchTokensWithBrainrots=false; utility.AutoOfferBasedOnTradeChat=false
+			utility.AutoOfferTokenAddRatio=1; utility.AutoOfferLowestTokensToMatch=1000; utility.AutoOfferMatchTokensWithBrainrots=false; utility.AutoOfferBasedOnTradeChat=false
 			utility.AutoAcceptMaster=true; utility.AutoAcceptMustHaveOne=true; utility.AutoAcceptMustHaveAll=false
 			utility.AutoAcceptSpecificItems={{Item=nil,Mutations={},Traits={}}}
 			utility.AutoSitMustOwnAllSelected=false; utility.AutoSitMustOwnOneSelected=true
@@ -3593,27 +3840,30 @@ if MINIGAME_MODE then
 			utility.CheckServerHopNobodyMinigamesArea=true; utility.CheckServerHopPlayedEveryoneMinigamesArea=true
 			utility.CheckServerMustOwnAll=false; utility.CheckServerMustOwnOne=true
 			utility.AutoDeleteWorstInventory=true; utility.DeleteNonBrainrotsFirst=true; utility.DeleteWorstBrainrotsFirst=false
-			utility.DeleteInventoryThreshold=95; utility.AvoidDeletingSignedBrainrots=true; utility.AvoidDeletingLockedItems=true
+			utility.DeleteInventoryThreshold=95; utility.AvoidDeletingSignedBrainrots=false; utility.AvoidDeletingLockedItems=false
 			utility.AutoshowBestBrainrots=true; utility.CustomOpeningOffer=false; utility.AutoshowAllTokens=true; utility.CustomOpeningTokens=false
-			utility.AutoEquipBestBrainrot=true; utility.AutoEquipModeHold=false; utility.AutoEquipModeMount=false; utility.AutoEquipModeHoldMount=true; utility.AutoEquipUseBestBrainrot=true; utility.AutoEquipUseSpecificBrainrot=false
-			utility.AutoChooseGame=true; utility.GameToChoose="Popcorn Burst"; utility.MatchOpponentGame=true
-			utility.FallbackGameChoices={["Candy Bomb"]=true,["Higher Or Lower"]=true,["Connect 4"]=true,["Battle Ship"]=true,["Knockout"]=true,["Football Draft"]=true,["Hot Potato"]=true}
-			utility.AutoChooseRound1Delay=1; utility.AutoChooseRound2Delay=2.5; utility.AutoChooseRound3Delay=5
+			utility.AutoEquipBestBrainrot=true; utility.AutoEquipModeHold=false; utility.AutoEquipModeMount=false; utility.AutoEquipModeHoldMount=true; utility.AutoEquipUseBestBrainrot=true; utility.AutoEquipUseSpecificBrainrot=false; utility.MountEquipBiggestBrainrot=true
+			utility.AutoChat=false; utility.AutoTradeChat=false; utility.AutoAcceptTradesAcceptOffers=false; utility.AutoAcceptTradesAcceptRequests=false; utility.RegularAutoOfferMaster=false
+			utility.AutoChooseGame=true; utility.AdaptiveGameSelection=true; utility.GameToChoose="Popcorn Burst"; utility.MatchOpponentGame=true
+			utility.FallbackGameChoices={["Candy Bomb"]=true,["Higher Or Lower"]=true,["Connect 4"]=true,["Battle Ship"]=true,["Knockout"]=true,["Football Draft"]=true,["Hot Potato"]=true,["Bat Battle"]=true}
+			utility.AutoChooseRound1Delay=1.0; utility.AutoChooseRound2Delay=2.5; utility.AutoChooseRound3Delay=5.0
 			utility.AutoChooseRounds=true; utility.RoundsToChoose="1"; utility.MatchOpponentRounds=true; utility.FallbackRoundChoices={["3"]=true,["5"]=true}
-			utility.AutoChooseRoundsRound1Delay=1; utility.AutoChooseRoundsRound2Delay=2.5; utility.AutoChooseRoundsRound3Delay=5
-			utility.FallbackOffers=true; utility.FallbackToTokens=true; utility.FallbackToNextLowerRarityBrainrot=true; utility.FallbackToNextHigherRarityBrainrot=false; utility.FallbackToSpecificBrainrotItem=false; utility.FallbackNextLowerRarityAmount=6; utility.FallbackNextHigherRarityAmount=6
-			for rarity,amount in pairs(responseTokens) do utility["FallbackTokens"..rarity]=amount; utility["Fallback"..rarity.."OfferAllTokens"]=false end
-			utility.AutoBooth=true; utility.AutoBoothName="hurry up n buy"; utility.AutoBoothListBestFirst=false; utility.AutoBoothListWorstFirst=true; utility.AutoBoothAvoidSignedBrainrots=true
+			utility.AutoChooseRoundsRound1Delay=1.0; utility.AutoChooseRoundsRound2Delay=2.5; utility.AutoChooseRoundsRound3Delay=5.0
+			utility.FallbackOffers=true; utility.FallbackToTokens=true; utility.FallbackToNextLowerRarityBrainrot=true; utility.FallbackToNextHigherRarityBrainrot=true; utility.FallbackToSpecificBrainrotItem=true; utility.FallbackToBestAvailableBrainrots=true
+			utility.FallbackCustomPriority=true; utility.FallbackPriority1="Best Available Brainrots"; utility.FallbackPriority2="Next Higher Rarity"; utility.FallbackPriority3="Next Lower Rarity"; utility.FallbackPriority4="Token Fallback"; utility.FallbackPriority5="Specific Items"
+			utility.FallbackNextLowerRarityAmount=6; utility.FallbackNextHigherRarityAmount=6; utility.FallbackBestAvailableBrainrotAmount=6
+			for rarity,amount in pairs(fallbackTokens) do utility["FallbackTokens"..rarity]=amount; utility["Fallback"..rarity.."OfferAllTokens"]=false end
+			utility.AutoBooth=false; utility.AutoBoothName="hurry up n buy"; utility.AutoBoothListBestFirst=false; utility.AutoBoothListWorstFirst=true; utility.AutoBoothAvoidSignedBrainrots=true
 			for index=1,14 do
 				local prefix="AutoBoothListing"..tostring(index)
 				utility[prefix.."Enabled"]=false
 				utility[prefix.."InventoryThreshold"]=91
 			end
 			utility.TempBlacklistPlayersAfterCanceledTrade=true; utility.TempBlacklistAfterCanceledTrades=1
-			utility.PermanentBlacklistPlayersAfterCanceledTrade=true; utility.PermanentBlacklistAfterCanceledTrades=3
+			utility.PermanentBlacklistPlayersAfterCanceledTrade=true; utility.PermanentBlacklistAfterCanceledTrades=3; utility.AvoidSamePlayerSeconds=30
 			utility.LeaveWhenAboutToLose=true; utility.HotPotatoAutoGiveBack=false; utility.HotPotatoPressButtonToGiveBack=true; utility.HotPotatoGiveBackKey="Q"; utility.PrintDisconnectsToTerminal=true; utility.PauseMinigameFeatures=false
-			utility.MoveDelayConnectFour=1.5; utility.MoveDelayFootballDraft=1.5; utility.MoveDelayCandyBomb=1.5
-			utility.MoveDelayBattleship=1.5; utility.MoveDelayNumberGuess=1.5; utility.MoveDelayKnockout=1.5
+			utility.MoveDelayConnectFour=1.0; utility.MoveDelayFootballDraft=1.0; utility.MoveDelayCandyBomb=1.0
+			utility.MoveDelayBattleship=1.0; utility.MoveDelayNumberGuess=1.0; utility.MoveDelayKnockout=1.0
 			local autoOffer=type(profile.AutoOffer)=="table" and profile.AutoOffer or nil
 			if autoOffer then
 				for _,rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
@@ -3625,13 +3875,13 @@ if MINIGAME_MODE then
 				end
 			end
 			local accept=type(profile.AutoAccept)=="table" and profile.AutoAccept or nil
-			if accept and type(accept.Tokens)=="table" then accept.Tokens.Enabled=true; accept.Tokens.Amount=10 end
+			if accept and type(accept.Tokens)=="table" then accept.Tokens.Enabled=true; accept.Tokens.Amount=1000 end
 			local autoSit=type(profile.AutoSit)=="table" and profile.AutoSit or nil
 			local oneOfTwo=autoSit and type(autoSit.OneOfTwo)=="table" and autoSit.OneOfTwo or nil
-			if oneOfTwo then oneOfTwo.Enabled=true; oneOfTwo.Targets=type(oneOfTwo.Targets)=="table" and oneOfTwo.Targets or {}; oneOfTwo.Targets.Tokens=true; oneOfTwo.Tokens=10 end
+			if oneOfTwo then oneOfTwo.Enabled=true; oneOfTwo.Targets={Tokens=true}; oneOfTwo.Amounts={}; oneOfTwo.Tokens=1000 end
 			local emptyTables=autoSit and type(autoSit.EmptyTables)=="table" and autoSit.EmptyTables or nil; if emptyTables then emptyTables.Enabled=true end
 			local autoCancel=type(profile.AutoCancel)=="table" and profile.AutoCancel or nil
-			if autoCancel then autoCancel.Enabled=true; autoCancel.Targets=type(autoCancel.Targets)=="table" and autoCancel.Targets or {}; autoCancel.Targets.Tokens=true; autoCancel.Tokens=10 end
+			if autoCancel then autoCancel.Enabled=true; autoCancel.Targets={Tokens=true}; autoCancel.Amounts={}; autoCancel.Tokens=1000 end
 		end
 		local function loadSettingsEnvelope(saved)
 			if type(saved) ~= "table" then return false end
@@ -3704,15 +3954,15 @@ if MINIGAME_MODE then
 			autoServerHopState.RuntimeSettingsResetEpoch =
 				(tonumber(autoServerHopState.RuntimeSettingsResetEpoch) or 0) + 1
 			task.defer(function()
-				local refresh = rawget(_G, "__TUFFHUB_REFRESH_ALL_SETTINGS_UI")
+				local refresh = rawget(_G, "__DROIDHUB_REFRESH_ALL_SETTINGS_UI")
 				if type(refresh) == "function" then pcall(refresh) end
-				local refreshBanner = rawget(_G, "__TUFFHUB_REFRESH_SIMPLE_AUTOFARM_MODE_BANNER")
+				local refreshBanner = rawget(_G, "__DROIDHUB_REFRESH_SIMPLE_AUTOFARM_MODE_BANNER")
 				if type(refreshBanner) == "function" then pcall(refreshBanner) end
 			end)
 		end
 		local function showSimpleAutofarmWarning()
 			autoServerHopState.RuntimeSimpleAutofarmWarningUntil = os.clock() + 5
-			local show = rawget(_G, "__TUFFHUB_SHOW_SIMPLE_AUTOFARM_WARNING")
+			local show = rawget(_G, "__DROIDHUB_SHOW_SIMPLE_AUTOFARM_WARNING")
 			if type(show) == "function" then pcall(show) end
 		end
 		local function setSimpleAutofarmEnabled(enabled)
@@ -3737,7 +3987,10 @@ if MINIGAME_MODE then
 				autoServerHopState.Utility.SimpleAutofarmEnabled = false
 			end
 			autoServerHopState.RuntimeSimpleAutofarmTargetRarity = nil
-			autoServerHopState.RuntimePlayedMinigameUserIds = {}
+			autoServerHopState.RuntimeSimpleAutofarmTargetTokenMinimum = 0
+			autoServerHopState.RuntimeSimpleAutofarmBaselineBrainrots = nil
+			autoServerHopState.RuntimeSimpleAutofarmAllEternal = false
+			autoServerHopState.RuntimeQueuedMinigameUserIds = {}
 			autoServerHopState.RuntimeServerHopPending = true
 			autoServerHopState.RuntimeServerHopHardFreeze = false
 			autoServerHopState.RuntimeServerHopFreezeCFrame = nil
@@ -3755,13 +4008,16 @@ if MINIGAME_MODE then
 				applyProfileSnapshot(simpleAutofarmProfile)
 				autoServerHopState.Utility.SimpleAutofarmEnabled = true
 				autoServerHopState.RuntimeSimpleAutofarmTargetRarity = nil
-				autoServerHopState.RuntimePlayedMinigameUserIds = {}
+				autoServerHopState.RuntimeSimpleAutofarmTargetTokenMinimum = 0
+				autoServerHopState.RuntimeSimpleAutofarmBaselineBrainrots = nil
+				autoServerHopState.RuntimeSimpleAutofarmAllEternal = false
+				autoServerHopState.RuntimeQueuedMinigameUserIds = {}
 			end
 			refreshSettingsUiSoon()
 			return true
 		end
-		rawset(_G, "__TUFFHUB_SET_SIMPLE_AUTOFARM", setSimpleAutofarmEnabled)
-		rawset(_G, "__TUFFHUB_RESET_SIMPLE_AUTOFARM", resetSimpleAutofarmSettings)
+		rawset(_G, "__DROIDHUB_SET_SIMPLE_AUTOFARM", setSimpleAutofarmEnabled)
+		rawset(_G, "__DROIDHUB_RESET_SIMPLE_AUTOFARM", resetSimpleAutofarmSettings)
 		local function resetAllSettingsState()
 			if autoServerHopState.Utility.SimpleAutofarmEnabled == true then
 				return resetSimpleAutofarmSettings()
@@ -3823,9 +4079,9 @@ if MINIGAME_MODE then
 				(tonumber(autoServerHopState.RuntimeSettingsResetEpoch) or 0) + 1
 			return true
 		end
-		rawset(_G, "__TUFFHUB_RESET_ALL_SETTINGS_STATE", resetAllSettingsState)
+		rawset(_G, "__DROIDHUB_RESET_ALL_SETTINGS_STATE", resetAllSettingsState)
 		local function clearAllSettingsSelections()
-			-- Undo All is intentionally stronger than Reset TuffHub: every selectable
+			-- Undo All is intentionally stronger than Reset DroidHub: every selectable
 			-- boolean is cleared, including hidden child choices and Simple Autofarm.
 			-- Scalar defaults (theme colors, slider baselines, text defaults) still come
 			-- from the normal reset so the UI remains structurally valid.
@@ -3874,7 +4130,7 @@ if MINIGAME_MODE then
 			autoServerHopState.LeaveIfScriptUserInServer = false
 			autoServerHopState.Utility.SimpleAutofarmEnabled = false
 			autoServerHopState.Utility.UndoAllSettings = false
-			autoServerHopState.RuntimePlayedMinigameUserIds = {}
+			autoServerHopState.RuntimeQueuedMinigameUserIds = {}
 			autoServerHopState.RuntimeServerHopPending = true
 			autoServerHopState.RuntimeServerHopHardFreeze = false
 			autoServerHopState.RuntimeStartupServerDecisionResolved = false
@@ -3897,18 +4153,18 @@ if MINIGAME_MODE then
 			refreshSettingsUiSoon()
 			return true
 		end
-		rawset(_G, "__TUFFHUB_CLEAR_ALL_SETTINGS_STATE", clearAllSettingsSelections)
-		rawset(_G, "__TUFFHUB_EXPORT_SETTINGS", function()
+		rawset(_G, "__DROIDHUB_CLEAR_ALL_SETTINGS_STATE", clearAllSettingsSelections)
+		rawset(_G, "__DROIDHUB_EXPORT_SETTINGS", function()
 			return copyJsonSafe(settingsEnvelopeForConfig())
 		end)
-		rawset(_G, "__TUFFHUB_IMPORT_SETTINGS", function(snapshot)
+		rawset(_G, "__DROIDHUB_IMPORT_SETTINGS", function(snapshot)
 			if type(snapshot) ~= "table" then return false end
 			local imported = loadSettingsEnvelope(copyJsonSafe(snapshot))
 			if imported then
 				do
 					local savedBind = tostring(autoServerHopState.Utility.MenuBindKey or "LeftControl")
 					local okKey, keyCode = pcall(function() return Enum.KeyCode[savedBind] end)
-					if okKey and keyCode then TOGGLE_KEY = keyCode end
+					if okKey and keyCode then UI.TOGGLE_KEY = keyCode end
 				end
 				refreshSettingsUiSoon()
 			end
@@ -3916,15 +4172,15 @@ if MINIGAME_MODE then
 		end)
 		pcall(function()
 			if type(readfile) ~= "function" then return end
-			local okName, name = pcall(readfile, "TuffHub_Configs/autoload.txt")
+			local okName, name = pcall(readfile, "DroidHub_Configs/autoload.txt")
 			if not okName or type(name) ~= "string" then return end
 			name = (name:match("^%s*(.-)%s*$") or ""):gsub("[^%w _%-]", ""):sub(1, 48)
 			if name == "" then return end
-			local okRead, encoded = pcall(readfile, "TuffHub_Configs/" .. name .. ".json")
+			local okRead, encoded = pcall(readfile, "DroidHub_Configs/" .. name .. ".json")
 			if not okRead or type(encoded) ~= "string" then return end
 			local decoded
 			if not pcall(function() decoded = HttpService:JSONDecode(encoded) end) or type(decoded) ~= "table" then return end
-			local importer = rawget(_G, "__TUFFHUB_IMPORT_SETTINGS")
+			local importer = rawget(_G, "__DROIDHUB_IMPORT_SETTINGS")
 			if type(importer) == "function" then pcall(importer, decoded) end
 		end)
 		-- No teleport hooks, background flushes, or implicit settings files.
@@ -4107,7 +4363,7 @@ if MINIGAME_MODE then
 			if autoServerHopState.Utility.PrintKicksToTerminal == true
 				and autoServerHopState.Utility.PauseMinigameFeatures ~= true
 			then
-				local logContext = rawget(_G, "__TUFFHUB_MINIGAME_LOG_CONTEXT")
+				local logContext = rawget(_G, "__DROIDHUB_MINIGAME_LOG_CONTEXT")
 				if type(logContext) == "table" and type(logContext.PrintEvent) == "function" then
 					pcall(logContext.PrintEvent, "KICKED", false, nil, nil)
 				end
@@ -4140,7 +4396,7 @@ local PANEL_TWEEN_INFO = TI(
 local CONTROL_BUTTON_SIZE = px(30)
 local CONTROL_BUTTON_GAP = px(6)
 local CONTROL_TOP_MARGIN = px(10)
-local CONTROL_RIGHT_MARGIN = CONTENT_SIDE_PADDING + PANEL_SCROLL_EDGE_INSET
+local CONTROL_RIGHT_MARGIN = UI.CONTENT_SIDE_PADDING + UI.PANEL_SCROLL_EDGE_INSET
 local CONTROL_CORNER_RADIUS = px(7)
 local CONTROL_BACKGROUND = RGB(
 		17,
@@ -4164,13 +4420,13 @@ local CONTROL_ICON_HOVER_COLOR = RGB(
 	)
 -- [03] GUI Framework & Theme -------------------------------------------------
 local oldGui = guiParent:FindFirstChild(
-		"TuffHubGUI"
+		"DroidHubGUI"
 	)
 if oldGui then
 	oldGui:Destroy()
 end
 local screenGui = New("ScreenGui")
-screenGui.Name = "TuffHubGUI"
+screenGui.Name = "DroidHubGUI"
 screenGui.IgnoreGuiInset = true
 screenGui.ResetOnSpawn = false
 screenGui.DisplayOrder = 1000000
@@ -4181,7 +4437,7 @@ screenGui.Parent = guiParent
 -- stay/hop decision is pending.
 do
 	local localPlayerFreeze = Players.LocalPlayer
-	local bindName = "TuffHubServerFreeze_" .. tostring(localPlayerFreeze and localPlayerFreeze.UserId or 0)
+	local bindName = "DroidHubServerFreeze_" .. tostring(localPlayerFreeze and localPlayerFreeze.UserId or 0)
 	pcall(RunService.UnbindFromRenderStep, RunService, bindName)
 	RunService:BindToRenderStep(
 		bindName,
@@ -4248,12 +4504,12 @@ do
 	local BUTTON_FEEDBACK_TWEEN = TI(0.075, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
 	local function bindClickableFeedback(button)
 		if not (button:IsA("TextButton") or button:IsA("ImageButton"))
-			or button:GetAttribute("TuffHubStandardButtonFeedback") ~= true
-			or button:GetAttribute("TuffHubClickableFeedback") == true
+			or button:GetAttribute("DroidHubStandardButtonFeedback") ~= true
+			or button:GetAttribute("DroidHubClickableFeedback") == true
 		then
 			return
 		end
-		button:SetAttribute("TuffHubClickableFeedback", true)
+		button:SetAttribute("DroidHubClickableFeedback", true)
 		local normalColor = button.BackgroundColor3
 		local normalTransparency = button.BackgroundTransparency
 		-- Keep action feedback restrained and neutral. Hover is only a slight lift
@@ -4366,7 +4622,7 @@ window.AnchorPoint = V2(
 		0.5,
 		0.5
 	)
-window.BackgroundColor3 = BLACK
+window.BackgroundColor3 = UI.BLACK
 window.BackgroundTransparency = 0
 window.BorderSizePixel = 0
 window.ClipsDescendants = true
@@ -4401,24 +4657,24 @@ local function logicalPixelsForRenderedMinimum(renderedPixels)
 	)
 end
 local MIN_WIDTH = roundEvenPixel(
-		isPhonePanelLayout() and MOBILE_GUI_WIDTH or DESKTOP_GUI_WIDTH
+		isPhonePanelLayout() and UI.MOBILE_GUI_WIDTH or UI.DESKTOP_GUI_WIDTH
 	)
 local MIN_HEIGHT = roundEvenPixel(
-		isPhonePanelLayout() and MOBILE_GUI_HEIGHT or DESKTOP_GUI_HEIGHT
+		isPhonePanelLayout() and UI.MOBILE_GUI_HEIGHT or UI.DESKTOP_GUI_HEIGHT
 	)
 local FIXED_SIDEBAR_WIDTH = roundPixel(
 		MIN_WIDTH
-			* SIDEBAR_WIDTH_SCALE
+			* UI.SIDEBAR_WIDTH_SCALE
 	)
 autoServerHopState.RuntimeSidebarMinimumWidth = nil
 local sidebarCollapsed = false
 local function getSidebarWidth()
 	if sidebarCollapsed then
-		return COLLAPSED_SIDEBAR_WIDTH
+		return UI.COLLAPSED_SIDEBAR_WIDTH
 	end
 	local currentWidth = window.Size.X.Offset
 	currentWidth = (currentWidth > 1) and currentWidth or MIN_WIDTH
-	local proportionalWidth = roundPixel(currentWidth * SIDEBAR_WIDTH_SCALE)
+	local proportionalWidth = roundPixel(currentWidth * UI.SIDEBAR_WIDTH_SCALE)
 	local textFitWidth = math.max(
 		0,
 		math.floor(tonumber(autoServerHopState.RuntimeSidebarMinimumWidth) or 0)
@@ -4427,7 +4683,7 @@ local function getSidebarWidth()
 	-- much as necessary to keep every expanded sidebar tab label fully visible.
 	return math.min(
 		math.max(proportionalWidth, textFitWidth),
-		math.max(proportionalWidth, currentWidth - LINE_THICKNESS)
+		math.max(proportionalWidth, currentWidth - UI.LINE_THICKNESS)
 	)
 end
 local FIXED_SIDEBAR_CONTENT_WIDTH = roundEvenPixel(
@@ -4449,7 +4705,7 @@ local FIXED_ACTIVE_LINE_X = math.max(
 		roundPixel(
 			(
 				FIXED_TAB_HIGHLIGHT_LEFT
-					- MENU_ACTIVE_LINE_WIDTH
+					- UI.MENU_ACTIVE_LINE_WIDTH
 			)
 				* 0.5
 		)
@@ -4471,8 +4727,8 @@ local function applyDeviceWindowSize(
 	local viewportY = math.max(240, tonumber(currentViewport.Y) or 1080)
 	local phoneLayout = UserInputService.TouchEnabled
 		and math.min(viewportX, viewportY) < 700
-	local renderedWidth = phoneLayout and MOBILE_GUI_WIDTH or DESKTOP_GUI_WIDTH
-	local renderedHeight = phoneLayout and MOBILE_GUI_HEIGHT or DESKTOP_GUI_HEIGHT
+	local renderedWidth = phoneLayout and UI.MOBILE_GUI_WIDTH or UI.DESKTOP_GUI_WIDTH
+	local renderedHeight = phoneLayout and UI.MOBILE_GUI_HEIGHT or UI.DESKTOP_GUI_HEIGHT
 	-- Keep UI controls/text at their established logical size while Roblox is
 	-- resized. Scaling the entire Window a second time made every child shrink
 	-- on smaller desktop windows even though the Window itself was already being
@@ -4534,7 +4790,7 @@ local function ensureCorner(
 		)
 	return corner
 end
-rawset(_G, "__TUFFHUB_ENSURE_INPUT_BORDER", function(object)
+rawset(_G, "__DROIDHUB_ENSURE_INPUT_BORDER", function(object)
 	if not object:IsA("GuiObject") then
 		return
 	end
@@ -4544,7 +4800,7 @@ rawset(_G, "__TUFFHUB_ENSURE_INPUT_BORDER", function(object)
 		stroke.Name = "InputBorder"
 		stroke.Parent = object
 	end
-	stroke.Color = LINE_COLOR
+	stroke.Color = UI.LINE_COLOR
 	stroke.Thickness = px(1)
 	stroke.Transparency = 0.10
 	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
@@ -4553,7 +4809,7 @@ rawset(_G, "__TUFFHUB_ENSURE_INPUT_BORDER", function(object)
 end)
 ensureCorner(
 	window,
-	CORNER_RADIUS
+	UI.CORNER_RADIUS
 )
 local outerBorderOverlay = New("Frame")
 outerBorderOverlay.Name = "OuterBorderOverlay"
@@ -4576,13 +4832,13 @@ ensureCorner(
 	outerBorderOverlay,
 	math.max(
 		0,
-		CORNER_RADIUS - 1
+		UI.CORNER_RADIUS - 1
 	)
 )
 local outerBorder = New("UIStroke")
 outerBorder.Name = "OuterBorder"
-outerBorder.Color = LINE_COLOR
-outerBorder.Thickness = LINE_THICKNESS
+outerBorder.Color = UI.LINE_COLOR
+outerBorder.Thickness = UI.LINE_THICKNESS
 outerBorder.Transparency = 0.08
 outerBorder.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 outerBorder.LineJoinMode = Enum.LineJoinMode.Round
@@ -4596,7 +4852,7 @@ local function setPanelOpen(open)
 	panelOpen = open
 	window.Visible = open
 	autoServerHopState.Utility.GuiMinimized = not open
-	local restoreButton = screenGui:FindFirstChild("MinimizedTHButton")
+	local restoreButton = screenGui:FindFirstChild("MinimizedDHButton")
 	if restoreButton then
 		restoreButton.Visible = not open
 	end
@@ -4604,18 +4860,18 @@ end
 local sidebar = New("Frame")
 sidebar.Name = "LeftSidebar"
 sidebar.Position = U2O(
-		SIDEBAR_PADDING,
-		SIDEBAR_PADDING
+		UI.SIDEBAR_PADDING,
+		UI.SIDEBAR_PADDING
 	)
 sidebar.Size = U2(
 		0,
 		math.max(
 			1,
 			FIXED_SIDEBAR_WIDTH
-				- (SIDEBAR_PADDING * 2)
+				- (UI.SIDEBAR_PADDING * 2)
 		),
 		1,
-		-(SIDEBAR_PADDING * 2)
+		-(UI.SIDEBAR_PADDING * 2)
 	)
 sidebar.BackgroundTransparency = 1
 sidebar.BorderSizePixel = 0
@@ -4634,58 +4890,58 @@ sidebarSeparator.Position = U2O(
 	)
 sidebarSeparator.Size = U2(
 		0,
-		LINE_THICKNESS,
+		UI.LINE_THICKNESS,
 		1,
 		0
 	)
-sidebarSeparator.BackgroundColor3 = LINE_COLOR
-sidebarSeparator.BackgroundTransparency = LINE_TRANSPARENCY
+sidebarSeparator.BackgroundColor3 = UI.LINE_COLOR
+sidebarSeparator.BackgroundTransparency = UI.LINE_TRANSPARENCY
 sidebarSeparator.BorderSizePixel = 0
 sidebarSeparator.ZIndex = 45010
 sidebarSeparator.Parent = window
 local sidebarLogoHolder = New("Frame")
-sidebarLogoHolder.Name = "TuffHubLogo"
+sidebarLogoHolder.Name = "DroidHubLogo"
 sidebarLogoHolder.AnchorPoint = V2(
 		0.5,
 		0.5
 	)
 sidebarLogoHolder.Size = U2O(
-		LOGO_WIDTH,
-		LOGO_HEIGHT
+		UI.LOGO_WIDTH,
+		UI.LOGO_HEIGHT
 	)
 sidebarLogoHolder.BackgroundTransparency = 1
 sidebarLogoHolder.BorderSizePixel = 0
 sidebarLogoHolder.ZIndex = 45000
 sidebarLogoHolder.Parent = sidebar
 New("UIScale", sidebarLogoHolder).Name = "AreaLogoScale"
-local tuffLabel = New("TextLabel")
-tuffLabel.Name = "Tuff"
-tuffLabel.AnchorPoint = V2(
+local droidLabel = New("TextLabel")
+droidLabel.Name = "Droid"
+droidLabel.AnchorPoint = V2(
 		1,
 		0.5
 	)
-tuffLabel.Position = U2(
+droidLabel.Position = U2(
 		0.5,
 		0,
 		0.5,
 		0
 	)
-tuffLabel.Size = U2O(
-		px(57),
+droidLabel.Size = U2O(
+		px(72),
 		px(34)
 	)
-tuffLabel.BackgroundTransparency = 1
-tuffLabel.BorderSizePixel = 0
-tuffLabel.Text = "Tuff"
-tuffLabel.TextColor3 = BLACK
-tuffLabel.TextStrokeColor3 = PINK
-tuffLabel.TextStrokeTransparency = 0
-tuffLabel.FontFace = LOGO_FONT_FACE
-setResponsiveTextSize(tuffLabel, LOGO_TEXT_SIZE)
-tuffLabel.TextXAlignment = Enum.TextXAlignment.Right
-tuffLabel.TextYAlignment = Enum.TextYAlignment.Center
-tuffLabel.ZIndex = 45001
-tuffLabel.Parent = sidebarLogoHolder
+droidLabel.BackgroundTransparency = 1
+droidLabel.BorderSizePixel = 0
+droidLabel.Text = "Droid"
+droidLabel.TextColor3 = UI.BLACK
+droidLabel.TextStrokeColor3 = UI.PINK
+droidLabel.TextStrokeTransparency = 0
+droidLabel.FontFace = UI.LOGO_FONT_FACE
+setResponsiveTextSize(droidLabel, UI.LOGO_TEXT_SIZE)
+droidLabel.TextXAlignment = Enum.TextXAlignment.Right
+droidLabel.TextYAlignment = Enum.TextYAlignment.Center
+droidLabel.ZIndex = 45001
+droidLabel.Parent = sidebarLogoHolder
 local hubLabel = New("TextLabel")
 hubLabel.Name = "Hub"
 hubLabel.AnchorPoint = V2(
@@ -4705,42 +4961,42 @@ hubLabel.Size = U2O(
 hubLabel.BackgroundTransparency = 1
 hubLabel.BorderSizePixel = 0
 hubLabel.Text = "Hub"
-hubLabel.TextColor3 = PINK
-hubLabel.FontFace = LOGO_FONT_FACE
-setResponsiveTextSize(hubLabel, LOGO_TEXT_SIZE)
+hubLabel.TextColor3 = UI.PINK
+hubLabel.FontFace = UI.LOGO_FONT_FACE
+setResponsiveTextSize(hubLabel, UI.LOGO_TEXT_SIZE)
 hubLabel.TextXAlignment = Enum.TextXAlignment.Left
 hubLabel.TextYAlignment = Enum.TextYAlignment.Center
 hubLabel.ZIndex = 45001
 hubLabel.Parent = sidebarLogoHolder
-local compactTLabel = New("TextLabel")
-compactTLabel.Name = "CompactT"
-compactTLabel.AnchorPoint = V2(
+local compactDLabel = New("TextLabel")
+compactDLabel.Name = "CompactD"
+compactDLabel.AnchorPoint = V2(
 		1,
 		0.5
 	)
-compactTLabel.Position = U2(
+compactDLabel.Position = U2(
 		0.5,
 		0,
 		0.5,
 		0
 	)
-compactTLabel.Size = U2O(
+compactDLabel.Size = U2O(
 		px(26),
 		px(36)
 	)
-compactTLabel.BackgroundTransparency = 1
-compactTLabel.BorderSizePixel = 0
-compactTLabel.Text = "T"
-compactTLabel.TextColor3 = BLACK
-compactTLabel.TextStrokeColor3 = PINK
-compactTLabel.TextStrokeTransparency = 0
-compactTLabel.FontFace = LOGO_FONT_FACE
-setResponsiveTextSize(compactTLabel, 30.5)
-compactTLabel.TextXAlignment = Enum.TextXAlignment.Right
-compactTLabel.TextYAlignment = Enum.TextYAlignment.Center
-compactTLabel.Visible = false
-compactTLabel.ZIndex = 45002
-compactTLabel.Parent = sidebarLogoHolder
+compactDLabel.BackgroundTransparency = 1
+compactDLabel.BorderSizePixel = 0
+compactDLabel.Text = "D"
+compactDLabel.TextColor3 = UI.BLACK
+compactDLabel.TextStrokeColor3 = UI.PINK
+compactDLabel.TextStrokeTransparency = 0
+compactDLabel.FontFace = UI.LOGO_FONT_FACE
+setResponsiveTextSize(compactDLabel, 30.5)
+compactDLabel.TextXAlignment = Enum.TextXAlignment.Right
+compactDLabel.TextYAlignment = Enum.TextYAlignment.Center
+compactDLabel.Visible = false
+compactDLabel.ZIndex = 45002
+compactDLabel.Parent = sidebarLogoHolder
 local compactHLabel = New("TextLabel")
 compactHLabel.Name = "CompactH"
 compactHLabel.AnchorPoint = V2(
@@ -4760,8 +5016,8 @@ compactHLabel.Size = U2O(
 compactHLabel.BackgroundTransparency = 1
 compactHLabel.BorderSizePixel = 0
 compactHLabel.Text = "H"
-compactHLabel.TextColor3 = PINK
-compactHLabel.FontFace = LOGO_FONT_FACE
+compactHLabel.TextColor3 = UI.PINK
+compactHLabel.FontFace = UI.LOGO_FONT_FACE
 setResponsiveTextSize(compactHLabel, 30.5)
 compactHLabel.TextXAlignment = Enum.TextXAlignment.Left
 compactHLabel.TextYAlignment = Enum.TextYAlignment.Center
@@ -4782,15 +5038,15 @@ logoToggleButton.ZIndex = 45003
 logoToggleButton.Parent = sidebarLogoHolder
 local LOGO_TOP_PADDING = px(isPhonePanelLayout() and 8 or 4)
 local searchY = LOGO_TOP_PADDING
-	+ LOGO_HEIGHT
-	+ LOGO_SEARCH_GAP
-local logoDividerY = SIDEBAR_PADDING
+	+ UI.LOGO_HEIGHT
+	+ UI.LOGO_SEARCH_GAP
+local logoDividerY = UI.SIDEBAR_PADDING
 	+ searchY
-	+ SEARCH_HEIGHT
-	+ SEARCH_TOP_GAP
+	+ UI.SEARCH_HEIGHT
+	+ UI.SEARCH_TOP_GAP
 sidebarLogoHolder.Position = U2O(
-		roundPixel(((FIXED_SIDEBAR_WIDTH + LINE_THICKNESS) * 0.5) - SIDEBAR_PADDING),
-		roundPixel(((SIDEBAR_PADDING + searchY) * 0.5) - SIDEBAR_PADDING)
+		roundPixel(((FIXED_SIDEBAR_WIDTH + UI.LINE_THICKNESS) * 0.5) - UI.SIDEBAR_PADDING),
+		roundPixel(((UI.SIDEBAR_PADDING + searchY) * 0.5) - UI.SIDEBAR_PADDING)
 	)
 local logoDivider = New("Frame")
 logoDivider.Name = "LogoDivider"
@@ -4799,15 +5055,15 @@ logoDivider.AnchorPoint = V2(
 		0
 	)
 logoDivider.Position = U2O(
-		roundPixel((FIXED_SIDEBAR_WIDTH + LINE_THICKNESS) * 0.5),
+		roundPixel((FIXED_SIDEBAR_WIDTH + UI.LINE_THICKNESS) * 0.5),
 		logoDividerY
 	)
 logoDivider.Size = U2O(
 		roundPixel(FIXED_SIDEBAR_WIDTH * 0.90),
-		LINE_THICKNESS
+		UI.LINE_THICKNESS
 	)
-logoDivider.BackgroundColor3 = LINE_COLOR
-logoDivider.BackgroundTransparency = LINE_TRANSPARENCY
+logoDivider.BackgroundColor3 = UI.LINE_COLOR
+logoDivider.BackgroundTransparency = UI.LINE_TRANSPARENCY
 logoDivider.BorderSizePixel = 0
 logoDivider.ZIndex = 45001
 logoDivider.Parent = window
@@ -4818,24 +5074,24 @@ searchHolder.AnchorPoint = V2(
 		0
 	)
 searchHolder.Position = U2O(
-		roundPixel((FIXED_SIDEBAR_WIDTH + LINE_THICKNESS) * 0.5),
-		SIDEBAR_PADDING + searchY
+		roundPixel((FIXED_SIDEBAR_WIDTH + UI.LINE_THICKNESS) * 0.5),
+		UI.SIDEBAR_PADDING + searchY
 	)
 searchHolder.Size = U2O(
 		FIXED_SIDEBAR_CONTENT_WIDTH,
-		SEARCH_HEIGHT
+		UI.SEARCH_HEIGHT
 	)
-searchHolder.BackgroundColor3 = SEARCH_BACKGROUND
-searchHolder.BackgroundTransparency = SEARCH_BACKGROUND_TRANSPARENCY
+searchHolder.BackgroundColor3 = UI.SEARCH_BACKGROUND
+searchHolder.BackgroundTransparency = UI.SEARCH_BACKGROUND_TRANSPARENCY
 searchHolder.BorderSizePixel = 0
 searchHolder.ClipsDescendants = true
 searchHolder.ZIndex = 45001
 searchHolder.Parent = window
 ensureCorner(
 	searchHolder,
-	SEARCH_CORNER_RADIUS
+	UI.SEARCH_CORNER_RADIUS
 )
-rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(searchHolder)
+rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(searchHolder)
 local EMBEDDED_ICONS={
 	Home=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAADc0lEQVR4nO2by28NURzHvz/UgtJYIBEEkZII0YaF/6AhHonHQiIhHgubNrGQIGElttgg8Q+QkqAeG1bSDSIeiYUQj5K0EmmVTcvHYm6J68zcuTNz7mnT+SQ3uTmP3/n+fnPO78ycuVcqmdxYiEGBaZLWSFpSKXor6ZmZ/Qyhp2EALcAZYID/6QdOAy2hdXoBaAfeOxyv5h3QHlpvoQAdwGAK58cYBraG1l0IQBcwWofzY4wCXaH1ZwaYCpzL4Hg1l4iS5sQBmAX01Li6x4DZlc8JkmdJDzArtF+pABYAjxOcca5vaueJZ8DiED6lBlhDcqb/BKzz1T8oRV1BMs6goACdJK/he9RxgwM0AzcS7P0CTnl0KbXQNJk+Uxavw3aTD9/SCGwGbiaIGwWOFjDOIWAkYZy6Zlch0OB1ynjaIQiUqUONWy2iAxgKdSUIuUOQLtPP9jL4vzoau0PgMdM3QFO+HaIS7dsJgwR9YqP2k2YP0JzVeBPwIMH4MLClYJ+y6NxS0RLH/UwzATiZYLSPcXRqQ3Ta1Jeg93i9BluAbzHGngILPfmSGWBhRZuLQepJ0MCeGEN3GMfP5UTnEHdjtO+ux9B5h4HPwAyP+gsBmEl0wlzNWVf7KTF25jnKes3sR3FS/WBm3yU9dFTNd7WPC4DrhcloVlEBGHGUOX2NC8CkwfvdG9EDyg5JS5X+VRyS3ki6amZPfGmTPAYAmC7poqS9OcwcBS5LOmxmrmmdG58z4ILyOS9FM+ZA5fvBnLaceMkBwHpJ+wo0uR9oK9DeH3wlwe0F2zNFeaRwfC2BJY6yj5J6U/bfIKn6dntZHkFx+AqAa2b1mtmuNJ2BK5J2VhVPza3KwaS/DygDEFpAaMoAhBYQmjIAoQWEpgxAaAGhKQMQWkBoygCEFhCaMgB1tA3y34KMpNYaF4BhR9nybFqCsMJRNuRqGBeAl46ytUBnZkkNAjgiabWj6oWrvXOqAK2SXsXUP6/UJeE60sp7JJam/0q5nUdSq5m9rq6IXSvAdUnbagw4Ueg2M+ehalIAFkl6LGmuL1UNol9Su5n1uSpjdwEz+yBpo6QvnoQ1ggFJm+Kcl2psg2b2SFK7pGuK1tFEAUndktoqPsSSer8ElkvaLGmVpDQ/N5mjv2f5byR9TTtWjv5DirL9LVfCKykpKSmp4jcmJq1CdrrMbwAAAABJRU5ErkJggg==]],
 	Settings=[[iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAAHCUlEQVR4nO2bWaxeUxTH//vSGlpaLTFGi5irVR7aIqYSUwwlQgyVxhzU/CQSUSElRGNKPKBFxFBDqZpijKqS3N5SBBFNh1uUlpbetnp/HvZ3Of3u2vvb53zn9Jr+j/usvf5r7bPOPmuvdY70P/7bcD1BCuwoaaikvrWhFZLanHPtPWHPBgMwBphFGDOBE3vaztIBbAI8HnG8HlOATXra7lIAtADP5XC+C1OBHnlESwVwWQHnu3BJ1fZVusK1MJ4vaduCKtolDXbOrSnPqvXRUpXiGkbLdn6mpP1cDZKGSfrAkNte0hEV2lctgJuMsF4BDDRktwZWGvI3Vmlj1RGwjTHW6pz7sX7QObdU0hxDvujjk4SqF6CvMbYqIv+bMbZFSbaY2DjvBKCfpJ0krZE0P7RBAQMkHWdcWhhRv8gYOx4YaEVNjaePpF3lfVlQi6RyAWwKjAdagc7M89kBzACOr5MfAcwNvNrOi/CMC8yZBxyakXP4rPJt4HdD9lpgs7KcHwJ8HjAsi1nAHcD0ukXKYhkQDGlgy5qMhU7gdWASMCfBni+Boc06vw/wYwJZKq5M4BxfIt8yYN+izvcCPi3RmCdISG3x4Z3n3NAI84DeRRbgmpIM6ATuApI3XGAjYCKwriQbrs/r/BbATwFn7gSGA0cAzxJ+3sHvCyNzr/5fdgwH3onoX4ePrJH4vWpiwJ6fAOuVHCQeGyCcZMgOASYArwAfA28Cd5PZtZsFMKrm3Mu1RX0BuAHY3ZC9K2D72XkIHzQULAX6l+VUVcC/SZYa9j9gyYeeyx2NsVedc8tLMLCfpGMlDZFPqCSfHH0qaYZz7pdm9DvnfgHekHRG3aUdLPnQAljZXVN3H9hF0gRJp0sK7cprgKck3eic+7YJuq2NsdXJs4HbjRBaCxxWxBrgUmB14Nm00AFcXJDrGOy3xy15lBwZMGw1/ojbK4euO3I4Xo+JOXg2q3GtDeg6OM8COKAtYthbJLxWgPObcL4LDctiwADgo4iO2cnOZ5SOAtZElE4jktkBuxAP+0X4c8N0YHFEbhUwKMLTgr8hIXQAB+RegJrycwmHFMBZkbmPBeYsBE4ms3j4iDultigWpkR4LojYtxo4vZDzGYLDgW8CBK2BOf2w7/5CYCdrTm3eztjR0AFsGZjzRcC2z2kiC60n6YPP9Cx0C0/gjIDsSQlcYwJzu91JYPeA7FQSD0BJJTHn3K+Srghcto6b+xljiyW9mED3gnw5PEXn3gEdV6WW0pNrgs65ryR1Gpes0LSyrjbnHAk8nZLajEtWdtrHGFvnnFvQiKcLVRVFLUfzNGEsuxouXhEkLwCwW0B+hTFmhfAw0goiLfKt83osNsZWGmMbAYMb8XQhaQHwBcZ7A5fnGWNzjbHtJZ2cQDdG0naJOj8L6LiXEouiRwJfB3Zbq5HRdSS1XoOLgJ0jXIOAdmNeB4FiKuGy3dfA4c06P47uZecszonMfTQwZzFwKj7Uu2RbgNMCzgNMjvCcF7FvLTC2qPOHEM8CXyKeCg/G37kQ2vE9hRnAkojcKuJR00I4RwGfzo/K63wL8ElE6TtE6vsZPaFGRx5clMDTD3gvoqOVPB9bAKMDijrw9b/kMjO+llcUt+bg6Q3cQvgAll7LIFwQOSRZyfr6LsKHcipWAecX5DoMe9+6LY+S5w0F04sYlNE5CP/xU2xf6AAmE3nmE7leM3Q/bcmGaoJWxefnZoxyzs2XNBa4XN2Logvki6KvOOesxCovrOJtchXrn14W74/d1Lnfkg9FwHuSLqwbGyjpZknj6wiHSTpT0oGSBsh/5DBH0vOS3ko5AMWA371Hy2eRQ+UPQMskzZb0pHOuPkOcIGkrQ9W7eUj7YneFO/Ht6VHA0dh7RRazgBGFPPd2jAQ+bMDxHHAUcBBwX0BmKbB5XvIym6OTyNcc7QXcQ7zvmAfXFFn9XoS/8iiCp8ikvxHeFnxFpyy0kaOMX2/MXth9tqK4OoHzuhL5vgf2KOR8xqC98R8ZNMJMfAI1jXDoLidQ3Kxx9Qd+DsztxHeFb69xNcJcYM+mnM8Y1hvf3vqI9dtOv+EPRcfUyY8g3FgZF+EJlbhbqdtMgePwPYVshrkOmA1cTNGwT1iMzYFd8ae9IAmwFT4E6/FQZM4jhvwSIvkHfq8aXLMp305fNfBpbT1ei8i/bsg/XKWNVX8patXsYqUq69qvJdliouoF+MEYGw50698D20gabsh/V7pVGVS9ALOMsT6SpuFTaEkSsL+kaZKsZ/jDimyTVP0PE73lf5iwqrwpaJc0yDm3tjyrNjCASwKvthQ0LIf97YFvfRdJbZ/h3/DTlPTnb3NTcjj/CP+W3+ayAE7Ep7FWqtwJvA+csCFt6qlfZ7eTb3d3ZXjLJX3inFvSE/b8j/8y/gDXsy9oq2YXvAAAAABJRU5ErkJggg==]],
@@ -4925,7 +5181,7 @@ local function getEmbeddedIconAsset(
 		or type(customAssetFunction) ~= "function" then
 		return nil
 	end
-	local fileName = "TuffHub_" .. string.lower(name) .. "_icon.png"
+	local fileName = "DroidHub_" .. string.lower(name) .. "_icon.png"
 	-- Embedded icons are immutable. Reuse the cached file instead of decoding/writing base64 every run.
 	local cached = false
 	if type(isfile) == "function" then
@@ -4964,13 +5220,13 @@ if searchIconAsset then
 			0
 		)
 	searchIcon.Size = U2O(
-			SEARCH_ICON_SIZE,
-			SEARCH_ICON_SIZE
+			UI.SEARCH_ICON_SIZE,
+			UI.SEARCH_ICON_SIZE
 		)
 	searchIcon.BackgroundTransparency = 1
 	searchIcon.BorderSizePixel = 0
 	searchIcon.Image = searchIconAsset
-	searchIcon.ImageColor3 = MUTED_TEXT_COLOR
+	searchIcon.ImageColor3 = UI.MUTED_TEXT_COLOR
 	searchIcon.ImageTransparency = 0
 	searchIcon.ScaleType = Enum.ScaleType.Fit
 	searchIcon.ZIndex = 45004
@@ -4985,12 +5241,12 @@ else
 	searchIconHolder.Position = U2O(
 			px(10),
 			roundPixel(
-				(SEARCH_HEIGHT - SEARCH_ICON_SIZE) * 0.5
+				(UI.SEARCH_HEIGHT - UI.SEARCH_ICON_SIZE) * 0.5
 			)
 		)
 	searchIconHolder.Size = U2O(
-			SEARCH_ICON_SIZE,
-			SEARCH_ICON_SIZE
+			UI.SEARCH_ICON_SIZE,
+			UI.SEARCH_ICON_SIZE
 		)
 	searchIconHolder.BackgroundTransparency = 1
 	searchIconHolder.BorderSizePixel = 0
@@ -5015,8 +5271,8 @@ else
 		px(7)
 	)
 	local searchCircleStroke = New("UIStroke")
-	searchCircleStroke.Color = MUTED_TEXT_COLOR
-	searchCircleStroke.Thickness = LINE_THICKNESS
+	searchCircleStroke.Color = UI.MUTED_TEXT_COLOR
+	searchCircleStroke.Thickness = UI.LINE_THICKNESS
 	searchCircleStroke.Transparency = 0
 	searchCircleStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 	searchCircleStroke.Parent = searchCircle
@@ -5035,7 +5291,7 @@ else
 			px(2)
 		)
 	searchHandle.Rotation = 45
-	searchHandle.BackgroundColor3 = MUTED_TEXT_COLOR
+	searchHandle.BackgroundColor3 = UI.MUTED_TEXT_COLOR
 	searchHandle.BackgroundTransparency = 0
 	searchHandle.BorderSizePixel = 0
 	searchHandle.ZIndex = 45004
@@ -5049,7 +5305,7 @@ searchIconButton.Position = U2O(
 )
 searchIconButton.Size = U2O(
 	px(28),
-	SEARCH_HEIGHT
+	UI.SEARCH_HEIGHT
 )
 searchIconButton.BackgroundTransparency = 1
 searchIconButton.BorderSizePixel = 0
@@ -5077,10 +5333,10 @@ searchBox.TextTruncate = Enum.TextTruncate.None
 searchBox.ClearTextOnFocus = false
 searchBox.Text = ""
 searchBox.PlaceholderText = ""
-searchBox.TextColor3 = SEARCH_TEXT_COLOR
-searchBox.PlaceholderColor3 = SEARCH_PLACEHOLDER_COLOR
-searchBox.FontFace = MENU_FONT_FACE
-setResponsiveTextSize(searchBox, SEARCH_TEXT_SIZE)
+searchBox.TextColor3 = UI.SEARCH_TEXT_COLOR
+searchBox.PlaceholderColor3 = UI.SEARCH_PLACEHOLDER_COLOR
+searchBox.FontFace = UI.MENU_FONT_FACE
+setResponsiveTextSize(searchBox, UI.SEARCH_TEXT_SIZE)
 searchBox.TextXAlignment = Enum.TextXAlignment.Center
 searchBox.TextYAlignment = Enum.TextYAlignment.Center
 searchBox.ZIndex = 45003
@@ -5108,9 +5364,9 @@ centeredSearchPlaceholder.Size = U2S(
 centeredSearchPlaceholder.BackgroundTransparency = 1
 centeredSearchPlaceholder.BorderSizePixel = 0
 centeredSearchPlaceholder.Text = "Search"
-centeredSearchPlaceholder.TextColor3 = SEARCH_PLACEHOLDER_COLOR
-centeredSearchPlaceholder.FontFace = MENU_FONT_FACE
-setResponsiveTextSize(centeredSearchPlaceholder, SEARCH_TEXT_SIZE)
+centeredSearchPlaceholder.TextColor3 = UI.SEARCH_PLACEHOLDER_COLOR
+centeredSearchPlaceholder.FontFace = UI.MENU_FONT_FACE
+setResponsiveTextSize(centeredSearchPlaceholder, UI.SEARCH_TEXT_SIZE)
 centeredSearchPlaceholder.TextXAlignment = Enum.TextXAlignment.Center
 centeredSearchPlaceholder.TextYAlignment = Enum.TextYAlignment.Center
 centeredSearchPlaceholder.ZIndex = 45003
@@ -5141,7 +5397,7 @@ searchBox.Focused:Connect(function()
 		searchHolder,
 		SEARCH_TWEEN,
 		{
-			BackgroundTransparency = SEARCH_FOCUSED_TRANSPARENCY
+			BackgroundTransparency = UI.SEARCH_FOCUSED_TRANSPARENCY
 		}
 	):Play()
 end)
@@ -5151,7 +5407,7 @@ searchBox.FocusLost:Connect(function(enterPressed)
 		searchHolder,
 		SEARCH_TWEEN,
 		{
-			BackgroundTransparency = SEARCH_BACKGROUND_TRANSPARENCY
+			BackgroundTransparency = UI.SEARCH_BACKGROUND_TRANSPARENCY
 		}
 	):Play()
 	if enterPressed
@@ -5173,9 +5429,9 @@ searchIconButton.MouseButton1Click:Connect(function()
 	end
 end)
 local menuStartY = logoDividerY
-	+ LINE_THICKNESS
-	+ MENU_TOP_GAP
-	- SIDEBAR_PADDING
+	+ UI.LINE_THICKNESS
+	+ UI.MENU_TOP_GAP
+	- UI.SIDEBAR_PADDING
 local menuHolder = New("ScrollingFrame")
 menuHolder.Name = "SidebarMenu"
 menuHolder.AnchorPoint = V2(
@@ -5184,14 +5440,14 @@ menuHolder.AnchorPoint = V2(
 	)
 menuHolder.Position = U2O(
 		roundPixel(
-			(FIXED_SIDEBAR_WIDTH + LINE_THICKNESS) * 0.5
+			(FIXED_SIDEBAR_WIDTH + UI.LINE_THICKNESS) * 0.5
 		),
-		SIDEBAR_PADDING + menuStartY
+		UI.SIDEBAR_PADDING + menuStartY
 	)
 menuHolder.Size = U2O(
 		FIXED_SIDEBAR_WIDTH,
-		(MENU_ITEM_HEIGHT * 3)
-			+ (MENU_ITEM_GAP * 2)
+		(UI.MENU_ITEM_HEIGHT * 3)
+			+ (UI.MENU_ITEM_GAP * 2)
 	)
 menuHolder.BackgroundTransparency = 1
 menuHolder.BorderSizePixel = 0
@@ -5202,7 +5458,7 @@ menuHolder.ScrollingDirection = Enum.ScrollingDirection.Y
 -- scrollbar thumb. This keeps the navigation clean on both desktop and mobile.
 menuHolder.ScrollBarThickness = 0
 menuHolder.ScrollBarImageTransparency = 1
-menuHolder.ScrollBarImageColor3 = MUTED_TEXT_COLOR
+menuHolder.ScrollBarImageColor3 = UI.MUTED_TEXT_COLOR
 menuHolder.VerticalScrollBarInset = Enum.ScrollBarInset.None
 menuHolder.AutomaticCanvasSize = Enum.AutomaticSize.None
 menuHolder.CanvasSize = U2O(
@@ -5230,7 +5486,7 @@ do
 
 	local thumb = New("Frame")
 	thumb.Name = "Thumb"
-	thumb.BackgroundColor3 = LINE_COLOR
+	thumb.BackgroundColor3 = UI.LINE_COLOR
 	thumb.BackgroundTransparency = 0
 	thumb.BorderSizePixel = 0
 	thumb.Active = true
@@ -5381,7 +5637,7 @@ do
 	local cue = New("Frame")
 	cue.Name = "SidebarScrollMoreCue"
 	cue.AnchorPoint = V2(0.5, 0)
-	cue.BackgroundColor3 = BLACK
+	cue.BackgroundColor3 = UI.BLACK
 	cue.BackgroundTransparency = 0
 	cue.BorderSizePixel = 0
 	cue.Active = false
@@ -5455,8 +5711,8 @@ end)
 
 do
 	local menuPadding = New("UIPadding")
-	menuPadding.PaddingTop = UDim.new(0, MENU_TOP_GAP)
-	menuPadding.PaddingBottom = UDim.new(0, SIDEBAR_PADDING)
+	menuPadding.PaddingTop = UDim.new(0, UI.MENU_TOP_GAP)
+	menuPadding.PaddingBottom = UDim.new(0, UI.SIDEBAR_PADDING)
 	menuPadding.Parent = menuHolder
 end
 local menuLayout = New("UIListLayout")
@@ -5465,14 +5721,14 @@ menuLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 menuLayout.VerticalAlignment = Enum.VerticalAlignment.Top
 menuLayout.Padding = UDim.new(
 		0,
-		MENU_ITEM_GAP
+		UI.MENU_ITEM_GAP
 	)
 menuLayout.SortOrder = Enum.SortOrder.LayoutOrder
 menuLayout.Parent = menuHolder
 local function syncSidebarMenuCanvas()
 	local contentHeight = menuLayout.AbsoluteContentSize.Y
-		+ MENU_TOP_GAP
-		+ SIDEBAR_PADDING
+		+ UI.MENU_TOP_GAP
+		+ UI.SIDEBAR_PADDING
 	menuHolder.CanvasSize = U2O(0, math.max(0, roundPixel(contentHeight)))
 	local maxY = math.max(0, menuHolder.AbsoluteCanvasSize.Y - menuHolder.AbsoluteWindowSize.Y)
 	if menuHolder.CanvasPosition.Y > maxY then
@@ -5501,7 +5757,7 @@ local TRACKED_TAB_NAME={
 local TRACKED_FEATURE="FEATURE"
 -- Sidebar labels stay compact and fully uppercase. Panel headings and the
 -- selected-tab heading use tracked uppercase lettering with two full spaces
--- between words, matching the original TuffHub visual language without
+-- between words, matching the original DroidHub visual language without
 -- introducing break points inside a word.
 local function formatPanelTitle(title, mode)
 	title = tostring(title or "")
@@ -5541,8 +5797,8 @@ selectedTabTitle.Name = "SelectedTabTitle"
 selectedTabTitle.BackgroundTransparency = 1
 selectedTabTitle.BorderSizePixel = 0
 selectedTabTitle.Text = formatPanelTitle(TRACKED_TAB_NAME.Home, "selected")
-selectedTabTitle.TextColor3 = MENU_TEXT_SELECTED
-selectedTabTitle.FontFace = MENU_FONT_BOLD_FACE
+selectedTabTitle.TextColor3 = UI.MENU_TEXT_SELECTED
+selectedTabTitle.FontFace = UI.MENU_FONT_BOLD_FACE
 setResponsiveTextSize(selectedTabTitle, 17)
 selectedTabTitle.TextScaled = false
 selectedTabTitle.TextWrapped = true
@@ -5562,8 +5818,8 @@ autoServerHopState.FitVisibleUiText = function(object)
 	then
 		return
 	end
-	if object.Name == "Tuff" or object.Name == "Hub"
-		or object.Name == "CompactT" or object.Name == "CompactH"
+	if object.Name == "Droid" or object.Name == "Hub"
+		or object.Name == "CompactD" or object.Name == "CompactH"
 		or object.Name == "PlayerName" or object.Name == "WelcomeLabel"
 		or object.Name == "SimpleAutoFarmModeBanner"
 	then
@@ -5571,16 +5827,16 @@ autoServerHopState.FitVisibleUiText = function(object)
 	end
 	object.TextTruncate = Enum.TextTruncate.None
 	object.TextWrapped = true
-	if object:GetAttribute("TuffHubAutoGrowText") == true then return end
+	if object:GetAttribute("DroidHubAutoGrowText") == true then return end
 	local text = tostring(object.Text or "")
 	local width = math.floor(object.AbsoluteSize.X + 0.5)
 	local height = math.floor(object.AbsoluteSize.Y + 0.5)
 	if text == "" or width <= 2 or height <= 2 then return end
 	local currentSize = math.max(1, math.floor(tonumber(object.TextSize) or 14))
-	local storedBase = tonumber(object:GetAttribute("TuffHubBaseTextSize"))
+	local storedBase = tonumber(object:GetAttribute("DroidHubBaseTextSize"))
 	local baseSize = math.max(currentSize, storedBase or 0)
 	if storedBase == nil or currentSize > storedBase then
-		object:SetAttribute("TuffHubBaseTextSize", currentSize)
+		object:SetAttribute("DroidHubBaseTextSize", currentSize)
 		baseSize = currentSize
 	end
 	local availableWidth = math.max(1, width - px(4))
@@ -5590,7 +5846,7 @@ autoServerHopState.FitVisibleUiText = function(object)
 		return TextService:GetTextSize(
 			text,
 			size,
-			MENU_FONT,
+			UI.MENU_FONT,
 			V2(availableWidth, 10000)
 		).Y <= availableHeight
 	end
@@ -5657,7 +5913,7 @@ local function syncPixelSnappedGeometry()
 		)
 	local dividerX = getSidebarWidth()
 	local visibleDividerThickness = math.max(
-		LINE_THICKNESS,
+		UI.LINE_THICKNESS,
 		logicalPixelsForRenderedMinimum(1)
 	)
 	local sidebarVisualCenterX = roundPixel(
@@ -5673,7 +5929,7 @@ local function syncPixelSnappedGeometry()
 		)
 	local collapsedLogoDividerY = math.max(
 		px(1),
-		SIDEBAR_PADDING + searchY - px(isPhonePanelLayout() and 5 or 9)
+		UI.SIDEBAR_PADDING + searchY - px(isPhonePanelLayout() and 5 or 9)
 	)
 	logoDivider.Position = U2O(
 			sidebarVisualCenterX,
@@ -5688,38 +5944,38 @@ local function syncPixelSnappedGeometry()
 			visibleDividerThickness
 		)
 	sidebar.Position = U2O(
-			SIDEBAR_PADDING,
-			SIDEBAR_PADDING
+			UI.SIDEBAR_PADDING,
+			UI.SIDEBAR_PADDING
 		)
 	sidebar.Size = U2O(
 			math.max(
 				1,
 				dividerX
-					- (SIDEBAR_PADDING * 2)
+					- (UI.SIDEBAR_PADDING * 2)
 			),
 			math.max(
 				1,
 				panelHeight
-					- (SIDEBAR_PADDING * 2)
+					- (UI.SIDEBAR_PADDING * 2)
 			)
 		)
 	local logoAreaWidth = math.max(1, dividerX)
-	-- Collapsed TH geometry is fixed. Using live TextBounds here caused a
-	-- UIScale/TextBounds feedback loop that made TH pulse and kept the
+	-- Collapsed DH geometry is fixed. Using live TextBounds here caused a
+	-- UIScale/TextBounds feedback loop that made DH pulse and kept the
 	-- collapsed sidebar doing layout work every frame.
 	local logoAreaHeight = math.max(
 		1,
-		sidebarCollapsed and collapsedLogoDividerY or (SIDEBAR_PADDING + searchY)
+		sidebarCollapsed and collapsedLogoDividerY or (UI.SIDEBAR_PADDING + searchY)
 	)
 	local logoBaseWidth = sidebarCollapsed
 		and px(isPhonePanelLayout() and 44 or 46)
-		or LOGO_WIDTH
+		or UI.LOGO_WIDTH
 	local logoBaseHeight = sidebarCollapsed
 		and px(isPhonePanelLayout() and 34 or 32)
-		or LOGO_HEIGHT
+		or UI.LOGO_HEIGHT
 	sidebarLogoHolder.Position = U2O(
-			sidebarVisualCenterX - SIDEBAR_PADDING,
-			roundPixel((logoAreaHeight * 0.5) - SIDEBAR_PADDING)
+			sidebarVisualCenterX - UI.SIDEBAR_PADDING,
+			roundPixel((logoAreaHeight * 0.5) - UI.SIDEBAR_PADDING)
 		)
 	sidebarLogoHolder.Size = U2O(
 			logoBaseWidth,
@@ -5735,6 +5991,7 @@ local function syncPixelSnappedGeometry()
 				areaLogoScale.Scale = math.max(
 					0.01,
 					math.min(
+						1,
 						(logoAreaWidth * logoFill) / logoBaseWidth,
 						(logoAreaHeight * logoFill) / logoBaseHeight
 					)
@@ -5742,30 +5999,30 @@ local function syncPixelSnappedGeometry()
 			end
 		end
 		local expandedSplit = roundPixel(
-			(tuffLabel.TextBounds.X - hubLabel.TextBounds.X) * 0.5
+			(droidLabel.TextBounds.X - hubLabel.TextBounds.X) * 0.5
 		)
-		tuffLabel.Position = U2(0.5, expandedSplit, 0.5, 0)
+		droidLabel.Position = U2(0.5, expandedSplit, 0.5, 0)
 		hubLabel.Position = U2(0.5, expandedSplit, 0.5, 0)
 		-- Equal-size T/H label boxes meet at the center. Keeping this static
 		-- removes the collapsed-only TextBounds feedback path completely.
-		compactTLabel.Position = U2(0.5, 0, 0.5, 0)
+		compactDLabel.Position = U2(0.5, 0, 0.5, 0)
 		compactHLabel.Position = U2(0.5, 0, 0.5, 0)
 	end
-	tuffLabel.Visible = not sidebarCollapsed
+	droidLabel.Visible = not sidebarCollapsed
 	hubLabel.Visible = not sidebarCollapsed
-	compactTLabel.Visible = sidebarCollapsed
+	compactDLabel.Visible = sidebarCollapsed
 	compactHLabel.Visible = sidebarCollapsed
 	searchHolder.Visible = not sidebarCollapsed
 	searchHolder.Position = U2O(
 			sidebarVisualCenterX,
 			roundPixel(
-				SIDEBAR_PADDING
+				UI.SIDEBAR_PADDING
 					+ searchY
 			)
 		)
 	searchHolder.Size = U2O(
 			roundEvenPixel(dividerX * 0.90),
-			SEARCH_HEIGHT
+			UI.SEARCH_HEIGHT
 		)
 	do
 		local searchSafeInset = math.min(
@@ -5806,8 +6063,8 @@ local function syncPixelSnappedGeometry()
 		local divider = New("Frame")
 		divider.Name = "SidebarUtilityDivider"
 		divider.AnchorPoint = V2(0.5, 0)
-		divider.BackgroundColor3 = LINE_COLOR
-		divider.BackgroundTransparency = LINE_TRANSPARENCY
+		divider.BackgroundColor3 = UI.LINE_COLOR
+		divider.BackgroundTransparency = UI.LINE_TRANSPARENCY
 		divider.BorderSizePixel = 0
 		divider.ZIndex = 45002
 		divider.Parent = window
@@ -5816,14 +6073,14 @@ local function syncPixelSnappedGeometry()
 			local button = New("TextButton")
 			button.Name = "SidebarQuick" .. name
 			button.AnchorPoint = V2(0.5, 0.5)
-			button.BackgroundColor3 = SEARCH_BACKGROUND
+			button.BackgroundColor3 = UI.SEARCH_BACKGROUND
 			button.BackgroundTransparency = 1
 			button.BorderSizePixel = 0
 			button.AutoButtonColor = false
 			button.Text = ""
 			button.ZIndex = 45003
 			button.Parent = window
-			ensureCorner(button, MENU_CORNER_RADIUS)
+			ensureCorner(button, UI.MENU_CORNER_RADIUS)
 			local asset = iconName and getEmbeddedIconAsset(iconName) or nil
 			local icon
 			if asset then
@@ -5831,11 +6088,11 @@ local function syncPixelSnappedGeometry()
 				icon.Name = "Icon"
 				icon.AnchorPoint = V2(0.5, 0.5)
 				icon.Position = U2S(0.5, 0.5)
-				icon.Size = U2O(iconSize or MENU_ICON_SIZE, iconSize or MENU_ICON_SIZE)
+				icon.Size = U2O(iconSize or UI.MENU_ICON_SIZE, iconSize or UI.MENU_ICON_SIZE)
 				icon.BackgroundTransparency = 1
 				icon.BorderSizePixel = 0
 				icon.Image = asset
-				icon.ImageColor3 = PINK
+				icon.ImageColor3 = UI.PINK
 				icon.ImageTransparency = 0.58
 				icon.ScaleType = Enum.ScaleType.Fit
 				icon.ZIndex = 45004
@@ -5849,9 +6106,9 @@ local function syncPixelSnappedGeometry()
 				icon.BackgroundTransparency = 1
 				icon.BorderSizePixel = 0
 				icon.Text = fallbackGlyph or ""
-				icon.TextColor3 = PINK
+				icon.TextColor3 = UI.PINK
 				icon.TextTransparency = 0.58
-				icon.FontFace = MENU_FONT_FACE
+				icon.FontFace = UI.MENU_FONT_FACE
 				setResponsiveTextSize(icon, 18)
 				icon.TextXAlignment = Enum.TextXAlignment.Center
 				icon.TextYAlignment = Enum.TextYAlignment.Center
@@ -5872,22 +6129,22 @@ local function syncPixelSnappedGeometry()
 			button.MouseEnter:Connect(function()
 				local item = quick[name .. "Item"]
 				if item then item.Hovered = true end
-				local updater = rawget(_G, "__TUFFHUB_UPDATE_MENU_ITEM_VISUAL")
+				local updater = rawget(_G, "__DROIDHUB_UPDATE_MENU_ITEM_VISUAL")
 				if item and type(updater) == "function" then updater(item, false) end
 			end)
 			button.MouseLeave:Connect(function()
 				local item = quick[name .. "Item"]
 				if item then item.Hovered = false end
-				local updater = rawget(_G, "__TUFFHUB_UPDATE_MENU_ITEM_VISUAL")
+				local updater = rawget(_G, "__DROIDHUB_UPDATE_MENU_ITEM_VISUAL")
 				if item and type(updater) == "function" then updater(item, false) end
 			end)
 			button.MouseButton1Up:Connect(function()
-				local selector = rawget(_G, "__TUFFHUB_SELECT_SIDEBAR_ITEM")
+				local selector = rawget(_G, "__DROIDHUB_SELECT_SIDEBAR_ITEM")
 				local item = quick[name .. "Item"]
 				if item and type(selector) == "function" then selector(item) end
 			end)
 		end
-		makeQuickButton("Settings", "Settings", "⚙", MENU_ICON_SIZE + px(4))
+		makeQuickButton("Settings", "Settings", "⚙", UI.MENU_ICON_SIZE + px(4))
 
 		local profile = New("Frame")
 		profile.Name = "SidebarProfile"
@@ -5901,7 +6158,7 @@ local function syncPixelSnappedGeometry()
 		local avatar = New("ImageLabel")
 		avatar.Name = "RobloxHeadshot"
 		avatar.AnchorPoint = V2(0, 0.5)
-		avatar.BackgroundColor3 = SEARCH_BACKGROUND
+		avatar.BackgroundColor3 = UI.SEARCH_BACKGROUND
 		avatar.BackgroundTransparency = 0
 		avatar.BorderSizePixel = 0
 		avatar.Image = ""
@@ -5910,8 +6167,8 @@ local function syncPixelSnappedGeometry()
 		avatar.Parent = profile
 		ensureCorner(avatar, px(999))
 		local avatarStroke = New("UIStroke")
-		avatarStroke.Color = LINE_COLOR
-		avatarStroke.Thickness = math.max(LINE_THICKNESS, logicalPixelsForRenderedMinimum(1))
+		avatarStroke.Color = UI.LINE_COLOR
+		avatarStroke.Thickness = math.max(UI.LINE_THICKNESS, logicalPixelsForRenderedMinimum(1))
 		avatarStroke.Transparency = 0.12
 		avatarStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 		avatarStroke.Parent = avatar
@@ -5922,8 +6179,8 @@ local function syncPixelSnappedGeometry()
 		welcome.BackgroundTransparency = 1
 		welcome.BorderSizePixel = 0
 		welcome.Text = autoServerHopState.FormatProfileTracking("WELCOME")
-		welcome.TextColor3 = MUTED_TEXT_COLOR
-		welcome.FontFace = MENU_FONT_REGULAR_FACE
+		welcome.TextColor3 = UI.MUTED_TEXT_COLOR
+		welcome.FontFace = UI.MENU_FONT_REGULAR_FACE
 		setResponsiveTextSize(welcome, 11)
 		welcome.TextScaled = false
 		welcome.TextWrapped = false
@@ -5939,8 +6196,8 @@ local function syncPixelSnappedGeometry()
 		playerName.BackgroundTransparency = 1
 		playerName.BorderSizePixel = 0
 		playerName.Text = autoServerHopState.FormatProfileTracking(startupPlayer.Name or "PLAYER")
-		playerName.TextColor3 = MENU_TEXT_SELECTED
-		playerName.FontFace = MENU_FONT_SEMIBOLD_FACE
+		playerName.TextColor3 = UI.MENU_TEXT_SELECTED
+		playerName.FontFace = UI.MENU_FONT_SEMIBOLD_FACE
 		setResponsiveTextSize(playerName, 14)
 		playerName.TextScaled = false
 		playerName.TextWrapped = false
@@ -5969,12 +6226,12 @@ local function syncPixelSnappedGeometry()
 	if quick then
 		if sidebarCollapsed then
 			local collapsedWidth = roundPixel(dividerX * 0.70)
-			local avatarSize = math.max(px(24), math.min(px(30), roundPixel(MENU_ITEM_HEIGHT * 0.72)))
+			local avatarSize = math.max(px(24), math.min(px(30), roundPixel(UI.MENU_ITEM_HEIGHT * 0.72)))
 			quick.Profile.Position = U2O(
 				sidebarVisualCenterX,
-				panelHeight - SIDEBAR_PADDING - MENU_ITEM_HEIGHT - MENU_ITEM_GAP - (MENU_ITEM_HEIGHT * 0.5)
+				panelHeight - UI.SIDEBAR_PADDING - UI.MENU_ITEM_HEIGHT - UI.MENU_ITEM_GAP - (UI.MENU_ITEM_HEIGHT * 0.5)
 			)
-			quick.Profile.Size = U2O(collapsedWidth, MENU_ITEM_HEIGHT)
+			quick.Profile.Size = U2O(collapsedWidth, UI.MENU_ITEM_HEIGHT)
 			quick.Avatar.AnchorPoint = V2(0.5, 0.5)
 			quick.Avatar.Position = U2S(0.5, 0.5)
 			quick.Avatar.Size = U2O(avatarSize, avatarSize)
@@ -5982,16 +6239,16 @@ local function syncPixelSnappedGeometry()
 			quick.PlayerName.Visible = false
 			quick.Settings.Position = U2O(
 				sidebarVisualCenterX,
-				panelHeight - SIDEBAR_PADDING - (MENU_ITEM_HEIGHT * 0.5)
+				panelHeight - UI.SIDEBAR_PADDING - (UI.MENU_ITEM_HEIGHT * 0.5)
 			)
-			quick.Settings.Size = U2O(collapsedWidth, MENU_ITEM_HEIGHT)
+			quick.Settings.Size = U2O(collapsedWidth, UI.MENU_ITEM_HEIGHT)
 			footerDividerY = roundPixel(
-				panelHeight - SIDEBAR_PADDING - (MENU_ITEM_HEIGHT * 2) - MENU_ITEM_GAP - MENU_TOP_GAP
+				panelHeight - UI.SIDEBAR_PADDING - (UI.MENU_ITEM_HEIGHT * 2) - UI.MENU_ITEM_GAP - UI.MENU_TOP_GAP
 			)
 		else
-			local footerHeight = math.max(px(44), MENU_ITEM_HEIGHT)
+			local footerHeight = math.max(px(44), UI.MENU_ITEM_HEIGHT)
 			local quickSize = math.max(px(28), math.min(px(34), roundPixel(dividerX * 0.16)))
-			local footerY = roundPixel(panelHeight - SIDEBAR_PADDING - (footerHeight * 0.5))
+			local footerY = roundPixel(panelHeight - UI.SIDEBAR_PADDING - (footerHeight * 0.5))
 			local sideInset = math.max(px(10), roundPixel(dividerX * 0.05))
 			local settingsX = dividerX - sideInset - (quickSize * 0.5)
 			quick.Settings.Position = U2O(settingsX, footerY)
@@ -6028,20 +6285,20 @@ local function syncPixelSnappedGeometry()
 				textWidth,
 				math.max(px(12), roundPixel(footerHeight * 0.30))
 			)
-			footerDividerY = roundPixel(panelHeight - SIDEBAR_PADDING - footerHeight - MENU_TOP_GAP)
+			footerDividerY = roundPixel(panelHeight - UI.SIDEBAR_PADDING - footerHeight - UI.MENU_TOP_GAP)
 		end
 		quick.Divider.Position = U2O(sidebarVisualCenterX, footerDividerY)
 		quick.Divider.Size = U2O(roundPixel(dividerX), visibleDividerThickness)
 		quick.Divider.Visible = true
 	end
-	footerDividerY = footerDividerY or (panelHeight - SIDEBAR_PADDING)
+	footerDividerY = footerDividerY or (panelHeight - UI.SIDEBAR_PADDING)
 	local menuTop = roundPixel(
 		sidebarCollapsed
-			and (collapsedLogoDividerY + LINE_THICKNESS)
-			or (logoDividerY + LINE_THICKNESS)
+			and (collapsedLogoDividerY + UI.LINE_THICKNESS)
+			or (logoDividerY + UI.LINE_THICKNESS)
 		)
 	local menuAvailableHeight = math.max(
-		MENU_ITEM_HEIGHT,
+		UI.MENU_ITEM_HEIGHT,
 		footerDividerY - menuTop
 	)
 	menuHolder.Position = U2O(
@@ -6101,18 +6358,18 @@ local function syncPixelSnappedGeometry()
 		1,
 		FIXED_SIDEBAR_WIDTH * 0.90
 	)
-	local tabIconXScale = MENU_ICON_X / tabReferenceWidth
-	local tabIconWidthScale = MENU_ICON_SIZE / tabReferenceWidth
-	local tabIconHeightScale = MENU_ICON_SIZE / MENU_ITEM_HEIGHT
+	local tabIconXScale = UI.MENU_ICON_X / tabReferenceWidth
+	local tabIconWidthScale = UI.MENU_ICON_SIZE / tabReferenceWidth
+	local tabIconHeightScale = UI.MENU_ICON_SIZE / UI.MENU_ITEM_HEIGHT
 	local tabIconTextGapScale = math.max(
 		0,
-		(MENU_TEXT_X - MENU_ICON_X - MENU_ICON_SIZE) / tabReferenceWidth
+		(UI.MENU_TEXT_X - UI.MENU_ICON_X - UI.MENU_ICON_SIZE) / tabReferenceWidth
 	)
 	local tabIconPixelSize = math.max(
 		isPhonePanelLayout() and 13 or 15,
 		math.min(
 			roundPixel(tabHighlightWidth * tabIconWidthScale),
-			roundPixel(MENU_ITEM_HEIGHT * tabIconHeightScale)
+			roundPixel(UI.MENU_ITEM_HEIGHT * tabIconHeightScale)
 		)
 	)
 	local minimumExpandedIconPixels = logicalPixelsForRenderedMinimum(isPhonePanelLayout() and 15 or 17)
@@ -6144,11 +6401,11 @@ local function syncPixelSnappedGeometry()
 			)
 		item.Button.Size = U2O(
 				tabHighlightWidth,
-				MENU_ITEM_HEIGHT
+				UI.MENU_ITEM_HEIGHT
 			)
 		item.Label.Visible = not sidebarCollapsed
 		do
-			local responsiveMenuTextSize = responsiveTextSize(MENU_TEXT_SIZE)
+			local responsiveMenuTextSize = responsiveTextSize(UI.MENU_TEXT_SIZE)
 			item.Label.TextSize = math.max(
 				responsiveMenuTextSize,
 				logicalPixelsForRenderedMinimum(14)
@@ -6245,7 +6502,7 @@ autoServerHopState.RefreshSidebarMinimumWidth = function(skipSync)
 			local measured = TextService:GetTextSize(
 				label.Text,
 				label.TextSize,
-				MENU_FONT,
+				UI.MENU_FONT,
 				V2(10000, math.max(label.TextSize + px(8), 32))
 			).X
 			widestText = math.max(widestText, measured)
@@ -6262,7 +6519,19 @@ autoServerHopState.RefreshSidebarMinimumWidth = function(skipSync)
 	local previousWidth = math.floor(tonumber(autoServerHopState.RuntimeSidebarMinimumWidth) or 0)
 	if math.abs(requiredWidth - previousWidth) > 1 then
 		autoServerHopState.RuntimeSidebarMinimumWidth = requiredWidth
-		if not skipSync then syncPixelSnappedGeometry() end
+		if not skipSync then
+			syncPixelSnappedGeometry()
+			-- Sidebar labels finish measuring after the first frame. Previously this
+			-- moved only the divider, leaving MainContent at its old X position until
+			-- the sidebar was collapsed/reopened. Keep both sides synchronized whenever
+			-- the measured expanded sidebar width changes.
+			local syncRight = rawget(_G, "__DROIDHUB_SYNC_RIGHT_PANEL_GEOMETRY")
+			if type(syncRight) == "function" then
+				task.defer(syncRight, true)
+			else
+				autoServerHopState.RuntimeSidebarContentSyncPending = true
+			end
+		end
 	end
 end
 syncPixelSnappedGeometry()
@@ -6271,9 +6540,9 @@ window:GetPropertyChangedSignal(
 ):Connect(
 	syncPixelSnappedGeometry
 )
-tuffLabel:GetPropertyChangedSignal("TextBounds"):Connect(syncPixelSnappedGeometry)
+droidLabel:GetPropertyChangedSignal("TextBounds"):Connect(syncPixelSnappedGeometry)
 hubLabel:GetPropertyChangedSignal("TextBounds"):Connect(syncPixelSnappedGeometry)
--- Compact TH is intentionally excluded: its geometry is fixed while collapsed.
+-- Compact DH is intentionally excluded: its geometry is fixed while collapsed.
 local selectedMenuItem = nil
 local refreshUnsupportedPanels
 local menuTweenInfo = TI(
@@ -6284,21 +6553,21 @@ local menuTweenInfo = TI(
 local function updateMenuItemVisual(item,instant)
 	local transparency,lineTransparency,textColor,iconTransparency
 	if selectedMenuItem==item then
-		transparency,lineTransparency,textColor,iconTransparency=MENU_SELECTED_TRANSPARENCY,0,MENU_TEXT_SELECTED,0
+		transparency,lineTransparency,textColor,iconTransparency=UI.MENU_SELECTED_TRANSPARENCY,0,UI.MENU_TEXT_SELECTED,0
 	elseif item.Hovered then
-		transparency,lineTransparency,textColor,iconTransparency=MENU_HOVER_TRANSPARENCY,1,MENU_TEXT_HOVER,0.22
+		transparency,lineTransparency,textColor,iconTransparency=UI.MENU_HOVER_TRANSPARENCY,1,UI.MENU_TEXT_HOVER,0.22
 	else
-		transparency,lineTransparency,textColor,iconTransparency=MENU_NORMAL_TRANSPARENCY,1,MENU_TEXT_IDLE,0.58
+		transparency,lineTransparency,textColor,iconTransparency=UI.MENU_NORMAL_TRANSPARENCY,1,UI.MENU_TEXT_IDLE,0.58
 	end
 	if instant then
 		item.Button.BackgroundTransparency=transparency
 		if item.Label then item.Label.TextColor3=textColor end
 		if item.Icon then
 			if item.IconIsImage then
-				item.Icon.ImageColor3=PINK
+				item.Icon.ImageColor3=UI.PINK
 				item.Icon.ImageTransparency=iconTransparency
 			else
-				item.Icon.TextColor3=PINK
+				item.Icon.TextColor3=UI.PINK
 				item.Icon.TextTransparency=iconTransparency
 			end
 		end
@@ -6311,16 +6580,16 @@ local function updateMenuItemVisual(item,instant)
 	end
 	if item.Icon then
 		if item.IconIsImage then
-			TweenService:Create(item.Icon,menuTweenInfo,{ImageColor3=PINK,ImageTransparency=iconTransparency}):Play()
+			TweenService:Create(item.Icon,menuTweenInfo,{ImageColor3=UI.PINK,ImageTransparency=iconTransparency}):Play()
 		else
-			TweenService:Create(item.Icon,menuTweenInfo,{TextColor3=PINK,TextTransparency=iconTransparency}):Play()
+			TweenService:Create(item.Icon,menuTweenInfo,{TextColor3=UI.PINK,TextTransparency=iconTransparency}):Play()
 		end
 	end
 	if item.ActiveLine then
 		TweenService:Create(item.ActiveLine,menuTweenInfo,{BackgroundTransparency=lineTransparency}):Play()
 	end
 end
-rawset(_G, "__TUFFHUB_UPDATE_MENU_ITEM_VISUAL", updateMenuItemVisual)
+rawset(_G, "__DROIDHUB_UPDATE_MENU_ITEM_VISUAL", updateMenuItemVisual)
 local function selectMenuItem(item)
 	if selectedMenuItem == item then
 		return
@@ -6343,12 +6612,12 @@ local function selectMenuItem(item)
 	end
 	-- Shared acceptance criteria appear in both offer tabs. Refresh from state on
 	-- tab changes so edits made in one tab are immediately reflected in the other.
-	local refreshAllSettings = rawget(_G, "__TUFFHUB_REFRESH_ALL_SETTINGS_UI")
+	local refreshAllSettings = rawget(_G, "__DROIDHUB_REFRESH_ALL_SETTINGS_UI")
 	if type(refreshAllSettings) == "function" then
 		task.defer(refreshAllSettings)
 	end
 end
-rawset(_G, "__TUFFHUB_SELECT_SIDEBAR_ITEM", selectMenuItem)
+rawset(_G, "__DROIDHUB_SELECT_SIDEBAR_ITEM", selectMenuItem)
 local function createSidebarItem(
 	name,
 	order,
@@ -6361,7 +6630,7 @@ local function createSidebarItem(
 			1,
 			0,
 			0,
-			MENU_ITEM_HEIGHT
+			UI.MENU_ITEM_HEIGHT
 		)
 	row.BackgroundTransparency = 1
 	row.BorderSizePixel = 0
@@ -6381,10 +6650,10 @@ local function createSidebarItem(
 		)
 	button.Size = U2O(
 			FIXED_TAB_HIGHLIGHT_WIDTH,
-			MENU_ITEM_HEIGHT
+			UI.MENU_ITEM_HEIGHT
 		)
-	button.BackgroundColor3 = SEARCH_BACKGROUND
-	button.BackgroundTransparency = MENU_NORMAL_TRANSPARENCY
+	button.BackgroundColor3 = UI.SEARCH_BACKGROUND
+	button.BackgroundTransparency = UI.MENU_NORMAL_TRANSPARENCY
 	button.BorderSizePixel = 0
 	button.AutoButtonColor = false
 	button.Text = ""
@@ -6393,7 +6662,7 @@ local function createSidebarItem(
 	button.Parent = row
 	ensureCorner(
 		button,
-		MENU_CORNER_RADIUS
+		UI.MENU_CORNER_RADIUS
 	)
 	local activeLine = New("Frame")
 	activeLine.Name = "ActiveLine"
@@ -6408,10 +6677,10 @@ local function createSidebarItem(
 			0
 		)
 	activeLine.Size = U2O(
-			MENU_ACTIVE_LINE_WIDTH,
-			MENU_ACTIVE_LINE_HEIGHT
+			UI.MENU_ACTIVE_LINE_WIDTH,
+			UI.MENU_ACTIVE_LINE_HEIGHT
 		)
-	activeLine.BackgroundColor3 = PINK
+	activeLine.BackgroundColor3 = UI.PINK
 	activeLine.BackgroundTransparency = 1
 	activeLine.BorderSizePixel = 0
 	activeLine.ZIndex = 45003
@@ -6421,7 +6690,7 @@ local function createSidebarItem(
 		math.max(
 			1,
 			math.floor(
-				MENU_ACTIVE_LINE_HEIGHT * 0.5
+				UI.MENU_ACTIVE_LINE_HEIGHT * 0.5
 			)
 		)
 	)
@@ -6438,18 +6707,18 @@ local function createSidebarItem(
 			)
 		icon.Position = U2(
 				0,
-				MENU_ICON_X,
+				UI.MENU_ICON_X,
 				0.5,
 				0
 			)
 		icon.Size = U2O(
-				MENU_ICON_SIZE,
-				MENU_ICON_SIZE
+				UI.MENU_ICON_SIZE,
+				UI.MENU_ICON_SIZE
 			)
 		icon.BackgroundTransparency = 1
 		icon.BorderSizePixel = 0
 		icon.Image = iconAsset
-		icon.ImageColor3 = PINK
+		icon.ImageColor3 = UI.PINK
 		icon.ImageTransparency = 0.58
 		icon.ScaleType = Enum.ScaleType.Fit
 		icon.ZIndex = 45003
@@ -6463,22 +6732,22 @@ local function createSidebarItem(
 			)
 		icon.Position = U2(
 				0,
-				MENU_ICON_X,
+				UI.MENU_ICON_X,
 				0.5,
 				0
 			)
 		icon.Size = U2O(
-				MENU_ICON_SIZE,
-				MENU_ICON_SIZE
+				UI.MENU_ICON_SIZE,
+				UI.MENU_ICON_SIZE
 			)
 		icon.BackgroundTransparency = 1
 		icon.BorderSizePixel = 0
 		icon.Text = fallbackGlyph
 			or ""
-		icon.TextColor3 = PINK
+		icon.TextColor3 = UI.PINK
 		icon.TextTransparency = 0.58
 		setResponsiveTextSize(icon, 14)
-		icon.FontFace = MENU_FONT_FACE
+		icon.FontFace = UI.MENU_FONT_FACE
 		icon.TextXAlignment = Enum.TextXAlignment.Center
 		icon.TextYAlignment = Enum.TextYAlignment.Center
 		icon.ZIndex = 45003
@@ -6492,22 +6761,22 @@ local function createSidebarItem(
 		)
 	label.Position = U2(
 			0,
-			MENU_TEXT_X,
+			UI.MENU_TEXT_X,
 			0.5,
 			0
 		)
 	label.Size = U2(
 			1,
-			-(MENU_TEXT_X + 10),
+			-(UI.MENU_TEXT_X + 10),
 			1,
 			0
 		)
 	label.BackgroundTransparency = 1
 	label.BorderSizePixel = 0
 	label.Text = formatPanelTitle(TRACKED_TAB_NAME[name] or name, "sidebar")
-	label.TextColor3 = MENU_TEXT_IDLE
-	label.FontFace = MENU_FONT_SEMIBOLD_FACE
-	setResponsiveTextSize(label, MENU_TEXT_SIZE)
+	label.TextColor3 = UI.MENU_TEXT_IDLE
+	label.FontFace = UI.MENU_FONT_SEMIBOLD_FACE
+	setResponsiveTextSize(label, UI.MENU_TEXT_SIZE)
 	label.TextXAlignment = Enum.TextXAlignment.Left
 	label.TextYAlignment = Enum.TextYAlignment.Center
 	label.ZIndex = 45002
@@ -6620,7 +6889,7 @@ do
 	banner.BorderSizePixel = 0
 	banner.Text = "SIMPLE AUTO FARM MODE"
 	banner.TextColor3 = RGB(255, 74, 74)
-	banner.FontFace = MENU_FONT_BOLD_FACE
+	banner.FontFace = UI.MENU_FONT_BOLD_FACE
 	banner.TextScaled = true
 	banner.TextWrapped = false
 	banner.TextTruncate = Enum.TextTruncate.None
@@ -6635,11 +6904,11 @@ do
 	textConstraint.Parent = banner
 	autoServerHopState.RuntimeSimpleAutofarmModeBanner = banner
 	autoServerHopState.RuntimeSimpleAutofarmModeBannerTextConstraint = textConstraint
-	rawset(_G, "__TUFFHUB_REFRESH_SIMPLE_AUTOFARM_MODE_BANNER", function()
+	rawset(_G, "__DROIDHUB_REFRESH_SIMPLE_AUTOFARM_MODE_BANNER", function()
 		if not banner.Parent then return end
 		banner.Visible = autoServerHopState.Utility.SimpleAutofarmEnabled == true
 		textConstraint.MaxTextSize = isPhonePanelLayout() and 18 or 22
-		local sync = rawget(_G, "__TUFFHUB_SYNC_RIGHT_PANEL_GEOMETRY")
+		local sync = rawget(_G, "__DROIDHUB_SYNC_RIGHT_PANEL_GEOMETRY")
 		if type(sync) == "function" then pcall(sync, true) end
 	end)
 end
@@ -6734,7 +7003,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		.. tostring(
 			panelIndex
 		)
-	panel.BackgroundColor3 = PANEL_BACKGROUND
+	panel.BackgroundColor3 = UI.PANEL_BACKGROUND
 	panel.BackgroundTransparency = 0
 	panel.BorderSizePixel = 0
 	panel.ClipsDescendants = true
@@ -6746,13 +7015,13 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 	panel.Parent = rightContent
 	ensureCorner(
 		panel,
-		PANEL_CORNER_RADIUS
+		UI.PANEL_CORNER_RADIUS
 	)
 	local panelStroke = New("UIStroke")
 	panelStroke.Name = "PanelBorder"
-	panelStroke.Color = LINE_COLOR
-	panelStroke.Thickness = LINE_THICKNESS
-	panelStroke.Transparency = LINE_TRANSPARENCY
+	panelStroke.Color = UI.LINE_COLOR
+	panelStroke.Thickness = UI.LINE_THICKNESS
+	panelStroke.Transparency = UI.LINE_TRANSPARENCY
 	panelStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 	panelStroke.LineJoinMode = Enum.LineJoinMode.Round
 	panelStroke.Parent = panel
@@ -6762,7 +7031,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			1,
 			0,
 			0,
-			PANEL_HEADER_HEIGHT
+			UI.PANEL_HEADER_HEIGHT
 		)
 	header.BackgroundTransparency = 1
 	header.BorderSizePixel = 0
@@ -6772,7 +7041,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 	header.Parent = panel
 	local headerTitle = New("TextLabel")
 	headerTitle.Name = "Title"
-	headerTitle:SetAttribute("TuffHubAutoGrowText", true)
+	headerTitle:SetAttribute("DroidHubAutoGrowText", true)
 	headerTitle.AnchorPoint = V2(
 			0,
 			0
@@ -6790,8 +7059,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 	headerTitle.BackgroundTransparency = 1
 	headerTitle.BorderSizePixel = 0
 	headerTitle.Text = formatPanelTitle(panelTitle)
-	headerTitle.TextColor3 = MENU_TEXT_SELECTED
-	headerTitle.FontFace = PANEL_FONT_FACE
+	headerTitle.TextColor3 = UI.MENU_TEXT_SELECTED
+	headerTitle.FontFace = UI.PANEL_FONT_FACE
 	setResponsiveTextSize(headerTitle, 14)
 	headerTitle.TextScaled = false
 	headerTitle.TextWrapped = true
@@ -6815,7 +7084,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				1,
 				px(-18),
 				0,
-				PANEL_HEADER_HEIGHT * 0.5
+				UI.PANEL_HEADER_HEIGHT * 0.5
 			)
 		chevron.Size = U2O(
 				px(18),
@@ -6824,7 +7093,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		chevron.BackgroundTransparency = 1
 		chevron.BorderSizePixel = 0
 		chevron.Image = autoServerHopState.RuntimePanelChevronAsset
-		chevron.ImageColor3 = PANEL_CHEVRON_COLOR
+		chevron.ImageColor3 = UI.PANEL_CHEVRON_COLOR
 		chevron.ImageTransparency = 0
 		chevron.ScaleType = Enum.ScaleType.Fit
 		chevron.Rotation = 0
@@ -6841,7 +7110,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				1,
 				px(-18),
 				0,
-				PANEL_HEADER_HEIGHT * 0.5
+				UI.PANEL_HEADER_HEIGHT * 0.5
 			)
 		chevron.Size = U2O(
 				px(18),
@@ -6850,9 +7119,9 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		chevron.BackgroundTransparency = 1
 		chevron.BorderSizePixel = 0
 		chevron.Text = "⌄"
-		chevron.TextColor3 = PANEL_CHEVRON_COLOR
+		chevron.TextColor3 = UI.PANEL_CHEVRON_COLOR
 		setResponsiveTextSize(chevron, 14)
-		chevron.FontFace = MENU_FONT_FACE
+		chevron.FontFace = UI.MENU_FONT_FACE
 		chevron.TextXAlignment = Enum.TextXAlignment.Center
 		chevron.TextYAlignment = Enum.TextYAlignment.Center
 		chevron.Rotation = 0
@@ -6863,16 +7132,16 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 	headerDivider.Name = "HeaderDivider"
 	headerDivider.Position = U2O(
 			0,
-			PANEL_HEADER_HEIGHT
+			UI.PANEL_HEADER_HEIGHT
 		)
 	headerDivider.Size = U2(
 			1,
 			0,
 			0,
-			LINE_THICKNESS
+			UI.LINE_THICKNESS
 		)
-	headerDivider.BackgroundColor3 = LINE_COLOR
-	headerDivider.BackgroundTransparency = LINE_TRANSPARENCY
+	headerDivider.BackgroundColor3 = UI.LINE_COLOR
+	headerDivider.BackgroundTransparency = UI.LINE_TRANSPARENCY
 	headerDivider.BorderSizePixel = 0
 	headerDivider.ZIndex = 45011
 	headerDivider.Parent = panel
@@ -6880,14 +7149,14 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 	body.Name = "Body"
 	body.Position = U2O(
 			0,
-			PANEL_HEADER_HEIGHT
-				+ LINE_THICKNESS
+			UI.PANEL_HEADER_HEIGHT
+				+ UI.LINE_THICKNESS
 		)
 	body.Size = U2(
 			1,
 			0,
 			1,
-			-(PANEL_HEADER_HEIGHT + LINE_THICKNESS)
+			-(UI.PANEL_HEADER_HEIGHT + UI.LINE_THICKNESS)
 		)
 	body.BackgroundTransparency = 1
 	body.BorderSizePixel = 0
@@ -6951,8 +7220,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 	end
 	panel.Destroying:Connect(stopSliderDrag)
 	local function setToggleVisual(toggleTrack, toggleKnob, featureLabel, enabled)
-		toggleTrack.BackgroundColor3 = enabled and PINK or FEATURE_OFF_COLOR
-		featureLabel.TextColor3 = enabled and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR
+		toggleTrack.BackgroundColor3 = enabled and UI.PINK or UI.FEATURE_OFF_COLOR
+		featureLabel.TextColor3 = enabled and UI.MENU_TEXT_SELECTED or UI.MUTED_TEXT_COLOR
 		toggleKnob.Position = enabled
 			and U2(0, toggleWidth - toggleHeight + knobInset, 0, knobInset)
 			or U2O(knobInset, knobInset)
@@ -6968,7 +7237,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 	end
 	local function fitWholeDropdownNames(button, names, placeholder)
 		local hasSelection = type(names) == "table" and #names > 0
-		button.TextColor3 = hasSelection and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR
+		button.TextColor3 = hasSelection and UI.MENU_TEXT_SELECTED or UI.MUTED_TEXT_COLOR
 		if not hasSelection then
 			button.Text = placeholder or "Select"
 			return
@@ -6993,7 +7262,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			local width = TextService:GetTextSize(
 				value,
 				button.TextSize,
-				MENU_FONT,
+				UI.MENU_FONT,
 				Vector2.new(10000, button.TextSize + px(8))
 			).X
 			dropdownTextWidthCache[key] = width
@@ -7038,7 +7307,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		end
 		return total
 	end
-	local currentHeaderHeight = PANEL_HEADER_HEIGHT
+	local currentHeaderHeight = UI.PANEL_HEADER_HEIGHT
 	local function syncPanelHeaderHeight()
 		local panelWidth = panelData and tonumber(panelData.LayoutWidth) or panel.AbsoluteSize.X
 		if not panelWidth or panelWidth <= 1 then return end
@@ -7046,10 +7315,10 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		local measured = TextService:GetTextSize(
 			headerTitle.Text,
 			headerTitle.TextSize,
-			MENU_FONT,
+			UI.MENU_FONT,
 			Vector2.new(available, 10000)
 		)
-		local desired = math.max(PANEL_HEADER_HEIGHT, math.ceil(measured.Y) + px(20))
+		local desired = math.max(UI.PANEL_HEADER_HEIGHT, math.ceil(measured.Y) + px(20))
 		if desired == currentHeaderHeight then return end
 		currentHeaderHeight = desired
 		header.Size = U2(1, 0, 0, currentHeaderHeight)
@@ -7057,8 +7326,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		headerTitle.Size = U2(1, px(-62), 1, px(-20))
 		chevron.Position = U2(1, px(-18), 0, currentHeaderHeight * 0.5)
 		headerDivider.Position = U2O(0, currentHeaderHeight)
-		body.Position = U2O(0, currentHeaderHeight + LINE_THICKNESS)
-		body.Size = U2(1, 0, 1, -(currentHeaderHeight + LINE_THICKNESS))
+		body.Position = U2O(0, currentHeaderHeight + UI.LINE_THICKNESS)
+		body.Size = U2(1, 0, 1, -(currentHeaderHeight + UI.LINE_THICKNESS))
 		if panelData then panelData.HeaderHeight = currentHeaderHeight end
 	end
 	local function relayoutRows(skipPanelRefresh)
@@ -7181,7 +7450,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			end
 		end
 
-		local expandedHeight = currentHeaderHeight + LINE_THICKNESS
+		local expandedHeight = currentHeaderHeight + UI.LINE_THICKNESS
 			+ featureTopPadding + featureBottomPadding
 			+ math.max(0, y - featureTopPadding - featureRowGap)
 		if panelData then panelData.ExpandedHeight = expandedHeight end
@@ -7337,7 +7606,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			math.clamp(rightContent.CanvasPosition.Y + needed, 0, maxCanvasY)
 		)
 	end
-	rawset(_G, "__TUFFHUB_ENSURE_DROPDOWN_ROOM_BELOW", ensureDropdownRoomBelow)
+	rawset(_G, "__DROIDHUB_ENSURE_DROPDOWN_ROOM_BELOW", ensureDropdownRoomBelow)
 	local function attachDropdownOutsideClose(popup, button, overlay)
 		local openedAt = os.clock()
 		local outsideConnection
@@ -7382,7 +7651,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		overlay.Parent = screenGui
 		local popup = New("ScrollingFrame")
 		popup.Name = "PanelDropdown"
-		popup.BackgroundColor3 = PANEL_BACKGROUND
+		popup.AnchorPoint = V2(0, 0)
+		popup.BackgroundColor3 = UI.PANEL_BACKGROUND
 		popup.BorderSizePixel = 0
 		popup.ClipsDescendants = true
 		popup.Active = true
@@ -7394,9 +7664,9 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		popup.Parent = overlay
 		ensureCorner(popup, px(7))
 		local stroke = New("UIStroke")
-		stroke.Color = LINE_COLOR
-		stroke.Thickness = LINE_THICKNESS
-		stroke.Transparency = LINE_TRANSPARENCY
+		stroke.Color = UI.LINE_COLOR
+		stroke.Thickness = UI.LINE_THICKNESS
+		stroke.Transparency = UI.LINE_TRANSPARENCY
 		stroke.Parent = popup
 		local function syncPosition()
 			if not popup.Parent or not button.Parent or not overlay.Parent then return end
@@ -7415,14 +7685,14 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		search.Name = "Search"
 		search.Position = U2O(px(4), px(4))
 		search.Size = U2(1, -px(8), 0, px(22))
-		search.BackgroundColor3 = FEATURE_OFF_COLOR
+		search.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 		search.BorderSizePixel = 0
 		search.ClearTextOnFocus = false
 		search.PlaceholderText = "Search"
-		search.PlaceholderColor3 = MUTED_TEXT_COLOR
+		search.PlaceholderColor3 = UI.MUTED_TEXT_COLOR
 		search.Text = ""
-		search.TextColor3 = MENU_TEXT_SELECTED
-		search.FontFace = MENU_FONT_FACE
+		search.TextColor3 = UI.MENU_TEXT_SELECTED
+		search.FontFace = UI.MENU_FONT_FACE
 		setResponsiveTextSize(search, 13)
 		search.TextXAlignment = Enum.TextXAlignment.Left
 		search.TextTruncate = Enum.TextTruncate.None
@@ -7430,7 +7700,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		search.ZIndex = 60002
 		search.Parent = popup
 		ensureCorner(search, px(5))
-		rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(search)
+		rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(search)
 		local optionRows = {}
 		local function selectedLabels()
 			local names = {}
@@ -7446,11 +7716,11 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			local label = tostring(labelProvider(option))
 			local row = New("TextButton")
 			row.Size = U2(1, -px(8), 0, px(23))
-			row.BackgroundColor3 = FEATURE_OFF_COLOR
+			row.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 			row.BorderSizePixel = 0
 			row.AutoButtonColor = false
 			row.Text = label
-			row.FontFace = MENU_FONT_FACE
+			row.FontFace = UI.MENU_FONT_FACE
 			setResponsiveTextSize(row, 13)
 			row.TextTruncate = Enum.TextTruncate.None
 			row.ClipsDescendants = true
@@ -7461,7 +7731,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			local function syncVisual()
 				local selected = selection[option] == true
 				row.BackgroundTransparency = selected and 0 or 1
-				row.TextColor3 = selected and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR
+				row.TextColor3 = selected and UI.MENU_TEXT_SELECTED or UI.MUTED_TEXT_COLOR
 			end
 			syncVisual()
 			row.MouseButton1Click:Connect(function()
@@ -7511,8 +7781,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		-- relayoutRows() positions this from the actual bounds of both neighboring
 		-- features. Keep every feature separator inset and visually identical.
 		featureDivider.Position = U2(0.5, 0, 1, featureRowGap * 0.5)
-		featureDivider.Size = U2(1, 0, 0, LINE_THICKNESS)
-		featureDivider.BackgroundColor3 = LINE_COLOR
+		featureDivider.Size = U2(1, 0, 0, UI.LINE_THICKNESS)
+		featureDivider.BackgroundColor3 = UI.LINE_COLOR
 		featureDivider.BackgroundTransparency = 0.52
 		featureDivider.BorderSizePixel = 0
 		featureDivider.Active = false
@@ -7680,7 +7950,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		local dynamicBaseHeight
 		local featureLabel = New("TextLabel")
 		featureLabel.Name = "Label"
-		featureLabel:SetAttribute("TuffHubAutoGrowText", true)
+		featureLabel:SetAttribute("DroidHubAutoGrowText", true)
 		featureLabel.AnchorPoint = V2(0, 0.5)
 		featureLabel.Position = U2(0, childTextIndent, 0, featureRowHeight * 0.5)
 		featureLabel.Size = U2(
@@ -7700,10 +7970,10 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			or ((isDropdownOnly or isAutoCancelFilterOnly or compactUtilityText)
 				and "" or capitalizeUiWords(definition and definition.Label or "Feature"))
 		featureLabel.FontFace = isInfoNote
-			and MENU_FONT_REGULAR_FACE
+			and UI.MENU_FONT_REGULAR_FACE
 			or (childIndentLevel <= 0
-				and MENU_FONT_SEMIBOLD_FACE
-				or (childIndentLevel == 1 and MENU_FONT_FACE or MENU_FONT_REGULAR_FACE))
+				and UI.MENU_FONT_SEMIBOLD_FACE
+				or (childIndentLevel == 1 and UI.MENU_FONT_FACE or UI.MENU_FONT_REGULAR_FACE))
 		setResponsiveTextSize(featureLabel, isInfoNote and 12 or ((utilityExclusiveGroup or isDependentText) and 13 or 14))
 		featureLabel.TextXAlignment = Enum.TextXAlignment.Left
 		featureLabel.TextYAlignment = Enum.TextYAlignment.Center
@@ -7718,7 +7988,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			featureLabel.TextColor3 = RGB(255, 74, 74)
 			featureLabel.TextXAlignment = Enum.TextXAlignment.Left
 			featureRow.Visible = false
-			rawset(_G, "__TUFFHUB_SHOW_SIMPLE_AUTOFARM_WARNING", function()
+			rawset(_G, "__DROIDHUB_SHOW_SIMPLE_AUTOFARM_WARNING", function()
 				if not featureRow.Parent then return end
 				local expires = os.clock() + 5
 				autoServerHopState.RuntimeSimpleAutofarmWarningUntil = expires
@@ -7736,30 +8006,30 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		elseif isInfoNote then
 			featureLabel.Size = U2(1, 0, 0, px(16))
 			featureLabel.Text = tostring(definition.InfoNoteText or "")
-			featureLabel.TextColor3 = MUTED_TEXT_COLOR
+			featureLabel.TextColor3 = UI.MUTED_TEXT_COLOR
 			featureLabel.TextXAlignment = Enum.TextXAlignment.Left
 			featureLabel.TextYAlignment = Enum.TextYAlignment.Center
 		elseif isActionButton then
 			featureLabel.Visible = false
 			actionButton = New("TextButton")
 			actionButton.Name = "ActionButton"
-			actionButton:SetAttribute("TuffHubStandardButtonFeedback", true)
+			actionButton:SetAttribute("DroidHubStandardButtonFeedback", true)
 			actionButton.AnchorPoint = V2(0.5, 0.5)
 			actionButton.Position = U2S(0.5, 0.5)
 			actionButton.Size = U2(1, 0, 0, px(28))
-			actionButton.BackgroundColor3 = FEATURE_OFF_COLOR
+			actionButton.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 			actionButton.BorderSizePixel = 0
 			actionButton.AutoButtonColor = false
 			actionButton.Text = capitalizeUiWords(definition.Label or "Action")
-			actionButton.TextColor3 = MENU_TEXT_SELECTED
-			actionButton.FontFace = MENU_FONT_FACE
+			actionButton.TextColor3 = UI.MENU_TEXT_SELECTED
+			actionButton.FontFace = UI.MENU_FONT_FACE
 			setResponsiveTextSize(actionButton, 13)
 			actionButton.TextTruncate = Enum.TextTruncate.None
 			actionButton.TextWrapped = true
 			actionButton.ZIndex = 45014
 			actionButton.Parent = featureRow
 			ensureCorner(actionButton, px(6))
-			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(actionButton)
+			rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(actionButton)
 			actionButton.MouseButton1Click:Connect(function()
 				if (definition.Action == "ManualServerHop" or definition.Action == "ManualKickMinigame")
 					and autoServerHopState.Utility.PauseScript == true
@@ -7767,12 +8037,12 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					return
 				end
 				if definition.Action == "ResetSimpleAutofarm" then
-					local reset = rawget(_G, "__TUFFHUB_RESET_SIMPLE_AUTOFARM")
+					local reset = rawget(_G, "__DROIDHUB_RESET_SIMPLE_AUTOFARM")
 					if type(reset) == "function" then pcall(reset) end
 				elseif definition.Action == "UndoAllSettings" then
-					local reset = rawget(_G, "__TUFFHUB_CLEAR_ALL_SETTINGS_STATE")
+					local reset = rawget(_G, "__DROIDHUB_CLEAR_ALL_SETTINGS_STATE")
 					if type(reset) == "function" then pcall(reset) end
-					local refresh = rawget(_G, "__TUFFHUB_REFRESH_ALL_SETTINGS_UI")
+					local refresh = rawget(_G, "__DROIDHUB_REFRESH_ALL_SETTINGS_UI")
 					if type(refresh) == "function" then pcall(refresh) end
 				elseif definition.Action == "ManualServerHop" then
 					local request = autoServerHopState.RequestManualHop
@@ -7828,7 +8098,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			local oneLineWidth = TextService:GetTextSize(
 				currentText,
 				currentTextSize,
-				MENU_FONT,
+				UI.MENU_FONT,
 				Vector2.new(10000, currentTextSize + px(8))
 			).X
 			if oneLineWidth <= width then
@@ -7841,7 +8111,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					TextService:GetTextSize(
 						currentText,
 						currentTextSize,
-						MENU_FONT,
+						UI.MENU_FONT,
 						Vector2.new(width, 10000)
 					).Y
 				)
@@ -7877,11 +8147,11 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			and not isUtilityMultiDropdown
 			and not isSpecificCriteriaManager
 		ensureCorner(toggleTrack, toggleHeight * 0.5)
-		rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(toggleTrack)
+		rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(toggleTrack)
 		local toggleKnob = New("Frame")
 		toggleKnob.Name = "ToggleKnob"
 		toggleKnob.Size = U2O(toggleHeight - knobInset * 2, toggleHeight - knobInset * 2)
-		toggleKnob.BackgroundColor3 = MENU_TEXT_SELECTED
+		toggleKnob.BackgroundColor3 = UI.MENU_TEXT_SELECTED
 		toggleKnob.BorderSizePixel = 0
 		toggleKnob.ZIndex = 45014
 		toggleKnob.Parent = toggleTrack
@@ -7976,7 +8246,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 							TextService:GetTextSize(
 								customAddLabel.Text,
 								customAddLabel.TextSize,
-								MENU_FONT,
+								UI.MENU_FONT,
 								Vector2.new(math.max(1, addLabelWidth), 10000)
 							).Y
 						)
@@ -8002,7 +8272,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				local inputBox = New("TextBox")
 				inputBox.Position = U2O(0, y)
 				inputBox.Size = U2(1, 0, 0, px(26))
-				inputBox.BackgroundColor3 = FEATURE_OFF_COLOR
+				inputBox.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 				inputBox.BorderSizePixel = 0
 				inputBox.Active = true
 				inputBox.Selectable = true
@@ -8014,25 +8284,25 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				inputBox.TextEditable = true
 				inputBox.Text = tostring(initialValue or "")
 				inputBox.PlaceholderText = placeholder
-				inputBox.PlaceholderColor3 = MUTED_TEXT_COLOR
+				inputBox.PlaceholderColor3 = UI.MUTED_TEXT_COLOR
 				inputBox.TextColor3 = inputBox.Text ~= ""
-					and MENU_TEXT_SELECTED
-					or MUTED_TEXT_COLOR
-				inputBox.FontFace = MENU_FONT_FACE
+					and UI.MENU_TEXT_SELECTED
+					or UI.MUTED_TEXT_COLOR
+				inputBox.FontFace = UI.MENU_FONT_FACE
 				setResponsiveTextSize(inputBox, 14)
 				inputBox.TextXAlignment = Enum.TextXAlignment.Left
 				inputBox.ZIndex = 45015
 				inputBox.Parent = secondaryContainer
 				ensureCorner(inputBox, px(6))
-				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(inputBox)
+				rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(inputBox)
 				local padding = New("UIPadding")
 				padding.PaddingLeft = UDim.new(0, px(9))
 				padding.PaddingRight = UDim.new(0, px(9))
 				padding.Parent = inputBox
 				inputBox:GetPropertyChangedSignal("Text"):Connect(function()
 					inputBox.TextColor3 = inputBox.Text ~= ""
-						and MENU_TEXT_SELECTED
-						or MUTED_TEXT_COLOR
+						and UI.MENU_TEXT_SELECTED
+						or UI.MUTED_TEXT_COLOR
 				end)
 				inputBox.FocusLost:Connect(function()
 					onCommit(inputBox.Text)
@@ -8077,20 +8347,20 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					y += px(31)
 					local clearButton = New("TextButton")
 					clearButton.Name = "ClearCustomMessage"
-					clearButton:SetAttribute("TuffHubStandardButtonFeedback", true)
+					clearButton:SetAttribute("DroidHubStandardButtonFeedback", true)
 					clearButton.Position = U2O(0, y)
 					clearButton.Size = U2(1, 0, 0, px(24))
-					clearButton.BackgroundColor3 = FEATURE_OFF_COLOR
+					clearButton.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 					clearButton.BorderSizePixel = 0
 					clearButton.AutoButtonColor = false
 					clearButton.Text = "Clear Trade Chat Reply"
-					clearButton.TextColor3 = MENU_TEXT_SELECTED
-					clearButton.FontFace = MENU_FONT_FACE
+					clearButton.TextColor3 = UI.MENU_TEXT_SELECTED
+					clearButton.FontFace = UI.MENU_FONT_FACE
 					setResponsiveTextSize(clearButton, 13)
 					clearButton.ZIndex = 45015
 					clearButton.Parent = secondaryContainer
 					ensureCorner(clearButton, px(5))
-					rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(clearButton)
+					rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(clearButton)
 					clearButton.MouseButton1Click:Connect(function()
 						entry.LookFor = ""
 						entry.Reply = ""
@@ -8100,20 +8370,20 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					if entryIndex > 1 then
 						local removeButton = New("TextButton")
 						removeButton.Name = "RemoveCustomMessage"
-						removeButton:SetAttribute("TuffHubStandardButtonFeedback", true)
+						removeButton:SetAttribute("DroidHubStandardButtonFeedback", true)
 						removeButton.Position = U2O(0, y)
 						removeButton.Size = U2(1, 0, 0, px(24))
-						removeButton.BackgroundColor3 = FEATURE_OFF_COLOR
+						removeButton.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 						removeButton.BorderSizePixel = 0
 						removeButton.AutoButtonColor = false
 						removeButton.Text = "Remove Trade Chat Reply"
-						removeButton.TextColor3 = MUTED_TEXT_COLOR
-						removeButton.FontFace = MENU_FONT_FACE
+						removeButton.TextColor3 = UI.MUTED_TEXT_COLOR
+						removeButton.FontFace = UI.MENU_FONT_FACE
 						setResponsiveTextSize(removeButton, 13)
 						removeButton.ZIndex = 45015
 						removeButton.Parent = secondaryContainer
 						ensureCorner(removeButton, px(5))
-						rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(removeButton)
+						rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(removeButton)
 						removeButton.MouseButton1Click:Connect(function()
 							table.remove(entries, entryIndex)
 							task.defer(rebuildCustomReplies)
@@ -8135,24 +8405,24 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				addRow.ZIndex = 45013
 				addRow.Parent = secondaryContainer
 				local addButton = New("TextButton")
-				addButton:SetAttribute("TuffHubStandardButtonFeedback", true)
+				addButton:SetAttribute("DroidHubStandardButtonFeedback", true)
 				customAddLabel = addButton
 				addButton.AnchorPoint = V2(0, 0.5)
 				addButton.Position = U2(0, 0, 0.5, 0)
 				addButton.Size = U2(1, 0, 0, px(26))
-				addButton.BackgroundColor3 = FEATURE_OFF_COLOR
+				addButton.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 				addButton.BorderSizePixel = 0
 				addButton.AutoButtonColor = false
 				addButton.Text = "Add Another Custom Message"
-				addButton.TextColor3 = MENU_TEXT_SELECTED
-				addButton.FontFace = MENU_FONT_FACE
+				addButton.TextColor3 = UI.MENU_TEXT_SELECTED
+				addButton.FontFace = UI.MENU_FONT_FACE
 				setResponsiveTextSize(addButton, 14)
 				addButton.TextXAlignment = Enum.TextXAlignment.Center
 				addButton.TextYAlignment = Enum.TextYAlignment.Center
 				addButton.ZIndex = 45014
 				addButton.Parent = addRow
 				ensureCorner(addButton, px(6))
-				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(addButton)
+				rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(addButton)
 				addButton.MouseButton1Click:Connect(function()
 					entries[#entries + 1] = {LookFor = "", Reply = ""}
 					task.defer(rebuildCustomReplies)
@@ -8219,8 +8489,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				label.Size = U2(1, -(toggleWidth + componentLabelGap), 1, 0)
 				label.BackgroundTransparency = 1
 				label.Text = capitalizeUiWords(text)
-				label.TextColor3 = getter() and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR
-				label.FontFace = MENU_FONT_REGULAR_FACE
+				label.TextColor3 = getter() and UI.MENU_TEXT_SELECTED or UI.MUTED_TEXT_COLOR
+				label.FontFace = UI.MENU_FONT_REGULAR_FACE
 				setResponsiveTextSize(label, 14)
 				label.TextXAlignment = Enum.TextXAlignment.Left
 				label.TextTruncate = Enum.TextTruncate.None
@@ -8230,18 +8500,18 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				track.AnchorPoint = V2(1, 0.5)
 				track.Position = U2(1, 0, 0.5, 0)
 				track.Size = U2O(toggleWidth, toggleHeight)
-				track.BackgroundColor3 = getter() and PINK or FEATURE_OFF_COLOR
+				track.BackgroundColor3 = getter() and UI.PINK or UI.FEATURE_OFF_COLOR
 				track.BorderSizePixel = 0
 				track.AutoButtonColor = false
 				track.Text = ""
 				track.ZIndex = 45015
 				track.Parent = row
 				ensureCorner(track, toggleHeight * 0.5)
-				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(track)
+				rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(track)
 				local knob = New("Frame")
 				knob.Size = U2O(toggleHeight - knobInset * 2, toggleHeight - knobInset * 2)
 				knob.Position = getter() and U2(0, toggleWidth - toggleHeight + knobInset, 0, knobInset) or U2O(knobInset, knobInset)
-				knob.BackgroundColor3 = MENU_TEXT_SELECTED
+				knob.BackgroundColor3 = UI.MENU_TEXT_SELECTED
 				knob.BorderSizePixel = 0
 				knob.ZIndex = 45016
 				knob.Parent = track
@@ -8264,8 +8534,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				label.Size = U2(1, -(dropdownWidth + componentLabelGap), 1, 0)
 				label.BackgroundTransparency = 1
 				label.Text = capitalizeUiWords(labelText)
-				label.TextColor3 = MENU_TEXT_SELECTED
-				label.FontFace = MENU_FONT_REGULAR_FACE
+				label.TextColor3 = UI.MENU_TEXT_SELECTED
+				label.FontFace = UI.MENU_FONT_REGULAR_FACE
 				setResponsiveTextSize(label, 14)
 				label.TextXAlignment = Enum.TextXAlignment.Left
 				label.TextTruncate = Enum.TextTruncate.None
@@ -8275,19 +8545,19 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				button.AnchorPoint = V2(1, 0.5)
 				button.Position = U2(1, 0, 0.5, 0)
 				button.Size = U2O(dropdownWidth, px(24))
-				button.BackgroundColor3 = FEATURE_OFF_COLOR
+				button.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 				button.BorderSizePixel = 0
 				button.AutoButtonColor = false
 				button.Text = buttonText or "Select"
-				button.TextColor3 = MENU_TEXT_SELECTED
-				button.FontFace = MENU_FONT_REGULAR_FACE
+				button.TextColor3 = UI.MENU_TEXT_SELECTED
+				button.FontFace = UI.MENU_FONT_REGULAR_FACE
 				setResponsiveTextSize(button, 13)
 				button.TextTruncate = Enum.TextTruncate.None
 				button.ClipsDescendants = true
 				button.ZIndex = 45015
 				button.Parent = row
 				ensureCorner(button, px(6))
-				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(button)
+				rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(button)
 				return button
 			end
 			local function makeSlider(labelText, y, initial, minValue, maxValue, commit)
@@ -8301,8 +8571,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				label.Size = U2(1, -amountValueWidth - componentLabelGap, 0, px(15))
 				label.BackgroundTransparency = 1
 				label.Text = capitalizeUiWords(labelText)
-				label.TextColor3 = MENU_TEXT_SELECTED
-				label.FontFace = MENU_FONT_REGULAR_FACE
+				label.TextColor3 = UI.MENU_TEXT_SELECTED
+				label.FontFace = UI.MENU_FONT_REGULAR_FACE
 				setResponsiveTextSize(label, 14)
 				label.TextXAlignment = Enum.TextXAlignment.Left
 				label.TextTruncate = Enum.TextTruncate.None
@@ -8311,35 +8581,35 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				value.AnchorPoint = V2(1, 0)
 				value.Position = U2(1, 0, 0, 0)
 				value.Size = U2O(amountValueWidth, px(20))
-				value.BackgroundColor3 = FEATURE_OFF_COLOR
+				value.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 				value.BorderSizePixel = 0
 				value.ClearTextOnFocus = false
-				value.FontFace = MENU_FONT_REGULAR_FACE
-				value.TextColor3 = MENU_TEXT_SELECTED
+				value.FontFace = UI.MENU_FONT_REGULAR_FACE
+				value.TextColor3 = UI.MENU_TEXT_SELECTED
 				setResponsiveTextSize(value, 13)
 				value.TextTruncate = Enum.TextTruncate.None
 				value.ClipsDescendants = true
 				value.Parent = frame
 				ensureCorner(value, px(5))
-				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(value)
+				rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(value)
 				local track = New("Frame")
 				track.Position = U2O(0, px(27))
 				track.Size = U2(1, 0, 0, px(5))
-				track.BackgroundColor3 = FEATURE_OFF_COLOR
+				track.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 				track.BorderSizePixel = 0
 				track.Active = false
 				track.Parent = frame
 				ensureCorner(track, px(3))
-				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(track)
+				rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(track)
 				local fill = New("Frame")
-				fill.BackgroundColor3 = PINK
+				fill.BackgroundColor3 = UI.PINK
 				fill.BorderSizePixel = 0
 				fill.Parent = track
 				ensureCorner(fill, px(3))
 				local knob = New("Frame")
 				knob.AnchorPoint = V2(0.5, 0.5)
 				knob.Size = U2O(px(isPhonePanelLayout() and 21 or 11), px(isPhonePanelLayout() and 21 or 11))
-				knob.BackgroundColor3 = MENU_TEXT_SELECTED
+				knob.BackgroundColor3 = UI.MENU_TEXT_SELECTED
 				knob.BorderSizePixel = 0
 				knob.Active = true
 				knob.Parent = track
@@ -8486,33 +8756,33 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				if type(entries) ~= "table" or #entries == 0 then entries={blankTradeChatOffer()} stateEntry[entriesKey]=entries end
 				local y = px(5)
 				local function buttonBase(text, yPos)
-					local b=New("TextButton") b:SetAttribute("TuffHubStandardButtonFeedback", true) b.Position=U2O(0,yPos) b.Size=U2(1,0,0,px(25)) b.BackgroundColor3=FEATURE_OFF_COLOR b.BorderSizePixel=0 b.AutoButtonColor=false b.Text=capitalizeUiWords(text) b.TextColor3=MENU_TEXT_SELECTED b.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(b,13) b.TextTruncate=Enum.TextTruncate.None b.ClipsDescendants=true b.ZIndex=45015 b.Parent=secondaryContainer ensureCorner(b,px(5)) rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(b) return b
+					local b=New("TextButton") b:SetAttribute("DroidHubStandardButtonFeedback", true) b.Position=U2O(0,yPos) b.Size=U2(1,0,0,px(25)) b.BackgroundColor3=UI.FEATURE_OFF_COLOR b.BorderSizePixel=0 b.AutoButtonColor=false b.Text=capitalizeUiWords(text) b.TextColor3=UI.MENU_TEXT_SELECTED b.FontFace=UI.MENU_FONT_REGULAR_FACE setResponsiveTextSize(b,13) b.TextTruncate=Enum.TextTruncate.None b.ClipsDescendants=true b.ZIndex=45015 b.Parent=secondaryContainer ensureCorner(b,px(5)) rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(b) return b
 				end
 				local function textBoxBase(text, placeholder, yPos)
-					local box=New("TextBox") box.Position=U2O(0,yPos) box.Size=U2(1,0,0,px(26)) box.BackgroundColor3=FEATURE_OFF_COLOR box.BorderSizePixel=0 box.ClearTextOnFocus=false box.Text=tostring(text or "") box.PlaceholderText=capitalizeUiWords(placeholder or "") box.PlaceholderColor3=MUTED_TEXT_COLOR box.TextColor3=MENU_TEXT_SELECTED box.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(box,13) box.TextXAlignment=Enum.TextXAlignment.Left box.TextTruncate=Enum.TextTruncate.None box.ClipsDescendants=true box.ZIndex=45015 box.Parent=secondaryContainer ensureCorner(box,px(5)) rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(box)
+					local box=New("TextBox") box.Position=U2O(0,yPos) box.Size=U2(1,0,0,px(26)) box.BackgroundColor3=UI.FEATURE_OFF_COLOR box.BorderSizePixel=0 box.ClearTextOnFocus=false box.Text=tostring(text or "") box.PlaceholderText=capitalizeUiWords(placeholder or "") box.PlaceholderColor3=UI.MUTED_TEXT_COLOR box.TextColor3=UI.MENU_TEXT_SELECTED box.FontFace=UI.MENU_FONT_REGULAR_FACE setResponsiveTextSize(box,13) box.TextXAlignment=Enum.TextXAlignment.Left box.TextTruncate=Enum.TextTruncate.None box.ClipsDescendants=true box.ZIndex=45015 box.Parent=secondaryContainer ensureCorner(box,px(5)) rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(box)
 					local pad=New("UIPadding") pad.PaddingLeft=UDim.new(0,px(8)) pad.PaddingRight=UDim.new(0,px(8)) pad.Parent=box
 					return box
 				end
 				local function labeledDropdown(labelText, yPos)
 					local row=New("Frame") row.Position=U2O(0,yPos) row.Size=U2(1,0,0,featureRowHeight) row.BackgroundTransparency=1 row.ZIndex=45014 row.Parent=secondaryContainer
-					local label=New("TextLabel") label.AnchorPoint=V2(0,0.5) label.Position=U2(0,0,0.5,0) label.Size=U2(1,-(dropdownWidth+componentLabelGap),1,0) label.BackgroundTransparency=1 label.Text=capitalizeUiWords(labelText) label.TextColor3=MENU_TEXT_SELECTED label.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(label,14) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.None label.ClipsDescendants=true label.ZIndex=45015 label.Parent=row
-					local b=New("TextButton") b.AnchorPoint=V2(1,0.5) b.Position=U2(1,0,0.5,0) b.Size=U2O(dropdownWidth,px(24)) b.BackgroundColor3=FEATURE_OFF_COLOR b.BorderSizePixel=0 b.AutoButtonColor=false b.Text="Select" b.TextColor3=MUTED_TEXT_COLOR b.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(b,13) b.TextTruncate=Enum.TextTruncate.None b.ClipsDescendants=true b.ZIndex=45015 b.Parent=row ensureCorner(b,px(6)) rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(b)
+					local label=New("TextLabel") label.AnchorPoint=V2(0,0.5) label.Position=U2(0,0,0.5,0) label.Size=U2(1,-(dropdownWidth+componentLabelGap),1,0) label.BackgroundTransparency=1 label.Text=capitalizeUiWords(labelText) label.TextColor3=UI.MENU_TEXT_SELECTED label.FontFace=UI.MENU_FONT_REGULAR_FACE setResponsiveTextSize(label,14) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.None label.ClipsDescendants=true label.ZIndex=45015 label.Parent=row
+					local b=New("TextButton") b.AnchorPoint=V2(1,0.5) b.Position=U2(1,0,0.5,0) b.Size=U2O(dropdownWidth,px(24)) b.BackgroundColor3=UI.FEATURE_OFF_COLOR b.BorderSizePixel=0 b.AutoButtonColor=false b.Text="Select" b.TextColor3=UI.MUTED_TEXT_COLOR b.FontFace=UI.MENU_FONT_REGULAR_FACE setResponsiveTextSize(b,13) b.TextTruncate=Enum.TextTruncate.None b.ClipsDescendants=true b.ZIndex=45015 b.Parent=row ensureCorner(b,px(6)) rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(b)
 					return b
 				end
 				local function checkboxRow(text,yPos,getter,setter)
 					local row=New("Frame") row.Position=U2O(0,yPos) row.Size=U2(1,0,0,featureRowHeight) row.BackgroundTransparency=1 row.ZIndex=45014 row.Parent=secondaryContainer
-					local label=New("TextLabel") label.AnchorPoint=V2(0,0.5) label.Position=U2(0,0,0.5,0) label.Size=U2(1,-(toggleWidth+componentLabelGap),1,0) label.BackgroundTransparency=1 label.Text=capitalizeUiWords(text) label.TextColor3=getter() and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR label.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(label,14) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.None label.Parent=row
-					local track=New("TextButton") track.AnchorPoint=V2(1,0.5) track.Position=U2(1,0,0.5,0) track.Size=U2O(toggleWidth,toggleHeight) track.BackgroundColor3=getter() and PINK or FEATURE_OFF_COLOR track.BorderSizePixel=0 track.AutoButtonColor=false track.Text="" track.ZIndex=45015 track.Parent=row ensureCorner(track,toggleHeight*0.5) rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(track)
-					local knob=New("Frame") knob.Size=U2O(toggleHeight-knobInset*2,toggleHeight-knobInset*2) knob.Position=getter() and U2(0,toggleWidth-toggleHeight+knobInset,0,knobInset) or U2O(knobInset,knobInset) knob.BackgroundColor3=MENU_TEXT_SELECTED knob.BorderSizePixel=0 knob.Active=true knob.Parent=track ensureCorner(knob,(toggleHeight-knobInset*2)*0.5)
+					local label=New("TextLabel") label.AnchorPoint=V2(0,0.5) label.Position=U2(0,0,0.5,0) label.Size=U2(1,-(toggleWidth+componentLabelGap),1,0) label.BackgroundTransparency=1 label.Text=capitalizeUiWords(text) label.TextColor3=getter() and UI.MENU_TEXT_SELECTED or UI.MUTED_TEXT_COLOR label.FontFace=UI.MENU_FONT_REGULAR_FACE setResponsiveTextSize(label,14) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.None label.Parent=row
+					local track=New("TextButton") track.AnchorPoint=V2(1,0.5) track.Position=U2(1,0,0.5,0) track.Size=U2O(toggleWidth,toggleHeight) track.BackgroundColor3=getter() and UI.PINK or UI.FEATURE_OFF_COLOR track.BorderSizePixel=0 track.AutoButtonColor=false track.Text="" track.ZIndex=45015 track.Parent=row ensureCorner(track,toggleHeight*0.5) rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(track)
+					local knob=New("Frame") knob.Size=U2O(toggleHeight-knobInset*2,toggleHeight-knobInset*2) knob.Position=getter() and U2(0,toggleWidth-toggleHeight+knobInset,0,knobInset) or U2O(knobInset,knobInset) knob.BackgroundColor3=UI.MENU_TEXT_SELECTED knob.BorderSizePixel=0 knob.Active=true knob.Parent=track ensureCorner(knob,(toggleHeight-knobInset*2)*0.5)
 					track.MouseButton1Click:Connect(function() setter(not getter()) task.defer(rebuildTradeChatOffers) end)
 				end
 				local function makeOfferSlider(labelText, initialValue, minValue, maxValue, yPos, onCommit)
 					local frame=New("Frame") frame.Position=U2O(0,yPos) frame.Size=U2(1,0,0,amountControlsHeight) frame.BackgroundTransparency=1 frame.ZIndex=45015 frame.Parent=secondaryContainer
-					local label=New("TextLabel") label.Size=U2(1,-amountValueWidth-componentLabelGap,0,px(15)) label.BackgroundTransparency=1 label.Text=capitalizeUiWords(labelText) label.TextColor3=MENU_TEXT_SELECTED label.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(label,13) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.None label.Parent=frame
-					local value=New("TextBox") value.AnchorPoint=V2(1,0) value.Position=U2(1,0,0,0) value.Size=U2O(amountValueWidth,px(20)) value.BackgroundColor3=FEATURE_OFF_COLOR value.BorderSizePixel=0 value.ClearTextOnFocus=false value.TextColor3=MENU_TEXT_SELECTED value.FontFace=MENU_FONT_REGULAR_FACE setResponsiveTextSize(value,13) value.TextTruncate=Enum.TextTruncate.None value.ClipsDescendants=true value.Parent=frame ensureCorner(value,px(5)) rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(value)
-					local track=New("Frame") track.Position=U2O(0,px(27)) track.Size=U2(1,0,0,px(5)) track.BackgroundColor3=FEATURE_OFF_COLOR track.BorderSizePixel=0 track.Active=false track.Parent=frame ensureCorner(track,px(3)) rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(track)
-					local fill=New("Frame") fill.BackgroundColor3=PINK fill.BorderSizePixel=0 fill.Parent=track ensureCorner(fill,px(3))
-					local knob=New("Frame") knob.AnchorPoint=V2(0.5,0.5) knob.Size=U2O(px(isPhonePanelLayout() and 21 or 11),px(isPhonePanelLayout() and 21 or 11)) knob.BackgroundColor3=MENU_TEXT_SELECTED knob.BorderSizePixel=0 knob.Active=true knob.Parent=track ensureCorner(knob,px(6))
+					local label=New("TextLabel") label.Size=U2(1,-amountValueWidth-componentLabelGap,0,px(15)) label.BackgroundTransparency=1 label.Text=capitalizeUiWords(labelText) label.TextColor3=UI.MENU_TEXT_SELECTED label.FontFace=UI.MENU_FONT_REGULAR_FACE setResponsiveTextSize(label,13) label.TextXAlignment=Enum.TextXAlignment.Left label.TextTruncate=Enum.TextTruncate.None label.Parent=frame
+					local value=New("TextBox") value.AnchorPoint=V2(1,0) value.Position=U2(1,0,0,0) value.Size=U2O(amountValueWidth,px(20)) value.BackgroundColor3=UI.FEATURE_OFF_COLOR value.BorderSizePixel=0 value.ClearTextOnFocus=false value.TextColor3=UI.MENU_TEXT_SELECTED value.FontFace=UI.MENU_FONT_REGULAR_FACE setResponsiveTextSize(value,13) value.TextTruncate=Enum.TextTruncate.None value.ClipsDescendants=true value.Parent=frame ensureCorner(value,px(5)) rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(value)
+					local track=New("Frame") track.Position=U2O(0,px(27)) track.Size=U2(1,0,0,px(5)) track.BackgroundColor3=UI.FEATURE_OFF_COLOR track.BorderSizePixel=0 track.Active=false track.Parent=frame ensureCorner(track,px(3)) rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(track)
+					local fill=New("Frame") fill.BackgroundColor3=UI.PINK fill.BorderSizePixel=0 fill.Parent=track ensureCorner(fill,px(3))
+					local knob=New("Frame") knob.AnchorPoint=V2(0.5,0.5) knob.Size=U2O(px(isPhonePanelLayout() and 21 or 11),px(isPhonePanelLayout() and 21 or 11)) knob.BackgroundColor3=UI.MENU_TEXT_SELECTED knob.BorderSizePixel=0 knob.Active=true knob.Parent=track ensureCorner(knob,px(6))
 					local function setValue(v) v=math.clamp(math.floor(tonumber(v) or minValue),minValue,maxValue) local adjusted=onCommit(v) if adjusted~=nil then v=math.clamp(math.floor(tonumber(adjusted) or v),minValue,maxValue) end value.Text=tostring(v) local a=maxValue==minValue and 0 or ((v-minValue)/(maxValue-minValue)) fill.Size=U2S(a,1) knob.Position=U2(a,0,0.5,0) end
 					setValue(initialValue) value.FocusLost:Connect(function() setValue(value.Text) end)
 					knob.InputBegan:Connect(function(input) if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then beginSliderDrag(input,function(x) local a=math.clamp((x-track.AbsolutePosition.X)/math.max(1,track.AbsoluteSize.X),0,1) setValue(minValue+math.floor(a*(maxValue-minValue)+0.5)) end) end end)
@@ -8524,7 +8794,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 						return entry.LookFor ~= "" or entry.TokenAmount > 0 or entry.OfferAllTokens == true or next(entry.Targets) ~= nil or next(entry.SpecificItems) ~= nil
 					end
 					local function refreshClearStyle()
-						if clearButton then clearButton.TextColor3 = hasClearableOffer() and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR end
+						if clearButton then clearButton.TextColor3 = hasClearableOffer() and UI.MENU_TEXT_SELECTED or UI.MUTED_TEXT_COLOR end
 					end
 					local function specificCount() local c=0 for _,v in pairs(entry.SpecificItems) do if v==true then c+=1 end end return c end
 					local function rarityUnits(except) local c=0 for _,r in ipairs(OUTGOING_BRAINROT_RARITY_OPTIONS) do if r~=except and entry.Targets[r]==true then c+=math.clamp(math.floor(tonumber(entry.Amounts[r]) or 1),1,6) end end return c end
@@ -8560,7 +8830,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 						entries[entryIndex]=blankTradeChatOffer() task.defer(rebuildTradeChatOffers)
 					end)
 					y+=px(31)
-					if entryIndex>1 then local remove=buttonBase("Remove Custom Offer",y) remove.TextColor3=MUTED_TEXT_COLOR remove.MouseButton1Click:Connect(function() table.remove(entries,entryIndex) if #entries==0 then entries[1]=blankTradeChatOffer() end task.defer(rebuildTradeChatOffers) end) y+=px(31) end
+					if entryIndex>1 then local remove=buttonBase("Remove Custom Offer",y) remove.TextColor3=UI.MUTED_TEXT_COLOR remove.MouseButton1Click:Connect(function() table.remove(entries,entryIndex) if #entries==0 then entries[1]=blankTradeChatOffer() end task.defer(rebuildTradeChatOffers) end) y+=px(31) end
 					y+=px(12)
 				end
 				local add=buttonBase("Add Another Trade Chat Offer",y) add.MouseButton1Click:Connect(function() entries[#entries+1]=blankTradeChatOffer() task.defer(rebuildTradeChatOffers) end) y+=px(35)
@@ -8632,7 +8902,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				overlay.Parent = screenGui
 				local popup = New("ScrollingFrame")
 				popup.Name = "PanelDropdown"
-				popup.BackgroundColor3 = PANEL_BACKGROUND
+				popup.AnchorPoint = V2(0, 0)
+				popup.BackgroundColor3 = UI.PANEL_BACKGROUND
 				popup.BorderSizePixel = 0
 				popup.ClipsDescendants = true
 				popup.Active = true
@@ -8644,9 +8915,9 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				popup.Parent = overlay
 				ensureCorner(popup, px(7))
 				local stroke = New("UIStroke")
-				stroke.Color = LINE_COLOR
-				stroke.Thickness = LINE_THICKNESS
-				stroke.Transparency = LINE_TRANSPARENCY
+				stroke.Color = UI.LINE_COLOR
+				stroke.Thickness = UI.LINE_THICKNESS
+				stroke.Transparency = UI.LINE_TRANSPARENCY
 				stroke.Parent = popup
 				local function syncPosition()
 					if not popup.Parent or not button.Parent or not overlay.Parent then return end
@@ -8665,14 +8936,14 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				search.Name = "Search"
 				search.Position = U2O(px(4), px(4))
 				search.Size = U2(1, -px(8), 0, px(22))
-				search.BackgroundColor3 = FEATURE_OFF_COLOR
+				search.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 				search.BorderSizePixel = 0
 				search.ClearTextOnFocus = false
 				search.PlaceholderText = "Search"
-				search.PlaceholderColor3 = MUTED_TEXT_COLOR
+				search.PlaceholderColor3 = UI.MUTED_TEXT_COLOR
 				search.Text = ""
-				search.TextColor3 = MENU_TEXT_SELECTED
-				search.FontFace = MENU_FONT_REGULAR_FACE
+				search.TextColor3 = UI.MENU_TEXT_SELECTED
+				search.FontFace = UI.MENU_FONT_REGULAR_FACE
 				setResponsiveTextSize(search, 13)
 				search.TextXAlignment = Enum.TextXAlignment.Left
 				search.TextTruncate = Enum.TextTruncate.None
@@ -8680,18 +8951,18 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				search.ZIndex = 60002
 				search.Parent = popup
 				ensureCorner(search, px(5))
-				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(search)
+				rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(search)
 				local optionRows = {}
 				local function addOption(option, label)
 					local row = New("TextButton")
 					row.Size = U2(1, -px(8), 0, px(23))
-					row.BackgroundColor3 = FEATURE_OFF_COLOR
+					row.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 					row.BackgroundTransparency = 1
 					row.BorderSizePixel = 0
 					row.AutoButtonColor = false
 					row.Text = tostring(label)
-					row.TextColor3 = MUTED_TEXT_COLOR
-					row.FontFace = MENU_FONT_REGULAR_FACE
+					row.TextColor3 = UI.MUTED_TEXT_COLOR
+					row.FontFace = UI.MENU_FONT_REGULAR_FACE
 					setResponsiveTextSize(row, 13)
 					row.TextTruncate = Enum.TextTruncate.None
 					row.ClipsDescendants = true
@@ -8743,22 +9014,22 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				end
 				local function makeButton(text, yPos)
 					local b = New("TextButton")
-					b:SetAttribute("TuffHubStandardButtonFeedback", true)
+					b:SetAttribute("DroidHubStandardButtonFeedback", true)
 					b.Position = U2O(0, yPos)
 					b.Size = U2(1, 0, 0, px(25))
-					b.BackgroundColor3 = FEATURE_OFF_COLOR
+					b.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 					b.BorderSizePixel = 0
 					b.AutoButtonColor = false
 					b.Text = text
 					b.TextTruncate = Enum.TextTruncate.None
 					b.ClipsDescendants = true
-					b.TextColor3 = MENU_TEXT_SELECTED
-					b.FontFace = MENU_FONT_REGULAR_FACE
+					b.TextColor3 = UI.MENU_TEXT_SELECTED
+					b.FontFace = UI.MENU_FONT_REGULAR_FACE
 					setResponsiveTextSize(b, 13)
 					b.ZIndex = 45015
 					b.Parent = secondaryContainer
 					ensureCorner(b, px(5))
-					rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(b)
+					rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(b)
 					return b
 				end
 				local function makeNumericField(labelText, currentValue, yPos, onCommit)
@@ -8772,8 +9043,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					label.Size = U2(1, -amountValueWidth - componentLabelGap, 1, 0)
 					label.BackgroundTransparency = 1
 					label.Text = capitalizeUiWords(labelText)
-					label.TextColor3 = MENU_TEXT_SELECTED
-					label.FontFace = MENU_FONT_REGULAR_FACE
+					label.TextColor3 = UI.MENU_TEXT_SELECTED
+					label.FontFace = UI.MENU_FONT_REGULAR_FACE
 					setResponsiveTextSize(label, 13)
 					label.TextXAlignment = Enum.TextXAlignment.Left
 					label.Parent = row
@@ -8781,18 +9052,18 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					box.AnchorPoint = V2(1, 0.5)
 					box.Position = U2(1, 0, 0.5, 0)
 					box.Size = U2O(amountValueWidth, px(22))
-					box.BackgroundColor3 = FEATURE_OFF_COLOR
+					box.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 					box.BorderSizePixel = 0
 					box.ClearTextOnFocus = false
 					box.Text = currentValue ~= nil and tostring(currentValue) or ""
 					box.PlaceholderText = "Any"
-					box.PlaceholderColor3 = MUTED_TEXT_COLOR
-					box.TextColor3 = MENU_TEXT_SELECTED
-					box.FontFace = MENU_FONT_REGULAR_FACE
+					box.PlaceholderColor3 = UI.MUTED_TEXT_COLOR
+					box.TextColor3 = UI.MENU_TEXT_SELECTED
+					box.FontFace = UI.MENU_FONT_REGULAR_FACE
 					setResponsiveTextSize(box, 13)
 					box.Parent = row
 					ensureCorner(box, px(5))
-					rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(box)
+					rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(box)
 					box.FocusLost:Connect(function()
 						local value = tonumber(box.Text)
 						if value ~= nil then
@@ -8943,8 +9214,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 						amountLabel.Size = U2(1, -amountValueWidth - componentLabelGap, 0, px(15))
 						amountLabel.BackgroundTransparency = 1
 						amountLabel.Text = "Amount"
-						amountLabel.TextColor3 = MENU_TEXT_SELECTED
-						amountLabel.FontFace = MENU_FONT_REGULAR_FACE
+						amountLabel.TextColor3 = UI.MENU_TEXT_SELECTED
+						amountLabel.FontFace = UI.MENU_FONT_REGULAR_FACE
 						setResponsiveTextSize(amountLabel, 14)
 						amountLabel.TextXAlignment = Enum.TextXAlignment.Left
 						amountLabel.Parent = amountFrame
@@ -8952,28 +9223,28 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 						valueBox.AnchorPoint = V2(1,0)
 						valueBox.Position = U2(1,0,0,0)
 						valueBox.Size = U2O(amountValueWidth, px(20))
-						valueBox.BackgroundColor3 = FEATURE_OFF_COLOR
+						valueBox.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 						valueBox.BorderSizePixel = 0
 						valueBox.ClearTextOnFocus = false
 						valueBox.Text = tostring(entry.Amount)
-						valueBox.TextColor3 = MENU_TEXT_SELECTED
-						valueBox.FontFace = MENU_FONT_REGULAR_FACE
+						valueBox.TextColor3 = UI.MENU_TEXT_SELECTED
+						valueBox.FontFace = UI.MENU_FONT_REGULAR_FACE
 						setResponsiveTextSize(valueBox,14)
 						valueBox.Parent = amountFrame
 						ensureCorner(valueBox,px(5))
-						rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(valueBox)
+						rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(valueBox)
 						local track = New("Frame")
 						track.Position = U2O(0,px(27))
 						track.Size = U2(1,0,0,px(5))
-						track.BackgroundColor3 = FEATURE_OFF_COLOR
+						track.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 						track.BorderSizePixel = 0
 						track.Active = false
 						track.Parent = amountFrame
 						ensureCorner(track,px(3))
 						local fill = New("Frame")
-						fill.BackgroundColor3=PINK fill.BorderSizePixel=0 fill.Parent=track ensureCorner(fill,px(3))
+						fill.BackgroundColor3=UI.PINK fill.BorderSizePixel=0 fill.Parent=track ensureCorner(fill,px(3))
 						local knob = New("Frame")
-						knob.AnchorPoint=V2(0.5,0.5) knob.Size=U2O(px(isPhonePanelLayout() and 21 or 11),px(isPhonePanelLayout() and 21 or 11)) knob.BackgroundColor3=MENU_TEXT_SELECTED knob.BorderSizePixel=0 knob.Active=true knob.Parent=track ensureCorner(knob,px(6))
+						knob.AnchorPoint=V2(0.5,0.5) knob.Size=U2O(px(isPhonePanelLayout() and 21 or 11),px(isPhonePanelLayout() and 21 or 11)) knob.BackgroundColor3=UI.MENU_TEXT_SELECTED knob.BorderSizePixel=0 knob.Active=true knob.Parent=track ensureCorner(knob,px(6))
 						local function setAmount(value, updateBox)
 							entry.Amount=math.clamp(math.floor(tonumber(value) or 1),1,maxAmount)
 							if updateBox then valueBox.Text=tostring(entry.Amount) end
@@ -8994,7 +9265,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					end
 					if entryIndex == 1 or entry.Item ~= nil then
 						local clearChoice = makeButton("Clear Choice", y)
-						clearChoice.TextColor3 = MENU_TEXT_SELECTED
+						clearChoice.TextColor3 = UI.MENU_TEXT_SELECTED
 						clearChoice.MouseButton1Click:Connect(function()
 							entry.Item = nil
 							entry.Mutations, entry.Traits, entry.Sizes, entry.Rarities = {}, {}, {}, {}
@@ -9008,7 +9279,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					end
 					if entryIndex > 1 and entry.Item ~= nil then
 						local remove = makeButton("Remove", y)
-						remove.TextColor3 = MUTED_TEXT_COLOR
+						remove.TextColor3 = UI.MUTED_TEXT_COLOR
 						remove.MouseButton1Click:Connect(function()
 							table.remove(entries, entryIndex)
 							task.defer(rebuildSpecificCriteria)
@@ -9040,7 +9311,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			inputBox.Name = "MessageInput"
 			inputBox.Position = U2O(0, 0)
 			inputBox.Size = U2(1, 0, 0, px(26))
-			inputBox.BackgroundColor3 = FEATURE_OFF_COLOR
+			inputBox.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 			inputBox.BorderSizePixel = 0
 			inputBox.Active = true
 			inputBox.Selectable = true
@@ -9052,17 +9323,17 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			inputBox.TextEditable = true
 			inputBox.Text = tostring(stateEntry[definition.UtilityTextKey] or "")
 			inputBox.PlaceholderText = capitalizeUiWords(definition.Placeholder or "Type A Message")
-			inputBox.PlaceholderColor3 = MUTED_TEXT_COLOR
+			inputBox.PlaceholderColor3 = UI.MUTED_TEXT_COLOR
 			inputBox.TextColor3 = inputBox.Text ~= ""
-				and MENU_TEXT_SELECTED
-				or MUTED_TEXT_COLOR
-			inputBox.FontFace = MENU_FONT_REGULAR_FACE
+				and UI.MENU_TEXT_SELECTED
+				or UI.MUTED_TEXT_COLOR
+			inputBox.FontFace = UI.MENU_FONT_REGULAR_FACE
 			setResponsiveTextSize(inputBox, 14)
 			inputBox.TextXAlignment = Enum.TextXAlignment.Left
 			inputBox.ZIndex = 45015
 			inputBox.Parent = secondaryContainer
 			ensureCorner(inputBox, px(6))
-			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(inputBox)
+			rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(inputBox)
 			local inputPadding = New("UIPadding")
 			inputPadding.PaddingLeft = UDim.new(0, px(9))
 			inputPadding.PaddingRight = UDim.new(0, px(9))
@@ -9082,23 +9353,23 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			featureLabel.TextColor3 = tostring(
 				stateEntry[definition.UtilityTextKey] or ""
 			) ~= ""
-				and MENU_TEXT_SELECTED
-				or MUTED_TEXT_COLOR
+				and UI.MENU_TEXT_SELECTED
+				or UI.MUTED_TEXT_COLOR
 			inputBox.Focused:Connect(function()
 				stateEntry[editingKey] = true
 				inputBox.TextColor3 = inputBox.Text ~= ""
-					and MENU_TEXT_SELECTED
-					or MUTED_TEXT_COLOR
+					and UI.MENU_TEXT_SELECTED
+					or UI.MUTED_TEXT_COLOR
 				featureLabel.TextColor3 = tostring(
 					stateEntry[definition.UtilityTextKey] or ""
 				) ~= ""
-					and MENU_TEXT_SELECTED
-					or MUTED_TEXT_COLOR
+					and UI.MENU_TEXT_SELECTED
+					or UI.MUTED_TEXT_COLOR
 			end)
 			inputBox:GetPropertyChangedSignal("Text"):Connect(function()
 				inputBox.TextColor3 = inputBox.Text ~= ""
-					and MENU_TEXT_SELECTED
-					or MUTED_TEXT_COLOR
+					and UI.MENU_TEXT_SELECTED
+					or UI.MUTED_TEXT_COLOR
 			end)
 			inputBox.FocusLost:Connect(function()
 				stateEntry[definition.UtilityTextKey] = inputBox.Text
@@ -9106,8 +9377,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				stateEntry[revisionKey] =
 					(math.floor(tonumber(stateEntry[revisionKey]) or 0) + 1)
 				local committedColor = inputBox.Text ~= ""
-					and MENU_TEXT_SELECTED
-					or MUTED_TEXT_COLOR
+					and UI.MENU_TEXT_SELECTED
+					or UI.MUTED_TEXT_COLOR
 				inputBox.TextColor3 = committedColor
 				featureLabel.TextColor3 = committedColor
 			end)
@@ -9119,18 +9390,18 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			dropdownButton.AnchorPoint = V2(1, 0.5)
 			dropdownButton.Position = U2(1, 0, 0, featureRowHeight * 0.5)
 			dropdownButton.Size = U2O(dropdownWidth, px(24))
-			dropdownButton.BackgroundColor3 = FEATURE_OFF_COLOR
+			dropdownButton.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 			dropdownButton.BorderSizePixel = 0
 			dropdownButton.AutoButtonColor = false
-			dropdownButton.FontFace = MENU_FONT_FACE
+			dropdownButton.FontFace = UI.MENU_FONT_FACE
 			setResponsiveTextSize(dropdownButton, 14)
-			dropdownButton.TextColor3 = MENU_TEXT_SELECTED
+			dropdownButton.TextColor3 = UI.MENU_TEXT_SELECTED
 			dropdownButton.TextTruncate = Enum.TextTruncate.None
 			dropdownButton.TextWrapped = true
 			dropdownButton.ZIndex = 45014
 			dropdownButton.Parent = featureRow
 			ensureCorner(dropdownButton, px(6))
-			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(dropdownButton)
+			rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(dropdownButton)
 			local function utilitySelectionTable()
 				if not isUtilityMultiDropdown then return nil end
 				local key = definition.UtilityMultiDropdownKey
@@ -9179,8 +9450,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 						tostring(definition.Placeholder or "Select")
 					)
 					featureLabel.TextColor3 = hasValue
-						and MENU_TEXT_SELECTED
-						or MUTED_TEXT_COLOR
+						and UI.MENU_TEXT_SELECTED
+						or UI.MUTED_TEXT_COLOR
 				else
 					local value = stateEntry[definition.UtilityDropdownKey]
 					if value ~= nil
@@ -9252,7 +9523,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				ensureDropdownRoomBelow(dropdownButton, desiredVisibleHeight)
 				local popup = New("ScrollingFrame")
 				popup.Name = "PanelDropdown"
-				popup.BackgroundColor3 = PANEL_BACKGROUND
+				popup.BackgroundColor3 = UI.PANEL_BACKGROUND
 				popup.BorderSizePixel = 0
 				popup.ClipsDescendants = true
 				popup.Active = true
@@ -9264,9 +9535,9 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				popup.Parent = overlay
 				ensureCorner(popup, px(7))
 				local stroke = New("UIStroke")
-				stroke.Color = LINE_COLOR
-				stroke.Thickness = LINE_THICKNESS
-				stroke.Transparency = LINE_TRANSPARENCY
+				stroke.Color = UI.LINE_COLOR
+				stroke.Thickness = UI.LINE_THICKNESS
+				stroke.Transparency = UI.LINE_TRANSPARENCY
 				stroke.Parent = popup
 				local function syncPopupPosition()
 					if not popup.Parent or not dropdownButton.Parent or not window.Parent then return end
@@ -9331,14 +9602,14 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				dropdownSearch.Name = "Search"
 				dropdownSearch.Position = U2O(px(4), px(4))
 				dropdownSearch.Size = U2(1, -px(8), 0, px(22))
-				dropdownSearch.BackgroundColor3 = FEATURE_OFF_COLOR
+				dropdownSearch.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 				dropdownSearch.BorderSizePixel = 0
 				dropdownSearch.ClearTextOnFocus = false
 				dropdownSearch.PlaceholderText = "Search"
-				dropdownSearch.PlaceholderColor3 = MUTED_TEXT_COLOR
+				dropdownSearch.PlaceholderColor3 = UI.MUTED_TEXT_COLOR
 				dropdownSearch.Text = ""
-				dropdownSearch.TextColor3 = MENU_TEXT_SELECTED
-				dropdownSearch.FontFace = MENU_FONT_FACE
+				dropdownSearch.TextColor3 = UI.MENU_TEXT_SELECTED
+				dropdownSearch.FontFace = UI.MENU_FONT_FACE
 				setResponsiveTextSize(dropdownSearch, 13)
 				dropdownSearch.TextXAlignment = Enum.TextXAlignment.Left
 				dropdownSearch.TextTruncate = Enum.TextTruncate.None
@@ -9346,7 +9617,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				dropdownSearch.ZIndex = 60002
 				dropdownSearch.Parent = popup
 				ensureCorner(dropdownSearch, px(5))
-				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(dropdownSearch)
+				rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(dropdownSearch)
 				local dropdownSearchPadding = New("UIPadding")
 				dropdownSearchPadding.PaddingLeft = UDim.new(0, px(7))
 				dropdownSearchPadding.PaddingRight = UDim.new(0, px(7))
@@ -9388,8 +9659,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 							or stateEntry[definition.UtilityDropdownKey] == option
 						optionButton.BackgroundTransparency = selected and 0 or 1
 						optionButton.TextColor3 = selected
-							and MENU_TEXT_SELECTED
-							or MUTED_TEXT_COLOR
+							and UI.MENU_TEXT_SELECTED
+							or UI.MUTED_TEXT_COLOR
 					end
 				end
 				for optionIndex, option in ipairs(popupOptions) do
@@ -9400,14 +9671,14 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 						dropdownSearchHeight + px(3) + (optionIndex - 1) * px(25)
 					)
 					optionButton.Size = U2(1, -px(8), 0, px(23))
-					optionButton.BackgroundColor3 = FEATURE_OFF_COLOR
+					optionButton.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 					optionButton.BorderSizePixel = 0
 					optionButton.AutoButtonColor = false
 					optionButton.Text = definitionOptionLabel(option)
 					optionButton.TextTruncate = Enum.TextTruncate.None
 					optionButton.ClipsDescendants = true
 					optionSearchLabels[option] = string.lower(optionButton.Text)
-					optionButton.FontFace = MENU_FONT_FACE
+					optionButton.FontFace = UI.MENU_FONT_FACE
 					setResponsiveTextSize(optionButton, 14)
 					optionButton.ZIndex = 60001
 					optionButton.Parent = popup
@@ -9433,7 +9704,26 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 							refreshUtilityOptionVisuals()
 							return
 						end
-						stateEntry[definition.UtilityDropdownKey] = option
+						local swapPrefix = definition.UtilityDropdownSwapPrefix
+						local swapIndex = tonumber(definition.UtilityDropdownSwapIndex)
+						if type(swapPrefix) == "string" and swapIndex then
+							local currentKey = swapPrefix .. "Priority" .. tostring(swapIndex)
+							local previous = stateEntry[currentKey]
+							if previous ~= option then
+								for otherIndex = 1, #FALLBACK_PRIORITY_OPTIONS do
+									if otherIndex ~= swapIndex then
+										local otherKey = swapPrefix .. "Priority" .. tostring(otherIndex)
+										if stateEntry[otherKey] == option then
+											stateEntry[otherKey] = previous
+											break
+										end
+									end
+								end
+								stateEntry[currentKey] = option
+							end
+						else
+							stateEntry[definition.UtilityDropdownKey] = option
+						end
 						if definition.ClearsUtilityDropdownKey
 							and stateEntry[definition.ClearsUtilityDropdownKey] == option
 						then
@@ -9506,9 +9796,9 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					and "Opponent Must Own"
 					or (isOfferSubrow and "Offer" or (isAutoCancel and "Cancel If Player Does Not Own" or (definition.DropdownLabel or definition.Label)))
 				secondaryLabel.TextColor3 = isAutoCancel
-					and ((stateEntry and next(stateEntry.Targets) ~= nil) and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR)
-					or ((isDropdownOnly or featureEnabled) and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR)
-				secondaryLabel.FontFace = MENU_FONT_FACE
+					and ((stateEntry and next(stateEntry.Targets) ~= nil) and UI.MENU_TEXT_SELECTED or UI.MUTED_TEXT_COLOR)
+					or ((isDropdownOnly or featureEnabled) and UI.MENU_TEXT_SELECTED or UI.MUTED_TEXT_COLOR)
+				secondaryLabel.FontFace = UI.MENU_FONT_FACE
 				setResponsiveTextSize(secondaryLabel, 14)
 				secondaryLabel.TextXAlignment = Enum.TextXAlignment.Left
 				secondaryLabel.TextYAlignment = isAutoCancel and Enum.TextYAlignment.Top or Enum.TextYAlignment.Center
@@ -9527,18 +9817,18 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					and U2(1, 0, 0.5, 0)
 					or U2(1, -(toggleWidth + px(10)), 0, featureRowHeight * 0.5))
 			dropdownButton.Size = isAutoCancel and U2(1, 0, 0, px(26)) or U2O(dropdownWidth, px(24))
-			dropdownButton.BackgroundColor3 = FEATURE_OFF_COLOR
+			dropdownButton.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 			dropdownButton.BorderSizePixel = 0
 			dropdownButton.AutoButtonColor = false
-			dropdownButton.TextColor3 = MENU_TEXT_SELECTED
-			dropdownButton.FontFace = MENU_FONT_FACE
+			dropdownButton.TextColor3 = UI.MENU_TEXT_SELECTED
+			dropdownButton.FontFace = UI.MENU_FONT_FACE
 			setResponsiveTextSize(dropdownButton, 14)
 			dropdownButton.TextTruncate = Enum.TextTruncate.None
 			dropdownButton.TextWrapped = true
 			dropdownButton.ZIndex = 45014
 			dropdownButton.Parent = dropdownParent
 			ensureCorner(dropdownButton, px(6))
-			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(dropdownButton)
+			rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(dropdownButton)
 			local function syncStandardDropdownText()
 				updateDropdownText(
 					dropdownButton,
@@ -9588,9 +9878,9 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					and math.floor(tonumber(stateEntry.Tokens) or minAmount)
 					or math.floor(tonumber(stateEntry.Amounts[option]) or minAmount)
 				label.TextColor3 = initialAmount > 0
-					and MENU_TEXT_SELECTED
-					or MUTED_TEXT_COLOR
-				label.FontFace = MENU_FONT_FACE
+					and UI.MENU_TEXT_SELECTED
+					or UI.MUTED_TEXT_COLOR
+				label.FontFace = UI.MENU_FONT_FACE
 				setResponsiveTextSize(label, 14)
 				label.TextXAlignment = Enum.TextXAlignment.Left
 				label.ZIndex = 45014
@@ -9600,35 +9890,35 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				valueBox.AnchorPoint = V2(1, 0)
 				valueBox.Position = U2(1, 0, 0, 0)
 				valueBox.Size = U2O(amountValueWidth, px(20))
-				valueBox.BackgroundColor3 = FEATURE_OFF_COLOR
+				valueBox.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 				valueBox.BorderSizePixel = 0
 				valueBox.ClearTextOnFocus = false
 				valueBox.ClipsDescendants = true
 				valueBox.TextWrapped = false
 				valueBox.TextTruncate = Enum.TextTruncate.None
 				valueBox.TextColor3 = initialAmount > 0
-					and MENU_TEXT_SELECTED
-					or MUTED_TEXT_COLOR
-				valueBox.FontFace = MENU_FONT_FACE
+					and UI.MENU_TEXT_SELECTED
+					or UI.MUTED_TEXT_COLOR
+				valueBox.FontFace = UI.MENU_FONT_FACE
 				setResponsiveTextSize(valueBox, 14)
 				valueBox.ZIndex = 45014
 				valueBox.Parent = frame
 				ensureCorner(valueBox, px(5))
-				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(valueBox)
+				rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(valueBox)
 				local sliderTrack = New("Frame")
 				sliderTrack.Name = "SliderTrack"
 				sliderTrack.Position = U2O(0, px(27))
 				sliderTrack.Size = U2(1, 0, 0, px(5))
-				sliderTrack.BackgroundColor3 = FEATURE_OFF_COLOR
+				sliderTrack.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 				sliderTrack.BorderSizePixel = 0
 				sliderTrack.Active = false
 				sliderTrack.ZIndex = 45014
 				sliderTrack.Parent = frame
 				ensureCorner(sliderTrack, px(3))
-				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(sliderTrack)
+				rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(sliderTrack)
 				local sliderFill = New("Frame")
 				sliderFill.Name = "Fill"
-				sliderFill.BackgroundColor3 = PINK
+				sliderFill.BackgroundColor3 = UI.PINK
 				sliderFill.BorderSizePixel = 0
 				sliderFill.ZIndex = 45015
 				sliderFill.Parent = sliderTrack
@@ -9637,7 +9927,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				sliderKnob.Name = "Knob"
 				sliderKnob.AnchorPoint = V2(0.5, 0.5)
 				sliderKnob.Size = U2O(px(isPhonePanelLayout() and 21 or 11), px(isPhonePanelLayout() and 21 or 11))
-				sliderKnob.BackgroundColor3 = MENU_TEXT_SELECTED
+				sliderKnob.BackgroundColor3 = UI.MENU_TEXT_SELECTED
 				sliderKnob.BorderSizePixel = 0
 				sliderKnob.Active = true
 				sliderKnob.ZIndex = 45016
@@ -9690,8 +9980,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					end
 					if updateBox then valueBox.Text = tostring(amount) end
 					local amountTextColor = featureEnabled and amount > 0
-						and MENU_TEXT_SELECTED
-						or MUTED_TEXT_COLOR
+						and UI.MENU_TEXT_SELECTED
+						or UI.MUTED_TEXT_COLOR
 					label.TextColor3 = amountTextColor
 					valueBox.TextColor3 = amountTextColor
 					local alpha = maxAmount == minAmount
@@ -9728,8 +10018,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 						filterLabel.BackgroundTransparency = 1
 						filterLabel.BorderSizePixel = 0
 						filterLabel.Text = labelText
-						filterLabel.TextColor3 = MUTED_TEXT_COLOR
-						filterLabel.FontFace = MENU_FONT_REGULAR_FACE
+						filterLabel.TextColor3 = UI.MUTED_TEXT_COLOR
+						filterLabel.FontFace = UI.MENU_FONT_REGULAR_FACE
 						setResponsiveTextSize(filterLabel, 14)
 						filterLabel.TextXAlignment = Enum.TextXAlignment.Left
 						filterLabel.TextYAlignment = Enum.TextYAlignment.Center
@@ -9739,17 +10029,17 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 						filterButton.AnchorPoint = V2(1, 0)
 						filterButton.Position = U2(1, 0, 0, yOffset)
 						filterButton.Size = U2O(dropdownWidth, px(24))
-						filterButton.BackgroundColor3 = FEATURE_OFF_COLOR
+						filterButton.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 						filterButton.BorderSizePixel = 0
 						filterButton.AutoButtonColor = false
 						filterButton.TextTruncate = Enum.TextTruncate.None
 						filterButton.ClipsDescendants = true
-						filterButton.FontFace = MENU_FONT_REGULAR_FACE
+						filterButton.FontFace = UI.MENU_FONT_REGULAR_FACE
 						setResponsiveTextSize(filterButton, 14)
 						filterButton.ZIndex = 45015
 						filterButton.Parent = frame
 						ensureCorner(filterButton, px(6))
-						rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(filterButton)
+						rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(filterButton)
 						local function options()
 							local ok, provided = pcall(optionsProvider)
 							return ok and type(provided) == "table" and provided or {}
@@ -9831,7 +10121,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				local popup = New("ScrollingFrame")
 				popup.Name = "PanelDropdown"
 				popup.AnchorPoint = V2(0, 0)
-				popup.BackgroundColor3 = PANEL_BACKGROUND
+				popup.BackgroundColor3 = UI.PANEL_BACKGROUND
 				popup.BorderSizePixel = 0
 				popup.ClipsDescendants = true
 				popup.Active = true
@@ -9879,9 +10169,9 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				task.defer(syncPopupPosition)
 				ensureCorner(popup, px(7))
 				local stroke = New("UIStroke")
-				stroke.Color = LINE_COLOR
-				stroke.Thickness = LINE_THICKNESS
-				stroke.Transparency = LINE_TRANSPARENCY
+				stroke.Color = UI.LINE_COLOR
+				stroke.Thickness = UI.LINE_THICKNESS
+				stroke.Transparency = UI.LINE_TRANSPARENCY
 				stroke.Parent = popup
 				local followConnection = RunService.RenderStepped:Connect(syncPopupPosition)
 				autoServerHopState.RuntimeActivePanelDropdown = {
@@ -9928,14 +10218,14 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				dropdownSearch.Name = "Search"
 				dropdownSearch.Position = U2O(px(4), px(4))
 				dropdownSearch.Size = U2(1, -px(8), 0, px(22))
-				dropdownSearch.BackgroundColor3 = FEATURE_OFF_COLOR
+				dropdownSearch.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 				dropdownSearch.BorderSizePixel = 0
 				dropdownSearch.ClearTextOnFocus = false
 				dropdownSearch.PlaceholderText = "Search"
-				dropdownSearch.PlaceholderColor3 = MUTED_TEXT_COLOR
+				dropdownSearch.PlaceholderColor3 = UI.MUTED_TEXT_COLOR
 				dropdownSearch.Text = ""
-				dropdownSearch.TextColor3 = MENU_TEXT_SELECTED
-				dropdownSearch.FontFace = MENU_FONT_FACE
+				dropdownSearch.TextColor3 = UI.MENU_TEXT_SELECTED
+				dropdownSearch.FontFace = UI.MENU_FONT_FACE
 				setResponsiveTextSize(dropdownSearch, 13)
 				dropdownSearch.TextXAlignment = Enum.TextXAlignment.Left
 				dropdownSearch.TextTruncate = Enum.TextTruncate.None
@@ -9943,7 +10233,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				dropdownSearch.ZIndex = 60002
 				dropdownSearch.Parent = popup
 				ensureCorner(dropdownSearch, px(5))
-				rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(dropdownSearch)
+				rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(dropdownSearch)
 				local dropdownSearchPadding = New("UIPadding")
 				dropdownSearchPadding.PaddingLeft = UDim.new(0, px(7))
 				dropdownSearchPadding.PaddingRight = UDim.new(0, px(7))
@@ -9986,7 +10276,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 							and noneSelected
 							or stateEntry.Targets[optionName] == true
 						optionButton.BackgroundTransparency = selected and 0 or 1
-						optionButton.TextColor3 = selected and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR
+						optionButton.TextColor3 = selected and UI.MENU_TEXT_SELECTED or UI.MUTED_TEXT_COLOR
 					end
 				end
 				for optionIndex, option in ipairs(popupOptions) do
@@ -10000,7 +10290,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					local selected = option == "Any"
 						and next(stateEntry.Targets) == nil
 						or stateEntry.Targets[option] == true
-					optionButton.BackgroundColor3 = FEATURE_OFF_COLOR
+					optionButton.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 					optionButton.BackgroundTransparency = selected and 0 or 1
 					optionButton.BorderSizePixel = 0
 					optionButton.AutoButtonColor = false
@@ -10008,8 +10298,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					optionButton.TextTruncate = Enum.TextTruncate.None
 					optionButton.ClipsDescendants = true
 					optionSearchLabels[option] = string.lower(tostring(option))
-					optionButton.TextColor3 = selected and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR
-					optionButton.FontFace = MENU_FONT_FACE
+					optionButton.TextColor3 = selected and UI.MENU_TEXT_SELECTED or UI.MUTED_TEXT_COLOR
+					optionButton.FontFace = UI.MENU_FONT_FACE
 					setResponsiveTextSize(optionButton, 14)
 					optionButton.ZIndex = 60001
 					optionButton.Parent = popup
@@ -10055,8 +10345,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 						refreshOptionVisuals()
 						if isAutoCancel and secondaryLabel then
 							secondaryLabel.TextColor3 = next(stateEntry.Targets) ~= nil
-								and MENU_TEXT_SELECTED
-								or MUTED_TEXT_COLOR
+								and UI.MENU_TEXT_SELECTED
+								or UI.MUTED_TEXT_COLOR
 						end
 						updateDropdownText(
 							dropdownButton,
@@ -10115,26 +10405,26 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			valueBox.AnchorPoint = V2(1, 0)
 			valueBox.Position = U2(1, 0, 0, 0)
 			valueBox.Size = U2O(amountValueWidth, px(20))
-			valueBox.BackgroundColor3 = FEATURE_OFF_COLOR
+			valueBox.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 			valueBox.BorderSizePixel = 0
 			valueBox.ClearTextOnFocus = false
 			valueBox.ClipsDescendants = true
 			valueBox.TextWrapped = false
 			valueBox.TextTruncate = Enum.TextTruncate.None
-			valueBox.TextColor3 = MENU_TEXT_SELECTED
-			valueBox.FontFace = MENU_FONT_FACE
+			valueBox.TextColor3 = UI.MENU_TEXT_SELECTED
+			valueBox.FontFace = UI.MENU_FONT_FACE
 			setResponsiveTextSize(valueBox, 14)
 			valueBox.ZIndex = 45014
 			valueBox.Parent = sliderFrame
 			ensureCorner(valueBox, px(5))
-			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(valueBox)
+			rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(valueBox)
 			local unitLabel = New("TextLabel")
 			unitLabel.BackgroundTransparency = 1
 			unitLabel.Size = U2(1, -amountValueWidth - componentLabelGap, 0, px(15))
 			unitLabel.Text = definition.UnitLabel
 				or (isServerHop and "Minutes" or "")
-			unitLabel.TextColor3 = MUTED_TEXT_COLOR
-			unitLabel.FontFace = MENU_FONT_FACE
+			unitLabel.TextColor3 = UI.MUTED_TEXT_COLOR
+			unitLabel.FontFace = UI.MENU_FONT_FACE
 			setResponsiveTextSize(unitLabel, 14)
 			unitLabel.TextXAlignment = Enum.TextXAlignment.Left
 			unitLabel.ZIndex = 45014
@@ -10143,15 +10433,15 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			sliderTrack.Name = "SliderTrack"
 			sliderTrack.Position = U2O(0, px(27))
 			sliderTrack.Size = U2(1, 0, 0, px(5))
-			sliderTrack.BackgroundColor3 = FEATURE_OFF_COLOR
+			sliderTrack.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 			sliderTrack.BorderSizePixel = 0
 			sliderTrack.Active = false
 			sliderTrack.ZIndex = 45014
 			sliderTrack.Parent = sliderFrame
 			ensureCorner(sliderTrack, px(3))
-			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(sliderTrack)
+			rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(sliderTrack)
 			local sliderFill = New("Frame")
-			sliderFill.BackgroundColor3 = PINK
+			sliderFill.BackgroundColor3 = UI.PINK
 			sliderFill.BorderSizePixel = 0
 			sliderFill.ZIndex = 45015
 			sliderFill.Parent = sliderTrack
@@ -10159,7 +10449,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			local sliderKnob = New("Frame")
 			sliderKnob.AnchorPoint = V2(0.5, 0.5)
 			sliderKnob.Size = U2O(px(isPhonePanelLayout() and 21 or 11), px(isPhonePanelLayout() and 21 or 11))
-			sliderKnob.BackgroundColor3 = MENU_TEXT_SELECTED
+			sliderKnob.BackgroundColor3 = UI.MENU_TEXT_SELECTED
 			sliderKnob.BorderSizePixel = 0
 			sliderKnob.Active = true
 			sliderKnob.ZIndex = 45016
@@ -10203,10 +10493,10 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				stateEntry[resolvedSliderKey] = value
 				if updateText then valueBox.Text = sliderValueText(value) end
 				local sliderTextColor = value > 0
-					and MENU_TEXT_SELECTED
-					or MUTED_TEXT_COLOR
+					and UI.MENU_TEXT_SELECTED
+					or UI.MUTED_TEXT_COLOR
 				featureLabel.TextColor3 = sliderTextColor
-				unitLabel.TextColor3 = MUTED_TEXT_COLOR
+				unitLabel.TextColor3 = UI.MUTED_TEXT_COLOR
 				valueBox.TextColor3 = sliderTextColor
 				local maxValue = resolvedMaxValue()
 				local alpha = maxValue == minValue and 0 or ((value - minValue) / (maxValue - minValue))
@@ -10265,8 +10555,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			amountLabel.BackgroundTransparency = 1
 			amountLabel.BorderSizePixel = 0
 			amountLabel.Text = isToken and "Token Amount" or (acceptKey .. " Amount")
-			amountLabel.TextColor3 = featureEnabled and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR
-			amountLabel.FontFace = MENU_FONT_FACE
+			amountLabel.TextColor3 = featureEnabled and UI.MENU_TEXT_SELECTED or UI.MUTED_TEXT_COLOR
+			amountLabel.FontFace = UI.MENU_FONT_FACE
 			setResponsiveTextSize(amountLabel, 14)
 			amountLabel.TextXAlignment = Enum.TextXAlignment.Left
 			amountLabel.ZIndex = 45014
@@ -10276,33 +10566,33 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			amountValue.AnchorPoint = V2(1, 0)
 			amountValue.Position = U2(1, 0, 0, 0)
 			amountValue.Size = U2O(amountValueWidth, px(20))
-			amountValue.BackgroundColor3 = FEATURE_OFF_COLOR
+			amountValue.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 			amountValue.BorderSizePixel = 0
 			amountValue.ClearTextOnFocus = false
 			amountValue.ClipsDescendants = true
 			amountValue.TextWrapped = false
 			amountValue.TextTruncate = Enum.TextTruncate.None
-			amountValue.TextColor3 = MENU_TEXT_SELECTED
-			amountValue.FontFace = MENU_FONT_FACE
+			amountValue.TextColor3 = UI.MENU_TEXT_SELECTED
+			amountValue.FontFace = UI.MENU_FONT_FACE
 			setResponsiveTextSize(amountValue, 14)
 			amountValue.ZIndex = 45014
 			amountValue.Parent = amountFrame
 			ensureCorner(amountValue, px(5))
-			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(amountValue)
+			rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(amountValue)
 			local sliderTrack = New("Frame")
 			sliderTrack.Name = "SliderTrack"
 			sliderTrack.Position = U2O(0, px(27))
 			sliderTrack.Size = U2(1, 0, 0, px(5))
-			sliderTrack.BackgroundColor3 = FEATURE_OFF_COLOR
+			sliderTrack.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 			sliderTrack.BorderSizePixel = 0
 			sliderTrack.Active = false
 			sliderTrack.ZIndex = 45014
 			sliderTrack.Parent = amountFrame
 			ensureCorner(sliderTrack, px(3))
-			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(sliderTrack)
+			rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(sliderTrack)
 			local sliderFill = New("Frame")
 			sliderFill.Name = "Fill"
-			sliderFill.BackgroundColor3 = PINK
+			sliderFill.BackgroundColor3 = UI.PINK
 			sliderFill.BorderSizePixel = 0
 			sliderFill.ZIndex = 45015
 			sliderFill.Parent = sliderTrack
@@ -10311,7 +10601,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			sliderKnob.Name = "Knob"
 			sliderKnob.AnchorPoint = V2(0.5, 0.5)
 			sliderKnob.Size = U2O(px(isPhonePanelLayout() and 21 or 11), px(isPhonePanelLayout() and 21 or 11))
-			sliderKnob.BackgroundColor3 = MENU_TEXT_SELECTED
+			sliderKnob.BackgroundColor3 = UI.MENU_TEXT_SELECTED
 			sliderKnob.BorderSizePixel = 0
 			sliderKnob.Active = true
 			sliderKnob.ZIndex = 45016
@@ -10324,8 +10614,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				if updateText then amountValue.Text = tostring(value) end
 				if amountDropdown then amountDropdown.Text = tostring(value) end
 				local sliderTextColor = value > 0
-					and MENU_TEXT_SELECTED
-					or MUTED_TEXT_COLOR
+					and UI.MENU_TEXT_SELECTED
+					or UI.MUTED_TEXT_COLOR
 				amountLabel.TextColor3 = sliderTextColor
 				amountValue.TextColor3 = sliderTextColor
 				local alpha = maxAmount == 1 and 0 or ((value - 1) / (maxAmount - 1))
@@ -10376,8 +10666,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			label.Size = U2(1, -amountValueWidth - px(10), 0, px(15))
 			label.BackgroundTransparency = 1
 			label.Text = isTokenCriterion and "Token Amount" or (criterionKey .. " Amount")
-			label.TextColor3 = MENU_TEXT_SELECTED
-			label.FontFace = MENU_FONT_FACE
+			label.TextColor3 = UI.MENU_TEXT_SELECTED
+			label.FontFace = UI.MENU_FONT_FACE
 			setResponsiveTextSize(label, 14)
 			label.TextXAlignment = Enum.TextXAlignment.Left
 			label.Parent = frame
@@ -10385,28 +10675,28 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			value.AnchorPoint = V2(1, 0)
 			value.Position = U2(1, 0, 0, 0)
 			value.Size = U2O(amountValueWidth, px(20))
-			value.BackgroundColor3 = FEATURE_OFF_COLOR
+			value.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 			value.BorderSizePixel = 0
 			value.ClearTextOnFocus = false
-			value.TextColor3 = MENU_TEXT_SELECTED
-			value.FontFace = MENU_FONT_FACE
+			value.TextColor3 = UI.MENU_TEXT_SELECTED
+			value.FontFace = UI.MENU_FONT_FACE
 			setResponsiveTextSize(value, 14)
 			value.TextTruncate = Enum.TextTruncate.None
 			value.ClipsDescendants = true
 			value.Parent = frame
 			ensureCorner(value, px(5))
-			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(value)
+			rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(value)
 			local track = New("Frame")
 			track.Position = U2O(0, px(27))
 			track.Size = U2(1, 0, 0, px(5))
-			track.BackgroundColor3 = FEATURE_OFF_COLOR
+			track.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 			track.BorderSizePixel = 0
 			track.Active = false
 			track.Parent = frame
 			ensureCorner(track, px(3))
-			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(track)
-			local fill = New("Frame") fill.BackgroundColor3 = PINK fill.BorderSizePixel = 0 fill.Parent = track ensureCorner(fill, px(3))
-			local knob = New("Frame") knob.AnchorPoint = V2(0.5,0.5) knob.Size = U2O(px(isPhonePanelLayout() and 21 or 11),px(isPhonePanelLayout() and 21 or 11)) knob.BackgroundColor3 = MENU_TEXT_SELECTED knob.BorderSizePixel = 0 knob.Active = true knob.Parent = track ensureCorner(knob,px(6))
+			rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(track)
+			local fill = New("Frame") fill.BackgroundColor3 = UI.PINK fill.BorderSizePixel = 0 fill.Parent = track ensureCorner(fill, px(3))
+			local knob = New("Frame") knob.AnchorPoint = V2(0.5,0.5) knob.Size = U2O(px(isPhonePanelLayout() and 21 or 11),px(isPhonePanelLayout() and 21 or 11)) knob.BackgroundColor3 = UI.MENU_TEXT_SELECTED knob.BorderSizePixel = 0 knob.Active = true knob.Parent = track ensureCorner(knob,px(6))
 			local function setAmount(v, update)
 				v = math.clamp(math.floor(tonumber(v) or 1), 1, maxAmount)
 				if isTokenCriterion then stateEntry.Tokens = v else stateEntry.Amounts[criterionKey] = v end
@@ -10435,8 +10725,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					filterLabel.BackgroundTransparency = 1
 					filterLabel.BorderSizePixel = 0
 					filterLabel.Text = labelText
-					filterLabel.TextColor3 = MUTED_TEXT_COLOR
-					filterLabel.FontFace = MENU_FONT_REGULAR_FACE
+					filterLabel.TextColor3 = UI.MUTED_TEXT_COLOR
+					filterLabel.FontFace = UI.MENU_FONT_REGULAR_FACE
 					setResponsiveTextSize(filterLabel, 14)
 					filterLabel.TextXAlignment = Enum.TextXAlignment.Left
 					filterLabel.TextYAlignment = Enum.TextYAlignment.Center
@@ -10445,16 +10735,16 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					filterButton.AnchorPoint = V2(1, 0)
 					filterButton.Position = U2(1, 0, 0, yOffset)
 					filterButton.Size = U2O(dropdownWidth, px(24))
-					filterButton.BackgroundColor3 = FEATURE_OFF_COLOR
+					filterButton.BackgroundColor3 = UI.FEATURE_OFF_COLOR
 					filterButton.BorderSizePixel = 0
 					filterButton.AutoButtonColor = false
 					filterButton.TextTruncate = Enum.TextTruncate.None
 					filterButton.ClipsDescendants = true
-					filterButton.FontFace = MENU_FONT_REGULAR_FACE
+					filterButton.FontFace = UI.MENU_FONT_REGULAR_FACE
 					setResponsiveTextSize(filterButton, 14)
 					filterButton.Parent = frame
 					ensureCorner(filterButton, px(6))
-					rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(filterButton)
+					rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(filterButton)
 					local function options()
 						local ok, provided = pcall(optionsProvider)
 						return ok and type(provided) == "table" and provided or {}
@@ -10517,7 +10807,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				featureEnabled = not featureEnabled
 			end
 			if isUtilityToggle and definition.UtilityToggleKey == "SimpleAutofarmEnabled" then
-				local setter = rawget(_G, "__TUFFHUB_SET_SIMPLE_AUTOFARM")
+				local setter = rawget(_G, "__DROIDHUB_SET_SIMPLE_AUTOFARM")
 				if type(setter) == "function" then pcall(setter, featureEnabled) end
 				featureEnabled = stateEntry and stateEntry.SimpleAutofarmEnabled == true or false
 				setToggleVisual(toggleTrack, toggleKnob, featureLabel, featureEnabled)
@@ -10604,9 +10894,9 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				relayoutRows()
 				if definition.UtilityToggleKey == "UndoAllSettings" and featureEnabled then
 					task.defer(function()
-						local reset = rawget(_G, "__TUFFHUB_RESET_ALL_SETTINGS_STATE")
+						local reset = rawget(_G, "__DROIDHUB_RESET_ALL_SETTINGS_STATE")
 						if type(reset) == "function" then pcall(reset) end
-						local refresh = rawget(_G, "__TUFFHUB_REFRESH_ALL_SETTINGS_UI")
+						local refresh = rawget(_G, "__DROIDHUB_REFRESH_ALL_SETTINGS_UI")
 						if type(refresh) == "function" then pcall(refresh) end
 					end)
 				end
@@ -10689,8 +10979,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				secondaryContainer.Visible = featureEnabled
 				if secondaryLabel then
 					local secondaryColor = isAutoCancel
-						and ((stateEntry and next(stateEntry.Targets) ~= nil) and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR)
-						or (featureEnabled and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR)
+						and ((stateEntry and next(stateEntry.Targets) ~= nil) and UI.MENU_TEXT_SELECTED or UI.MUTED_TEXT_COLOR)
+						or (featureEnabled and UI.MENU_TEXT_SELECTED or UI.MUTED_TEXT_COLOR)
 					TweenService:Create(
 						secondaryLabel,
 						TI(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
@@ -10699,8 +10989,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				end
 				relayoutRows()
 			end
-			TweenService:Create(toggleTrack, TI(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {BackgroundColor3 = featureEnabled and PINK or FEATURE_OFF_COLOR}):Play()
-			TweenService:Create(featureLabel, TI(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {TextColor3 = featureEnabled and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR}):Play()
+			TweenService:Create(toggleTrack, TI(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {BackgroundColor3 = featureEnabled and UI.PINK or UI.FEATURE_OFF_COLOR}):Play()
+			TweenService:Create(featureLabel, TI(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {TextColor3 = featureEnabled and UI.MENU_TEXT_SELECTED or UI.MUTED_TEXT_COLOR}):Play()
 			TweenService:Create(toggleKnob, TI(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 				Position = featureEnabled and U2(0, toggleWidth - toggleHeight + knobInset, 0, knobInset) or U2O(knobInset, knobInset)
 			}):Play()
@@ -10714,7 +11004,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				featureRow.Visible = type(visibilityUtilityParents) ~= "table"
 					or utilityParentsEnabled(autoServerHopState.Utility, visibilityUtilityParents)
 				featureLabel.Text = tostring(definition.InfoNoteText or "")
-				featureLabel.TextColor3 = MUTED_TEXT_COLOR
+				featureLabel.TextColor3 = UI.MUTED_TEXT_COLOR
 				return
 			elseif isActionButton then
 				featureRow.Visible = type(visibilityUtilityParents) ~= "table"
@@ -10802,7 +11092,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			if utilityDropdownRefresh then utilityDropdownRefresh() end
 			if utilityTextBox and stateEntry then
 				utilityTextBox.Text = tostring(stateEntry[definition.UtilityTextKey] or "")
-				utilityTextBox.TextColor3 = utilityTextBox.Text ~= "" and MENU_TEXT_SELECTED or MUTED_TEXT_COLOR
+				utilityTextBox.TextColor3 = utilityTextBox.Text ~= "" and UI.MENU_TEXT_SELECTED or UI.MUTED_TEXT_COLOR
 			end
 			if standardDropdownButton and stateEntry then
 				updateDropdownText(standardDropdownButton, stateEntry, isAutoSit and "Any" or definition.Placeholder, definition.Options)
@@ -10985,7 +11275,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		PersistenceKey = panelPersistenceKey,
 		Expanded = initialPanelExpanded,
 		HeaderHeight = currentHeaderHeight,
-		ExpandedHeight = currentHeaderHeight + LINE_THICKNESS + featureTopPadding + featureBottomPadding
+		ExpandedHeight = currentHeaderHeight + UI.LINE_THICKNESS + featureTopPadding + featureBottomPadding
 			+ (#featureRows * featureRowHeight) + (math.max(0, #featureRows - 1) * featureRowGap),
 		Title = panelTitle,
 		SearchText = string.lower(searchTerms),
@@ -11017,13 +11307,13 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 	header.MouseEnter:Connect(function()
 		tweenChevronColor(
 			chevron,
-			MENU_TEXT_HOVER
+			UI.MENU_TEXT_HOVER
 		)
 	end)
 	header.MouseLeave:Connect(function()
 		tweenChevronColor(
 			chevron,
-			PANEL_CHEVRON_COLOR
+			UI.PANEL_CHEVRON_COLOR
 		)
 	end)
 end
@@ -11040,18 +11330,23 @@ end
 	local BODY_PAD_X = px(14)
 	local BODY_PAD_Y = px(10)
 	local CONTROL_HEIGHT = px(27)
-	local INPUT_BG = FEATURE_OFF_COLOR
+	local INPUT_BG = UI.FEATURE_OFF_COLOR
 	local activeChoiceOverlay
+	local activeChoiceFollowConnection
 	local liveConnections = {}
 	local customRefreshers = {}
 	local currentConfigName
 	local bindCaptureConnection
-	local BUILDER_REGULAR_FACE = MENU_FONT_REGULAR_FACE
-	local BUILDER_SEMIBOLD_FACE = MENU_FONT_SEMIBOLD_FACE
-	local BUILDER_BOLD_FACE = MENU_FONT_BOLD_FACE
+	local BUILDER_REGULAR_FACE = UI.MENU_FONT_REGULAR_FACE
+	local BUILDER_SEMIBOLD_FACE = UI.MENU_FONT_SEMIBOLD_FACE
+	local BUILDER_BOLD_FACE = UI.MENU_FONT_BOLD_FACE
 
 
 	local function closeChoicePopup()
+		if activeChoiceFollowConnection then
+			activeChoiceFollowConnection:Disconnect()
+			activeChoiceFollowConnection = nil
+		end
 		if activeChoiceOverlay and activeChoiceOverlay.Parent then
 			activeChoiceOverlay:Destroy()
 		end
@@ -11062,7 +11357,7 @@ end
 		closeChoicePopup()
 		if not anchor or not anchor.Parent or type(options) ~= "table" or #options == 0 then return end
 		local overlay = New("TextButton")
-		overlay.Name = "TuffHubChoiceOverlay"
+		overlay.Name = "DroidHubChoiceOverlay"
 		overlay.Size = U2S(1, 1)
 		overlay.BackgroundTransparency = 1
 		overlay.BorderSizePixel = 0
@@ -11074,13 +11369,14 @@ end
 
 		local popup = New("ScrollingFrame")
 		popup.Name = "ChoicePopup"
-		popup.BackgroundColor3 = PANEL_BACKGROUND
+		popup.AnchorPoint = V2(0, 0)
+		popup.BackgroundColor3 = UI.PANEL_BACKGROUND
 		popup.BackgroundTransparency = 0
 		popup.BorderSizePixel = 0
 		popup.Active = true
 		popup.ScrollingDirection = Enum.ScrollingDirection.Y
 		popup.ScrollBarThickness = px(2)
-		popup.ScrollBarImageColor3 = MUTED_TEXT_COLOR
+		popup.ScrollBarImageColor3 = UI.MUTED_TEXT_COLOR
 		popup.ScrollBarImageTransparency = 0.18
 		popup.ElasticBehavior = Enum.ElasticBehavior.WhenScrollable
 		popup.AutomaticCanvasSize = Enum.AutomaticSize.None
@@ -11088,34 +11384,46 @@ end
 		popup.Parent = overlay
 		ensureCorner(popup, px(6))
 		local stroke = New("UIStroke")
-		stroke.Color = LINE_COLOR
-		stroke.Thickness = math.max(LINE_THICKNESS, 1)
+		stroke.Color = UI.LINE_COLOR
+		stroke.Thickness = math.max(UI.LINE_THICKNESS, 1)
 		stroke.Transparency = 0.05
 		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 		stroke.Parent = popup
 		local rowHeight = px(29)
 		local visibleRows = math.min(7, #options)
-		local popupWidth = math.max(px(140), anchor.AbsoluteSize.X)
-		local popupHeight = visibleRows * rowHeight + px(8)
+		local popupHeight = visibleRows * rowHeight + px(4)
 		do
-			local ensureRoom = rawget(_G, "__TUFFHUB_ENSURE_DROPDOWN_ROOM_BELOW")
+			local ensureRoom = rawget(_G, "__DROIDHUB_ENSURE_DROPDOWN_ROOM_BELOW")
 			if type(ensureRoom) == "function" then pcall(ensureRoom, anchor, popupHeight) end
 		end
-		local anchorPos = anchor.AbsolutePosition
-		local anchorSize = anchor.AbsoluteSize
-		local viewport = (workspace.CurrentCamera or camera).ViewportSize
-		local x = math.clamp(anchorPos.X, px(4), math.max(px(4), viewport.X - popupWidth - px(4)))
-		local y = anchorPos.Y + anchorSize.Y
-		local roomBelow = math.max(rowHeight + px(8), viewport.Y - y - px(4))
-		popup.Position = U2O(x, y)
-		popup.Size = U2O(popupWidth, math.min(popupHeight, roomBelow))
-		popup.CanvasSize = U2O(0, #options * rowHeight + px(8))
+		local function positionChoicePopup()
+			if not popup.Parent or not overlay.Parent or not anchor.Parent or not window.Parent then return end
+			local anchorPos = anchor.AbsolutePosition
+			local anchorSize = anchor.AbsoluteSize
+			local overlayPos = overlay.AbsolutePosition
+			local windowPos = window.AbsolutePosition
+			local windowSize = window.AbsoluteSize
+			local edge = px(6)
+			local liveWidth = math.max(px(140), math.floor(anchorSize.X + 0.5))
+			local minX = windowPos.X + edge
+			local maxX = windowPos.X + windowSize.X - liveWidth - edge
+			local absoluteX = math.clamp(anchorPos.X, minX, math.max(minX, maxX))
+			-- Never flip upward: every selector opens from the exact bottom edge
+			-- of its dropdown box and grows only downward.
+			local absoluteY = math.floor(anchorPos.Y + anchorSize.Y + 0.5)
+			local availableBelow = math.max(0, windowPos.Y + windowSize.Y - edge - absoluteY)
+			popup.Position = U2O(absoluteX - overlayPos.X, absoluteY - overlayPos.Y)
+			popup.Size = U2O(liveWidth, math.min(popupHeight, availableBelow))
+		end
+		positionChoicePopup()
+		activeChoiceFollowConnection = RunService.RenderStepped:Connect(positionChoicePopup)
+		popup.CanvasSize = U2O(0, #options * rowHeight + px(4))
 		local list = New("UIListLayout")
 		list.Padding = UDim.new(0, 0)
 		list.SortOrder = Enum.SortOrder.LayoutOrder
 		list.Parent = popup
 		local pad = New("UIPadding")
-		pad.PaddingTop = UDim.new(0, px(4))
+		pad.PaddingTop = UDim.new(0, 0)
 		pad.PaddingBottom = UDim.new(0, px(4))
 		pad.Parent = popup
 		for index, option in ipairs(options) do
@@ -11123,13 +11431,13 @@ end
 			button.Name = "Option" .. tostring(index)
 			button.LayoutOrder = index
 			button.Size = U2(1, 0, 0, rowHeight)
-			button.BackgroundColor3 = SEARCH_BACKGROUND
+			button.BackgroundColor3 = UI.SEARCH_BACKGROUND
 			button.BackgroundTransparency = tostring(option) == tostring(selected) and 0.12 or 1
 			button.BorderSizePixel = 0
 			button.AutoButtonColor = false
 			button.Text = tostring(option)
-			button.TextColor3 = tostring(option) == tostring(selected) and MENU_TEXT_SELECTED or MENU_TEXT_IDLE
-			button.FontFace = MENU_FONT_REGULAR_FACE
+			button.TextColor3 = tostring(option) == tostring(selected) and UI.MENU_TEXT_SELECTED or UI.MENU_TEXT_IDLE
+			button.FontFace = UI.MENU_FONT_REGULAR_FACE
 			setResponsiveTextSize(button, 12)
 			button.TextXAlignment = Enum.TextXAlignment.Left
 			button.TextYAlignment = Enum.TextYAlignment.Center
@@ -11155,7 +11463,7 @@ end
 		local expanded = persisted ~= false
 		local panel = New("Frame")
 		panel.Name = tabItem.Name .. "CustomPanel" .. tostring(panelIndex)
-		panel.BackgroundColor3 = PANEL_BACKGROUND
+		panel.BackgroundColor3 = UI.PANEL_BACKGROUND
 		panel.BackgroundTransparency = 0
 		panel.BorderSizePixel = 0
 		panel.ClipsDescendants = true
@@ -11165,19 +11473,19 @@ end
 		panel.Visible = false
 		panel.ZIndex = 45010
 		panel.Parent = rightContent
-		ensureCorner(panel, PANEL_CORNER_RADIUS)
+		ensureCorner(panel, UI.PANEL_CORNER_RADIUS)
 		local panelStroke = New("UIStroke")
 		panelStroke.Name = "PanelBorder"
-		panelStroke.Color = LINE_COLOR
-		panelStroke.Thickness = LINE_THICKNESS
-		panelStroke.Transparency = LINE_TRANSPARENCY
+		panelStroke.Color = UI.LINE_COLOR
+		panelStroke.Thickness = UI.LINE_THICKNESS
+		panelStroke.Transparency = UI.LINE_TRANSPARENCY
 		panelStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 		panelStroke.LineJoinMode = Enum.LineJoinMode.Round
 		panelStroke.Parent = panel
 
 		local header = New("TextButton")
 		header.Name = "Header"
-		header.Size = U2(1, 0, 0, PANEL_HEADER_HEIGHT)
+		header.Size = U2(1, 0, 0, UI.PANEL_HEADER_HEIGHT)
 		header.BackgroundTransparency = 1
 		header.BorderSizePixel = 0
 		header.AutoButtonColor = false
@@ -11191,8 +11499,8 @@ end
 		title.BackgroundTransparency = 1
 		title.BorderSizePixel = 0
 		title.Text = formatPanelTitle(panelTitle)
-		title.TextColor3 = MENU_TEXT_SELECTED
-		title.FontFace = PANEL_FONT_FACE
+		title.TextColor3 = UI.MENU_TEXT_SELECTED
+		title.FontFace = UI.PANEL_FONT_FACE
 		setResponsiveTextSize(title, 14)
 		title.TextWrapped = true
 		title.TextTruncate = Enum.TextTruncate.None
@@ -11205,18 +11513,18 @@ end
 		if autoServerHopState.RuntimePanelChevronAsset then
 			chevron = New("ImageLabel")
 			chevron.Image = autoServerHopState.RuntimePanelChevronAsset
-			chevron.ImageColor3 = PANEL_CHEVRON_COLOR
+			chevron.ImageColor3 = UI.PANEL_CHEVRON_COLOR
 			chevron.ScaleType = Enum.ScaleType.Fit
 		else
 			chevron = New("TextLabel")
 			chevron.Text = "⌄"
-			chevron.TextColor3 = PANEL_CHEVRON_COLOR
-			chevron.FontFace = MENU_FONT_FACE
+			chevron.TextColor3 = UI.PANEL_CHEVRON_COLOR
+			chevron.FontFace = UI.MENU_FONT_FACE
 			setResponsiveTextSize(chevron, 14)
 		end
 		chevron.Name = "Chevron"
 		chevron.AnchorPoint = V2(0.5, 0.5)
-		chevron.Position = U2(1, px(-18), 0, PANEL_HEADER_HEIGHT * 0.5)
+		chevron.Position = U2(1, px(-18), 0, UI.PANEL_HEADER_HEIGHT * 0.5)
 		chevron.Size = U2O(px(18), px(18))
 		chevron.BackgroundTransparency = 1
 		chevron.BorderSizePixel = 0
@@ -11226,10 +11534,10 @@ end
 
 		local divider = New("Frame")
 		divider.Name = "HeaderDivider"
-		divider.Position = U2O(0, PANEL_HEADER_HEIGHT)
-		divider.Size = U2(1, 0, 0, LINE_THICKNESS)
-		divider.BackgroundColor3 = LINE_COLOR
-		divider.BackgroundTransparency = LINE_TRANSPARENCY
+		divider.Position = U2O(0, UI.PANEL_HEADER_HEIGHT)
+		divider.Size = U2(1, 0, 0, UI.LINE_THICKNESS)
+		divider.BackgroundColor3 = UI.LINE_COLOR
+		divider.BackgroundTransparency = UI.LINE_TRANSPARENCY
 		divider.BorderSizePixel = 0
 		divider.ZIndex = 45011
 		divider.Visible = expanded
@@ -11237,8 +11545,8 @@ end
 
 		local body = New("Frame")
 		body.Name = "Body"
-		body.Position = U2O(0, PANEL_HEADER_HEIGHT + LINE_THICKNESS)
-		body.Size = U2(1, 0, 1, -(PANEL_HEADER_HEIGHT + LINE_THICKNESS))
+		body.Position = U2O(0, UI.PANEL_HEADER_HEIGHT + UI.LINE_THICKNESS)
+		body.Size = U2(1, 0, 1, -(UI.PANEL_HEADER_HEIGHT + UI.LINE_THICKNESS))
 		body.BackgroundTransparency = 1
 		body.BorderSizePixel = 0
 		body.Visible = expanded
@@ -11269,15 +11577,15 @@ end
 			Order = order,
 			PersistenceKey = persistenceKey,
 			Expanded = expanded,
-			HeaderHeight = PANEL_HEADER_HEIGHT,
-			ExpandedHeight = PANEL_HEADER_HEIGHT + LINE_THICKNESS + (BODY_PAD_Y * 2),
+			HeaderHeight = UI.PANEL_HEADER_HEIGHT,
+			ExpandedHeight = UI.PANEL_HEADER_HEIGHT + UI.LINE_THICKNESS + (BODY_PAD_Y * 2),
 			Title = panelTitle,
 			SearchText = string.lower(tostring(searchText or panelTitle)),
 			FeatureRows = {},
 		}
 		local function relayout()
 			local contentHeight = layout.AbsoluteContentSize.Y
-			panelData.ExpandedHeight = PANEL_HEADER_HEIGHT + LINE_THICKNESS + (BODY_PAD_Y * 2) + contentHeight
+			panelData.ExpandedHeight = UI.PANEL_HEADER_HEIGHT + UI.LINE_THICKNESS + (BODY_PAD_Y * 2) + contentHeight
 			if panelData.Expanded then
 				panel.Size = U2O(panel.Size.X.Offset, panelData.ExpandedHeight)
 			end
@@ -11285,7 +11593,7 @@ end
 		panelData.RelayoutRows = relayout
 		layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
 			relayout()
-			local sync = rawget(_G, "__TUFFHUB_SYNC_RIGHT_PANEL_GEOMETRY")
+			local sync = rawget(_G, "__DROIDHUB_SYNC_RIGHT_PANEL_GEOMETRY")
 			if type(sync) == "function" then task.defer(sync, true) end
 		end)
 
@@ -11306,13 +11614,26 @@ end
 			label.BackgroundTransparency = 1
 			label.BorderSizePixel = 0
 			label.Text = string.upper(tostring(text or ""))
-			label.TextColor3 = MUTED_TEXT_COLOR
-			label.FontFace = MENU_FONT_SEMIBOLD_FACE
+			label.TextColor3 = UI.MUTED_TEXT_COLOR
+			label.FontFace = UI.MENU_FONT_SEMIBOLD_FACE
 			setResponsiveTextSize(label, 11)
 			label.TextXAlignment = Enum.TextXAlignment.Left
 			label.TextYAlignment = Enum.TextYAlignment.Center
 			label.Parent = row
 			return row, label
+		end
+		function helpers.separator()
+			local row = helpers.row(px(12))
+			local line = New("Frame")
+			line.AnchorPoint = V2(0, 0.5)
+			line.Position = U2(0, 0, 0.5, 0)
+			line.Size = U2(1, 0, 0, UI.LINE_THICKNESS)
+			line.BackgroundColor3 = UI.LINE_COLOR
+			line.BackgroundTransparency = 0.18
+			line.BorderSizePixel = 0
+			line.ZIndex = 45012
+			line.Parent = row
+			return row, line
 		end
 		function helpers.info(labelText, valueText, valueColor)
 			local row = helpers.row()
@@ -11321,8 +11642,8 @@ end
 			label.BackgroundTransparency = 1
 			label.BorderSizePixel = 0
 			label.Text = tostring(labelText or "")
-			label.TextColor3 = MENU_TEXT_SELECTED
-			label.FontFace = MENU_FONT_SEMIBOLD_FACE
+			label.TextColor3 = UI.MENU_TEXT_SELECTED
+			label.FontFace = UI.MENU_FONT_SEMIBOLD_FACE
 			setResponsiveTextSize(label, 12.5)
 			label.TextXAlignment = Enum.TextXAlignment.Left
 			label.TextYAlignment = Enum.TextYAlignment.Center
@@ -11335,8 +11656,8 @@ end
 			value.BackgroundTransparency = 1
 			value.BorderSizePixel = 0
 			value.Text = tostring(valueText or "")
-			value.TextColor3 = valueColor or MENU_TEXT_IDLE
-			value.FontFace = MENU_FONT_REGULAR_FACE
+			value.TextColor3 = valueColor or UI.MENU_TEXT_IDLE
+			value.FontFace = UI.MENU_FONT_REGULAR_FACE
 			setResponsiveTextSize(value, 12.5)
 			value.TextXAlignment = Enum.TextXAlignment.Right
 			value.TextYAlignment = Enum.TextYAlignment.Center
@@ -11351,8 +11672,8 @@ end
 			label.BackgroundTransparency = 1
 			label.BorderSizePixel = 0
 			label.Text = tostring(text or "")
-			label.TextColor3 = color or MENU_TEXT_IDLE
-			label.FontFace = MENU_FONT_REGULAR_FACE
+			label.TextColor3 = color or UI.MENU_TEXT_IDLE
+			label.FontFace = UI.MENU_FONT_REGULAR_FACE
 			setResponsiveTextSize(label, 12.5)
 			label.TextWrapped = true
 			label.TextTruncate = Enum.TextTruncate.None
@@ -11369,15 +11690,15 @@ end
 			button.BackgroundTransparency = 0
 			button.BorderSizePixel = 0
 			button.AutoButtonColor = false
-			button:SetAttribute("TuffHubStandardButtonFeedback", true)
+			button:SetAttribute("DroidHubStandardButtonFeedback", true)
 			button.Text = tostring(text or "")
-			button.TextColor3 = color or MENU_TEXT_SELECTED
-			button.FontFace = MENU_FONT_REGULAR_FACE
+			button.TextColor3 = color or UI.MENU_TEXT_SELECTED
+			button.FontFace = UI.MENU_FONT_REGULAR_FACE
 			setResponsiveTextSize(button, 12.5)
 			button.ZIndex = 45013
 			button.Parent = row
 			ensureCorner(button, px(5))
-			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(button)
+			rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(button)
 			button.Activated:Connect(function()
 				if type(onClick) == "function" then onClick() end
 			end)
@@ -11393,16 +11714,16 @@ end
 			box.ClearTextOnFocus = false
 			box.Text = tostring(initialText or "")
 			box.PlaceholderText = tostring(placeholder or "")
-			box.TextColor3 = MENU_TEXT_SELECTED
-			box.PlaceholderColor3 = SEARCH_PLACEHOLDER_COLOR
-			box.FontFace = MENU_FONT_REGULAR_FACE
+			box.TextColor3 = UI.MENU_TEXT_SELECTED
+			box.PlaceholderColor3 = UI.SEARCH_PLACEHOLDER_COLOR
+			box.FontFace = UI.MENU_FONT_REGULAR_FACE
 			setResponsiveTextSize(box, 12.5)
 			box.TextXAlignment = Enum.TextXAlignment.Left
 			box.TextYAlignment = Enum.TextYAlignment.Center
 			box.ZIndex = 45013
 			box.Parent = row
 			ensureCorner(box, px(5))
-			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(box)
+			rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(box)
 			local padding = New("UIPadding")
 			padding.PaddingLeft = UDim.new(0, px(9))
 			padding.PaddingRight = UDim.new(0, px(9))
@@ -11416,8 +11737,8 @@ end
 			label.BackgroundTransparency = 1
 			label.BorderSizePixel = 0
 			label.Text = tostring(labelText or "")
-			label.TextColor3 = MENU_TEXT_SELECTED
-			label.FontFace = MENU_FONT_REGULAR_FACE
+			label.TextColor3 = UI.MENU_TEXT_SELECTED
+			label.FontFace = UI.MENU_FONT_REGULAR_FACE
 			setResponsiveTextSize(label, 12.5)
 			label.TextXAlignment = Enum.TextXAlignment.Left
 			label.TextYAlignment = Enum.TextYAlignment.Center
@@ -11430,20 +11751,46 @@ end
 			button.BorderSizePixel = 0
 			button.AutoButtonColor = false
 			button.Text = tostring(currentText or "")
-			button.TextColor3 = MENU_TEXT_IDLE
-			button.FontFace = MENU_FONT_REGULAR_FACE
+			button.TextColor3 = UI.MENU_TEXT_IDLE
+			button.FontFace = UI.MENU_FONT_REGULAR_FACE
 			setResponsiveTextSize(button, 12)
 			button.TextXAlignment = Enum.TextXAlignment.Center
 			button.TextYAlignment = Enum.TextYAlignment.Center
 			button.ZIndex = 45013
 			button.Parent = row
 			ensureCorner(button, px(5))
-			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(button)
+			rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(button)
 			local pad = New("UIPadding")
 			pad.PaddingLeft = UDim.new(0, px(7))
 			pad.PaddingRight = UDim.new(0, px(7))
 			pad.Parent = button
 			if type(onOpen) == "function" then button.Activated:Connect(function() onOpen(button) end) end
+			return button
+		end
+		function helpers.fullSelect(currentText, onOpen)
+			local row = helpers.row(px(31))
+			local button = New("TextButton")
+			button.Size = U2S(1, 1)
+			button.BackgroundColor3 = INPUT_BG
+			button.BorderSizePixel = 0
+			button.AutoButtonColor = false
+			button.Text = tostring(currentText or "Select")
+			button.TextColor3 = UI.MENU_TEXT_IDLE
+			button.FontFace = UI.MENU_FONT_REGULAR_FACE
+			setResponsiveTextSize(button, 12.5)
+			button.TextXAlignment = Enum.TextXAlignment.Left
+			button.TextYAlignment = Enum.TextYAlignment.Center
+			button.ZIndex = 45013
+			button.Parent = row
+			ensureCorner(button, px(5))
+			rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(button)
+			local pad = New("UIPadding")
+			pad.PaddingLeft = UDim.new(0, px(10))
+			pad.PaddingRight = UDim.new(0, px(10))
+			pad.Parent = button
+			if type(onOpen) == "function" then
+				button.Activated:Connect(function() onOpen(button) end)
+			end
 			return button
 		end
 		function helpers.colorRow(labelText, utilityKey, defaultHex, applyCallback)
@@ -11453,8 +11800,8 @@ end
 			label.BackgroundTransparency = 1
 			label.BorderSizePixel = 0
 			label.Text = tostring(labelText or "")
-			label.TextColor3 = MENU_TEXT_SELECTED
-			label.FontFace = MENU_FONT_REGULAR_FACE
+			label.TextColor3 = UI.MENU_TEXT_SELECTED
+			label.FontFace = UI.MENU_FONT_REGULAR_FACE
 			setResponsiveTextSize(label, 12.5)
 			label.TextXAlignment = Enum.TextXAlignment.Left
 			label.TextYAlignment = Enum.TextYAlignment.Center
@@ -11468,8 +11815,8 @@ end
 			swatch.Parent = row
 			ensureCorner(swatch, px(5))
 			local swatchStroke = New("UIStroke")
-			swatchStroke.Color = LINE_COLOR
-			swatchStroke.Thickness = LINE_THICKNESS
+			swatchStroke.Color = UI.LINE_COLOR
+			swatchStroke.Thickness = UI.LINE_THICKNESS
 			swatchStroke.Transparency = 0.08
 			swatchStroke.Parent = swatch
 			local box = New("TextBox")
@@ -11480,13 +11827,13 @@ end
 			box.BorderSizePixel = 0
 			box.ClearTextOnFocus = false
 			box.Text = tostring(autoServerHopState.Utility[utilityKey] or defaultHex)
-			box.TextColor3 = MENU_TEXT_IDLE
-			box.FontFace = MENU_FONT_REGULAR_FACE
+			box.TextColor3 = UI.MENU_TEXT_IDLE
+			box.FontFace = UI.MENU_FONT_REGULAR_FACE
 			setResponsiveTextSize(box, 11.5)
 			box.TextXAlignment = Enum.TextXAlignment.Center
 			box.Parent = row
 			ensureCorner(box, px(5))
-			rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(box)
+			rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(box)
 			local function syncSwatch()
 				local text = string.upper(tostring(box.Text or ""))
 				local hex = text:gsub("#", "")
@@ -11522,8 +11869,8 @@ end
 		unsupportedPanelGroups[tabItem] = unsupportedPanelGroups[tabItem] or {}
 		table.insert(unsupportedPanelGroups[tabItem], panelData)
 		table.insert(allUnsupportedPanels, panelData)
-		header.MouseEnter:Connect(function() tweenChevronColor(chevron, MENU_TEXT_HOVER) end)
-		header.MouseLeave:Connect(function() tweenChevronColor(chevron, PANEL_CHEVRON_COLOR) end)
+		header.MouseEnter:Connect(function() tweenChevronColor(chevron, UI.MENU_TEXT_HOVER) end)
+		header.MouseLeave:Connect(function() tweenChevronColor(chevron, UI.PANEL_CHEVRON_COLOR) end)
 		return panelData
 	end
 
@@ -11603,11 +11950,11 @@ end
 	local function applyTheme()
 		local utility = autoServerHopState.Utility
 		local old = {
-			Black = BLACK, Pink = PINK, Line = LINE_COLOR,
-			Panel = PANEL_BACKGROUND, Search = SEARCH_BACKGROUND, Feature = FEATURE_OFF_COLOR,
-			Selected = MENU_TEXT_SELECTED, Idle = MENU_TEXT_IDLE, Hover = MENU_TEXT_HOVER,
-			Muted = MUTED_TEXT_COLOR, SearchText = SEARCH_TEXT_COLOR,
-			Placeholder = SEARCH_PLACEHOLDER_COLOR, Chevron = PANEL_CHEVRON_COLOR,
+			Black = UI.BLACK, Pink = UI.PINK, Line = UI.LINE_COLOR,
+			Panel = UI.PANEL_BACKGROUND, Search = UI.SEARCH_BACKGROUND, Feature = UI.FEATURE_OFF_COLOR,
+			Selected = UI.MENU_TEXT_SELECTED, Idle = UI.MENU_TEXT_IDLE, Hover = UI.MENU_TEXT_HOVER,
+			Muted = UI.MUTED_TEXT_COLOR, SearchText = UI.SEARCH_TEXT_COLOR,
+			Placeholder = UI.SEARCH_PLACEHOLDER_COLOR, Chevron = UI.PANEL_CHEVRON_COLOR,
 		}
 		local background = hexColor(utility.ThemeBackground, RGB(9,10,12))
 		local main = hexColor(utility.ThemeMain, RGB(13,14,17))
@@ -11621,28 +11968,28 @@ end
 		local muted = blendColor(font, background, 0.50)
 		local placeholder = blendColor(font, background, 0.54)
 
-		BLACK = background
-		PINK = accent
-		LINE_COLOR = outline
-		PANEL_BACKGROUND = main
-		SEARCH_BACKGROUND = search
-		FEATURE_OFF_COLOR = feature
-		MENU_TEXT_SELECTED = font
-		SEARCH_TEXT_COLOR = font
-		MENU_TEXT_IDLE = idle
-		MENU_TEXT_HOVER = hover
-		MUTED_TEXT_COLOR = muted
-		SEARCH_PLACEHOLDER_COLOR = placeholder
-		PANEL_CHEVRON_COLOR = idle
+		UI.BLACK = background
+		UI.PINK = accent
+		UI.LINE_COLOR = outline
+		UI.PANEL_BACKGROUND = main
+		UI.SEARCH_BACKGROUND = search
+		UI.FEATURE_OFF_COLOR = feature
+		UI.MENU_TEXT_SELECTED = font
+		UI.SEARCH_TEXT_COLOR = font
+		UI.MENU_TEXT_IDLE = idle
+		UI.MENU_TEXT_HOVER = hover
+		UI.MUTED_TEXT_COLOR = muted
+		UI.SEARCH_PLACEHOLDER_COLOR = placeholder
+		UI.PANEL_CHEVRON_COLOR = idle
 		INPUT_BG = feature
 
 		local fontEnum, regularFace, semiboldFace, boldFace = resolveFontFaces(utility.ThemeFontChoice)
-		MENU_FONT = fontEnum
-		MENU_FONT_FACE = regularFace
-		MENU_FONT_REGULAR_FACE = regularFace
-		MENU_FONT_SEMIBOLD_FACE = semiboldFace
-		MENU_FONT_BOLD_FACE = boldFace
-		PANEL_FONT_FACE = semiboldFace
+		UI.MENU_FONT = fontEnum
+		UI.MENU_FONT_FACE = regularFace
+		UI.MENU_FONT_REGULAR_FACE = regularFace
+		UI.MENU_FONT_SEMIBOLD_FACE = semiboldFace
+		UI.MENU_FONT_BOLD_FACE = boldFace
+		UI.PANEL_FONT_FACE = semiboldFace
 
 		for _, object in ipairs(screenGui:GetDescendants()) do
 			if object:IsA("GuiObject") then
@@ -11669,9 +12016,9 @@ end
 				if object:IsA("TextBox") and object.PlaceholderColor3 == old.Placeholder then
 					object.PlaceholderColor3 = placeholder
 				end
-				local isLogoText = object == tuffLabel or object == hubLabel
-					or object == compactTLabel or object == compactHLabel
-					or object.Name == "CompactT" or object.Name == "CompactH"
+				local isLogoText = object == droidLabel or object == hubLabel
+					or object == compactDLabel or object == compactHLabel
+					or object.Name == "CompactD" or object.Name == "CompactH"
 				if not isLogoText then
 					local weight
 					pcall(function() weight = object.FontFace.Weight end)
@@ -11687,16 +12034,16 @@ end
 		end
 		window.BackgroundColor3 = background
 	end
-	rawset(_G, "__TUFFHUB_APPLY_THEME", applyTheme)
+	rawset(_G, "__DROIDHUB_APPLY_THEME", applyTheme)
 
 	-- HOME
-	makePanel(tabs.Home, 1, 1, 1, "TuffHub Status", "game version update status tsunami brainrot", function(h)
+	makePanel(tabs.Home, 1, 1, 1, "DroidHub Status", "game version update status tsunami brainrot", function(h)
 		h.info("Version", "v1.0.0")
-		h.info("Last Update", "9/20/26")
+		h.info("Last Update", "9/21/26")
 		h.info("Status", "Fully Functional", GOOD)
 	end)
 	makePanel(tabs.Home, 2, 2, 1, "Latest Updates", "latest updates changelog finished development", function(h)
-		h.note("• 9/20/26: Added Hot Potato Minigame Support.\n• 9/16/26: Finished Development.", MENU_TEXT_SELECTED, px(58))
+		h.note("• 9/21/26: Added Bat Battle Minigame Support.\n• 9/20/26: Added Hot Potato Minigame Support.\n• 9/16/26: Finished Development.", UI.MENU_TEXT_SELECTED, px(76))
 	end)
 	makePanel(tabs.Home, 3, 1, 2, "Executor", "executor supported volt potassium delta", function(h)
 		local executorName = identifyExecutorName()
@@ -11765,13 +12112,13 @@ end
 	local configStatus
 	local configNames = {}
 	local autoloadConfigName
-	autoServerHopState.RuntimeAutoloadTargetName = nil
+	local autoloadSelectionName
 	autoServerHopState.RuntimeAutoloadCurrentLabel = nil
 
 	local function readAutoloadConfigName()
 		autoloadConfigName = nil
 		if type(readfile) ~= "function" then return end
-		local ok, value = pcall(readfile, "TuffHub_Configs/autoload.txt")
+		local ok, value = pcall(readfile, "DroidHub_Configs/autoload.txt")
 		if not ok or type(value) ~= "string" then return end
 		value = (value:match("^%s*(.-)%s*$") or ""):gsub("[^%w _%-]", ""):sub(1, 48)
 		if value ~= "" then autoloadConfigName = value end
@@ -11781,21 +12128,21 @@ end
 		name = tostring(name or "")
 		if name == "" then
 			autoloadConfigName = nil
-			if type(delfile) == "function" then pcall(delfile, "TuffHub_Configs/autoload.txt") end
+			if type(delfile) == "function" then pcall(delfile, "DroidHub_Configs/autoload.txt") end
 			return true
 		end
 		if type(writefile) ~= "function" then return false end
-		if type(makefolder) == "function" then pcall(makefolder, "TuffHub_Configs") end
-		local ok = pcall(writefile, "TuffHub_Configs/autoload.txt", name)
+		if type(makefolder) == "function" then pcall(makefolder, "DroidHub_Configs") end
+		local ok = pcall(writefile, "DroidHub_Configs/autoload.txt", name)
 		if ok then autoloadConfigName = name end
 		return ok
 	end
 
 	local function refreshConfigList()
 		configNames = {}
-		if type(makefolder) == "function" then pcall(makefolder, "TuffHub_Configs") end
+		if type(makefolder) == "function" then pcall(makefolder, "DroidHub_Configs") end
 		if type(listfiles) == "function" then
-			local ok, files = pcall(listfiles, "TuffHub_Configs")
+			local ok, files = pcall(listfiles, "DroidHub_Configs")
 			if ok and type(files) == "table" then
 				for _, path in ipairs(files) do
 					local name = tostring(path):match("([^/\\]+)%.json$")
@@ -11805,23 +12152,22 @@ end
 		end
 		table.sort(configNames, function(a,b) return string.lower(a) < string.lower(b) end)
 		if currentConfigName and not table.find(configNames, currentConfigName) then currentConfigName = nil end
+		if autoloadSelectionName and not table.find(configNames, autoloadSelectionName) then autoloadSelectionName = nil end
 		readAutoloadConfigName()
 		if autoloadConfigName and not table.find(configNames, autoloadConfigName) then
 			writeAutoloadConfigName(nil)
 		end
-		if autoServerHopState.RuntimeAutoloadTargetName
-			and not table.find(configNames, autoServerHopState.RuntimeAutoloadTargetName)
-		then
-			autoServerHopState.RuntimeAutoloadTargetName = nil
+		if not autoloadSelectionName and autoloadConfigName and table.find(configNames, autoloadConfigName) then
+			autoloadSelectionName = autoloadConfigName
 		end
 		if configSelectButton then
-			configSelectButton.Text = currentConfigName or (#configNames > 0 and "Select Config" or "")
+			configSelectButton.Text = currentConfigName or "Choose Saved Config"
 		end
 		if autoloadSelectButton then
-			autoloadSelectButton.Text = autoServerHopState.RuntimeAutoloadTargetName or "None"
+			autoloadSelectButton.Text = autoloadSelectionName or "Choose Autoload Config"
 		end
 		if autoServerHopState.RuntimeAutoloadCurrentLabel then
-			autoServerHopState.RuntimeAutoloadCurrentLabel.Text = "Current autoload config: " .. (autoloadConfigName or "none")
+			autoServerHopState.RuntimeAutoloadCurrentLabel.Text = "Autoloaded Config: " .. (autoloadConfigName or "None")
 		end
 	end
 
@@ -11832,42 +12178,58 @@ end
 	end
 	local function setConfigStatus(text, color)
 		if configStatus then
-			configStatus.Text = tostring(text or "")
-			configStatus.TextColor3 = color or MUTED_TEXT_COLOR
+			local value = tostring(text or "")
+			configStatus.Text = value
+			configStatus.TextColor3 = color or UI.MUTED_TEXT_COLOR
+			local row = configStatus.Parent
+			if row and row:IsA("GuiObject") then
+				row.Visible = value ~= ""
+			end
 		end
 	end
 	local function createConfig(overwrite)
 		if type(writefile) ~= "function" then setConfigStatus("File access unavailable", WARNING) return end
-		local name = safeConfigName(configNameBox and configNameBox.Text or currentConfigName)
-		if name == "" then setConfigStatus("Enter a config name", WARNING) return end
-		local exporter = rawget(_G, "__TUFFHUB_EXPORT_SETTINGS")
+		local name
+		if overwrite then
+			name = safeConfigName(currentConfigName)
+			if name == "" then setConfigStatus("Choose a saved config first", WARNING) return end
+		else
+			name = safeConfigName(configNameBox and configNameBox.Text or "")
+			if name == "" then setConfigStatus("Enter a config name", WARNING) return end
+			refreshConfigList()
+			if table.find(configNames, name) then
+				setConfigStatus("That config already exists. Select it and use Overwrite Config.", WARNING)
+				return
+			end
+		end
+		local exporter = rawget(_G, "__DROIDHUB_EXPORT_SETTINGS")
 		if type(exporter) ~= "function" then setConfigStatus("Settings exporter unavailable", DANGER) return end
 		local okSnapshot, snapshot = pcall(exporter)
 		if not okSnapshot or type(snapshot) ~= "table" then setConfigStatus("Could not capture settings", DANGER) return end
-		if type(makefolder) == "function" then pcall(makefolder, "TuffHub_Configs") end
-		local path = "TuffHub_Configs/" .. name .. ".json"
+		if type(makefolder) == "function" then pcall(makefolder, "DroidHub_Configs") end
+		local path = "DroidHub_Configs/" .. name .. ".json"
 		local okWrite = pcall(writefile, path, HttpService:JSONEncode(snapshot))
 		if okWrite then
 			currentConfigName = name
 			refreshConfigList()
 			if configSelectButton then configSelectButton.Text = name end
-			setConfigStatus(overwrite and "Config overwritten" or "Config saved", GOOD)
+			setConfigStatus(overwrite and "Changes saved" or "Config created", GOOD)
 		else
 			setConfigStatus("Could not write config", DANGER)
 		end
 	end
 	local function loadConfig()
 		if not currentConfigName or type(readfile) ~= "function" then setConfigStatus("Select a config", WARNING) return end
-		local okRead, encoded = pcall(readfile, "TuffHub_Configs/" .. currentConfigName .. ".json")
+		local okRead, encoded = pcall(readfile, "DroidHub_Configs/" .. currentConfigName .. ".json")
 		if not okRead or type(encoded) ~= "string" then setConfigStatus("Could not read config", DANGER) return end
 		local decoded
 		local okDecode = pcall(function() decoded = HttpService:JSONDecode(encoded) end)
-		local importer = rawget(_G, "__TUFFHUB_IMPORT_SETTINGS")
+		local importer = rawget(_G, "__DROIDHUB_IMPORT_SETTINGS")
 		if not okDecode or type(decoded) ~= "table" or type(importer) ~= "function" then setConfigStatus("Invalid config", DANGER) return end
 		local okImport, imported = pcall(importer, decoded)
 		if okImport and imported then
 			applyTheme()
-			local refresh = rawget(_G, "__TUFFHUB_REFRESH_CUSTOM_SETTINGS_UI")
+			local refresh = rawget(_G, "__DROIDHUB_REFRESH_CUSTOM_SETTINGS_UI")
 			if type(refresh) == "function" then refresh() end
 			setConfigStatus("Config loaded", GOOD)
 		else
@@ -11877,9 +12239,10 @@ end
 	local function deleteConfig()
 		if not currentConfigName or type(delfile) ~= "function" then setConfigStatus("Select a config", WARNING) return end
 		local deletingName = currentConfigName
-		local deleted = pcall(delfile, "TuffHub_Configs/" .. deletingName .. ".json")
+		local deleted = pcall(delfile, "DroidHub_Configs/" .. deletingName .. ".json")
 		if deleted then
 			if autoloadConfigName == deletingName then writeAutoloadConfigName(nil) end
+			if autoloadSelectionName == deletingName then autoloadSelectionName = nil end
 			currentConfigName = nil
 			refreshConfigList()
 			setConfigStatus("Config deleted", GOOD)
@@ -11897,7 +12260,7 @@ end
 		bindCaptureConnection = UserInputService.InputBegan:Connect(function(input, processed)
 			if processed or input.UserInputType ~= Enum.UserInputType.Keyboard or input.KeyCode == Enum.KeyCode.Unknown then return end
 			if bindCaptureConnection then bindCaptureConnection:Disconnect(); bindCaptureConnection = nil end
-			TOGGLE_KEY = input.KeyCode
+			UI.TOGGLE_KEY = input.KeyCode
 			autoServerHopState.Utility.MenuBindKey = input.KeyCode.Name
 			autoServerHopState.RuntimeSuppressMenuToggleUntil = os.clock() + 0.35
 			if menuBindButton then menuBindButton.Text = input.KeyCode.Name end
@@ -11908,7 +12271,7 @@ end
 		end)
 	end
 
-	makePanel(settingsTab, 1, 1, 1, "Menu", "settings menu start minimized open menu bind reset tuffhub", function(h)
+	makePanel(settingsTab, 1, 1, 1, "Menu", "settings menu start minimized open menu bind reset droidhub", function(h)
 		startModeButton = h.selectRow("Start Mode", autoServerHopState.Utility.GuiStartMinimized and "Minimized" or "Open", function(button)
 			local selected = autoServerHopState.Utility.GuiStartMinimized and "Minimized" or "Open"
 			openChoicePopup(button, {"Open", "Minimized"}, selected, function(choice)
@@ -11916,17 +12279,17 @@ end
 				button.Text = choice
 			end)
 		end)
-		menuBindButton = h.selectRow("Menu Bind", tostring(autoServerHopState.Utility.MenuBindKey or TOGGLE_KEY.Name), function(button)
+		menuBindButton = h.selectRow("Menu Bind", tostring(autoServerHopState.Utility.MenuBindKey or UI.TOGGLE_KEY.Name), function(button)
 			beginMenuBindCapture(button)
 		end)
-		h.button("Reset TuffHub", function()
-			local reset = rawget(_G, "__TUFFHUB_RESET_ALL_SETTINGS_STATE")
+		h.button("Reset DroidHub", function()
+			local reset = rawget(_G, "__DROIDHUB_RESET_ALL_SETTINGS_STATE")
 			if type(reset) == "function" then pcall(reset) end
 			local savedBind = tostring(autoServerHopState.Utility.MenuBindKey or "LeftControl")
 			local okKey, keyCode = pcall(function() return Enum.KeyCode[savedBind] end)
-			TOGGLE_KEY = okKey and keyCode or Enum.KeyCode.LeftControl
+			UI.TOGGLE_KEY = okKey and keyCode or Enum.KeyCode.LeftControl
 			applyTheme()
-			local refresh = rawget(_G, "__TUFFHUB_REFRESH_CUSTOM_SETTINGS_UI")
+			local refresh = rawget(_G, "__DROIDHUB_REFRESH_CUSTOM_SETTINGS_UI")
 			if type(refresh) == "function" then refresh() end
 		end, DANGER)
 	end)
@@ -11949,88 +12312,98 @@ end
 	end)
 
 	makePanel(settingsTab, 3, 1, 3, "Keybinds", "settings keybinds menu toggle", function(h)
-		keybindValue = h.selectRow("Menu Toggle", tostring(autoServerHopState.Utility.MenuBindKey or TOGGLE_KEY.Name), function(button)
+		keybindValue = h.selectRow("Menu Toggle", tostring(autoServerHopState.Utility.MenuBindKey or UI.TOGGLE_KEY.Name), function(button)
 			beginMenuBindCapture(button)
 		end)
 		h.button("Reset Keybinds", function()
-			TOGGLE_KEY = Enum.KeyCode.LeftControl
+			UI.TOGGLE_KEY = Enum.KeyCode.LeftControl
 			autoServerHopState.Utility.MenuBindKey = "LeftControl"
 			if menuBindButton then menuBindButton.Text = "LeftControl" end
 			if keybindValue then keybindValue.Text = "LeftControl" end
 		end)
 	end)
 
-	makePanel(settingsTab, 4, 2, 1, "Configs", "settings configs create load overwrite delete refresh autoload", function(h)
-		h.subheading("Config Name")
-		configNameBox = h.input("Enter config name...", "")
+	makePanel(settingsTab, 4, 2, 1, "Configs", "settings configs save load overwrite delete autoload", function(h)
+		h.subheading("New Config")
+		configNameBox = h.input("Config Name", "")
 		h.button("Create Config", function() createConfig(false) end)
-		configSelectButton = h.selectRow("Config List", "", function(button)
+		h.separator()
+
+		h.subheading("Saved Configs")
+		configSelectButton = h.fullSelect("Choose Saved Config", function(button)
 			refreshConfigList()
-			if #configNames == 0 then setConfigStatus("No configs found", MUTED_TEXT_COLOR) return end
+			if #configNames == 0 then
+				setConfigStatus("No saved configs found", UI.MUTED_TEXT_COLOR)
+				return
+			end
 			openChoicePopup(button, configNames, currentConfigName, function(choice)
 				currentConfigName = tostring(choice)
 				button.Text = currentConfigName
-				if configNameBox then configNameBox.Text = currentConfigName end
-				setConfigStatus("Selected " .. currentConfigName, MUTED_TEXT_COLOR)
+				setConfigStatus("Selected: " .. currentConfigName, UI.MUTED_TEXT_COLOR)
 			end)
 		end)
 		h.button("Load Config", loadConfig)
 		h.button("Overwrite Config", function()
-			if configNameBox and configNameBox.Text == "" and currentConfigName then configNameBox.Text = currentConfigName end
 			createConfig(true)
 		end)
 		h.button("Delete Config", deleteConfig, DANGER)
-		h.button("Refresh List", function()
+		h.separator()
+
+		h.subheading("AUTOLOAD CONFIG")
+		autoloadSelectButton = h.fullSelect("Choose Autoload Config", function(button)
 			refreshConfigList()
-			setConfigStatus("Config list refreshed", MUTED_TEXT_COLOR)
-		end)
-		h.subheading("Autoload")
-		autoloadSelectButton = h.selectRow("Autoload Target", "None", function(button)
-			refreshConfigList()
-			local options = {"None"}
-			for _, name in ipairs(configNames) do options[#options + 1] = name end
-			openChoicePopup(button, options, autoServerHopState.RuntimeAutoloadTargetName or "None", function(choice)
-				local name = tostring(choice)
-				autoServerHopState.RuntimeAutoloadTargetName = name ~= "None" and name or nil
-				button.Text = autoServerHopState.RuntimeAutoloadTargetName or "None"
+			if #configNames == 0 then
+				setConfigStatus("No saved configs found", UI.MUTED_TEXT_COLOR)
+				return
+			end
+			openChoicePopup(button, configNames, autoloadSelectionName, function(choice)
+				autoloadSelectionName = tostring(choice)
+				button.Text = autoloadSelectionName
+				setConfigStatus("Autoload selection: " .. autoloadSelectionName, UI.MUTED_TEXT_COLOR)
 			end)
 		end)
-		h.button("Set as Autoload", function()
-			local target = autoServerHopState.RuntimeAutoloadTargetName
+		h.button("Set As Autoload", function()
+			refreshConfigList()
+			local target = autoloadSelectionName
 			if not target or not table.find(configNames, target) then
-				setConfigStatus("Select an autoload target", WARNING)
+				setConfigStatus("Choose an autoload config first", WARNING)
 				return
 			end
 			if writeAutoloadConfigName(target) then
-				if autoServerHopState.RuntimeAutoloadCurrentLabel then autoServerHopState.RuntimeAutoloadCurrentLabel.Text = "Current autoload config: " .. target end
+				if autoServerHopState.RuntimeAutoloadCurrentLabel then
+					autoServerHopState.RuntimeAutoloadCurrentLabel.Text = "Autoloaded Config: " .. target
+				end
 				setConfigStatus("Autoload set to " .. target, GOOD)
 			else
-				setConfigStatus("Could not save autoload selection", DANGER)
+				setConfigStatus("Could not save autoload config", DANGER)
 			end
 		end)
-		h.button("Clear Autoload", function()
+		h.button("Reset Autoload", function()
 			writeAutoloadConfigName(nil)
-			autoServerHopState.RuntimeAutoloadTargetName = nil
-			if autoloadSelectButton then autoloadSelectButton.Text = "None" end
-			if autoServerHopState.RuntimeAutoloadCurrentLabel then autoServerHopState.RuntimeAutoloadCurrentLabel.Text = "Current autoload config: none" end
-			setConfigStatus("Autoload cleared", MUTED_TEXT_COLOR)
+			autoloadSelectionName = nil
+			if autoloadSelectButton then autoloadSelectButton.Text = "Choose Autoload Config" end
+			if autoServerHopState.RuntimeAutoloadCurrentLabel then
+				autoServerHopState.RuntimeAutoloadCurrentLabel.Text = "Autoloaded Config: None"
+			end
+			setConfigStatus("Autoload reset", UI.MUTED_TEXT_COLOR)
 		end)
-		autoServerHopState.RuntimeAutoloadCurrentLabel = h.note("Current autoload config: none", MUTED_TEXT_COLOR, px(28))
-		configStatus = h.note("Current config: none", MUTED_TEXT_COLOR, px(28))
+		autoServerHopState.RuntimeAutoloadCurrentLabel = h.note("Autoloaded Config: None", UI.MUTED_TEXT_COLOR, px(28))
+		configStatus = h.note("", UI.MUTED_TEXT_COLOR, px(28))
+		if configStatus.Parent then
+			configStatus.Parent.Visible = false
+		end
 	end)
 
 	local function refreshCustomSettings()
 		for _, refresh in ipairs(customRefreshers) do pcall(refresh) end
 		if startModeButton then startModeButton.Text = autoServerHopState.Utility.GuiStartMinimized and "Minimized" or "Open" end
-		if menuBindButton then menuBindButton.Text = tostring(autoServerHopState.Utility.MenuBindKey or TOGGLE_KEY.Name) end
-		if keybindValue then keybindValue.Text = tostring(autoServerHopState.Utility.MenuBindKey or TOGGLE_KEY.Name) end
+		if menuBindButton then menuBindButton.Text = tostring(autoServerHopState.Utility.MenuBindKey or UI.TOGGLE_KEY.Name) end
+		if keybindValue then keybindValue.Text = tostring(autoServerHopState.Utility.MenuBindKey or UI.TOGGLE_KEY.Name) end
 		if themeFontButton then themeFontButton.Text = tostring(autoServerHopState.Utility.ThemeFontChoice or "BuilderSans") end
 		refreshConfigList()
-		if configStatus then configStatus.Text = currentConfigName and ("Current config: " .. currentConfigName) or "Current config: none" end
-		if autoloadSelectButton then autoloadSelectButton.Text = autoServerHopState.RuntimeAutoloadTargetName or "None" end
-		if autoServerHopState.RuntimeAutoloadCurrentLabel then autoServerHopState.RuntimeAutoloadCurrentLabel.Text = "Current autoload config: " .. (autoloadConfigName or "none") end
+		if autoServerHopState.RuntimeAutoloadCurrentLabel then autoServerHopState.RuntimeAutoloadCurrentLabel.Text = "Autoloaded Config: " .. (autoloadConfigName or "None") end
 	end
-	rawset(_G, "__TUFFHUB_REFRESH_CUSTOM_SETTINGS_UI", refreshCustomSettings)
+	rawset(_G, "__DROIDHUB_REFRESH_CUSTOM_SETTINGS_UI", refreshCustomSettings)
 	refreshCustomSettings()
 	applyTheme()
 
@@ -12059,8 +12432,7 @@ end)()
 		1,
 		"Simple Auto Farm",
 		{
-			{Label = "Enable Simple Auto Farm", UtilityToggleKey = "SimpleAutofarmEnabled"},
-			{InfoNoteText = "Simple Auto Farm has its own settings profile. While this mode is enabled, changes anywhere in TuffHub apply only to Simple Auto Farm. Disable it to return to your Regular Mode settings. Both profiles are saved together in the same config."},
+			{Label = "Simple Auto Farm", UtilityToggleKey = "SimpleAutofarmEnabled"},
 			{SimpleAutofarmWarning = true},
 			{Label = "Reset Simple Auto Farm Settings", ActionButton = true, Action = "ResetSimpleAutofarm", VisibilityUtilityParentKey = "SimpleAutofarmEnabled"},
 		}
@@ -12072,7 +12444,7 @@ end)()
 		1,
 		"Minigame Autoplay",
 		{
-			{Label = "Enable", UtilityToggleKey = "AutoPlayMaster"},
+			{Label = "Autoplay", UtilityToggleKey = "AutoPlayMaster"},
 			{Label = "Connect 4", Id = "ConnectFour", VisibilityUtilityParentKey = "AutoPlayMaster"},
 			{Label = "Move Delay", UtilitySliderKey = "MoveDelayConnectFour", MinigameParentId = "ConnectFour", VisibilityUtilityParentKey = "AutoPlayMaster", MinValue = 0, MaxValue = 5, Step = 0.05, Decimals = 2, UnitLabel = "Seconds"},
 			{Label = "Football Draft", Id = "FootballDraft", VisibilityUtilityParentKey = "AutoPlayMaster"},
@@ -12087,9 +12459,10 @@ end)()
 			{Label = "Move Delay", UtilitySliderKey = "MoveDelayKnockout", MinigameParentId = "Knockout", VisibilityUtilityParentKey = "AutoPlayMaster", MinValue = 0, MaxValue = 5, Step = 0.05, Decimals = 2, UnitLabel = "Seconds"},
 			{Label = "Popcorn Burst", Id = "PopcornBurst", VisibilityUtilityParentKey = "AutoPlayMaster"},
 			{Label = "Hot Potato", Id = "HotPotato", VisibilityUtilityParentKey = "AutoPlayMaster"},
-			{Label = "Auto Give Back", UtilityToggleKey = "HotPotatoAutoGiveBack", MinigameParentId = "HotPotato", VisibilityUtilityParentKey = "AutoPlayMaster"},
-			{Label = "Keybind Give Back", UtilityToggleKey = "HotPotatoPressButtonToGiveBack", MinigameParentId = "HotPotato", VisibilityUtilityParentKey = "AutoPlayMaster"},
-			(not UserInputService.TouchEnabled) and {Label = "Give Back Keybind", UtilityDropdownKey = "HotPotatoGiveBackKey", UtilityParentKey = "HotPotatoPressButtonToGiveBack", MinigameParentId = "HotPotato", VisibilityUtilityParentKey = "AutoPlayMaster", Placeholder = "Select", Options = {"Q", "E", "R", "F", "G", "T", "Y", "U", "I", "O", "P", "A", "S", "D", "H", "J", "K", "L", "Z", "X", "C", "V", "B", "N", "M", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Zero", "Space", "LeftShift", "RightShift", "LeftControl", "RightControl", "LeftAlt", "RightAlt", "CapsLock", "Tab", "BackSlash", "Semicolon", "Quote", "Comma", "Period", "Slash", "Up", "Down", "Left", "Right"}} or nil,
+			{Label = "Auto Potato Handoff", UtilityToggleKey = "HotPotatoAutoGiveBack", MinigameParentId = "HotPotato", VisibilityUtilityParentKey = "AutoPlayMaster"},
+			{Label = "Potato Handoff Keybind", UtilityToggleKey = "HotPotatoPressButtonToGiveBack", MinigameParentId = "HotPotato", VisibilityUtilityParentKey = "AutoPlayMaster"},
+			(not UserInputService.TouchEnabled) and {Label = "Handoff Key", UtilityDropdownKey = "HotPotatoGiveBackKey", UtilityParentKey = "HotPotatoPressButtonToGiveBack", MinigameParentId = "HotPotato", VisibilityUtilityParentKey = "AutoPlayMaster", Placeholder = "Select", Options = {"Q", "E", "R", "F", "G", "T", "Y", "U", "I", "O", "P", "A", "S", "D", "H", "J", "K", "L", "Z", "X", "C", "V", "B", "N", "M", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Zero", "Space", "LeftShift", "RightShift", "LeftControl", "RightControl", "LeftAlt", "RightAlt", "CapsLock", "Tab", "BackSlash", "Semicolon", "Quote", "Comma", "Period", "Slash", "Up", "Down", "Left", "Right"}} or nil,
+			{Label = "Bat Battle", Id = "BatBattle", VisibilityUtilityParentKey = "AutoPlayMaster"},
 		}
 	)
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
@@ -12099,13 +12472,12 @@ end)()
 		1,
 		"Auto Leave",
 		{
-			{Label = "Enable Auto Leave", UtilityToggleKey = "LeaveWhenAboutToLose"},
-			{InfoNoteText = "Leaves before a clinching minigame loss or after a confirmed disconnect. Minigame Autoplay does not need to be enabled."},
+			{Label = "Auto Leave", UtilityToggleKey = "LeaveWhenAboutToLose"},
 		}
 	)
 	do
 		local rarityOfferFeatures = {
-			{Label = "Enable Auto Offer", UtilityToggleKey = "AutoOfferMaster"},
+			{Label = "Auto Offer", UtilityToggleKey = "AutoOfferMaster"},
 		}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 			rarityOfferFeatures[#rarityOfferFeatures + 1] = {
@@ -12115,7 +12487,7 @@ end)()
 		end
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Offers, 2, 1, 1, "Brainrot & Item Offers", rarityOfferFeatures)
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Offers, 24, 2, 1, "Token Matching", {
-			{Label = "Enable", UtilityToggleKey = "AutoOfferTokensEnabled"},
+			{Label = "Token Matching", UtilityToggleKey = "AutoOfferTokensEnabled"},
 			{Label = "Match Token Offers", UtilityToggleKey = "AutoOfferMatchTokensWithTokens", UtilityParentKey = "AutoOfferTokensEnabled", SeparatorGroup = "AutoOfferMatchTokensWithTokensGroup"},
 			{Label = "Token Match Multiplier", UtilitySliderKey = "AutoOfferTokenAddRatio", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithTokens"}, SeparatorGroup = "AutoOfferMatchTokensWithTokensGroup", MinValue = 1, MaxValue = 10, UnitLabel = "Multiplier"},
 			{Label = "Minimum Tokens to Match", UtilitySliderKey = "AutoOfferLowestTokensToMatch", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithTokens"}, SeparatorGroup = "AutoOfferMatchTokensWithTokensGroup", MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"},
@@ -12124,14 +12496,14 @@ end)()
 			{Label = "Brainrot Rarity to Offer", UtilityDropdownKey = "AutoOfferTokenRarity", UtilityParentKeys = {"AutoOfferTokensEnabled", "AutoOfferMatchTokensWithBrainrots"}, SeparatorGroup = "AutoOfferMatchTokensWithBrainrotsGroup", Placeholder = "Select", Options = OUTGOING_BRAINROT_RARITY_OPTIONS},
 		})
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Offers, 25, 1, 2, "Chat-Based Offers", {
-			{Label = "Enable", UtilityToggleKey = "AutoOfferBasedOnTradeChat", TradeChatOfferManager = true},
+			{Label = "Chat-Based Offers", UtilityToggleKey = "AutoOfferBasedOnTradeChat", TradeChatOfferManager = true},
 		})
 	end
 	do
 		local autoSitFeatures = {
 			{Label = "Empty Tables", SitKey = "EmptyTables"},
 			{
-				Label = "Tables With 1 Player",
+				Label = "Tables With One Player",
 				SitKey = "OneOfTwo",
 				Source = "OneOfTwo",
 				Options = RARITY_OPTIONS,
@@ -12182,7 +12554,7 @@ end)()
 		-- Regular Trade Offer mirrors the reactive Minigame Offers tools, but uses
 		-- an independent offer namespace so configuring one trade type never changes the other.
 		local regularRarityOfferFeatures = {
-			{Label = "Enable Auto Offer", UtilityToggleKey = "RegularAutoOfferMaster"},
+			{Label = "Auto Offer", UtilityToggleKey = "RegularAutoOfferMaster"},
 		}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 			regularRarityOfferFeatures[#regularRarityOfferFeatures + 1] = {
@@ -12195,7 +12567,7 @@ end)()
 		end
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 37, 1, 2, "Brainrot & Item Offers", regularRarityOfferFeatures)
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 38, 2, 2, "Token Matching", {
-			{Label = "Enable Token Matching", UtilityToggleKey = "RegularAutoOfferTokensEnabled"},
+			{Label = "Token Matching", UtilityToggleKey = "RegularAutoOfferTokensEnabled"},
 			{Label = "Match Token Offers", UtilityToggleKey = "RegularAutoOfferMatchTokensWithTokens", UtilityParentKey = "RegularAutoOfferTokensEnabled", SeparatorGroup = "RegularAutoOfferMatchTokensWithTokensGroup"},
 			{Label = "Token Match Multiplier", UtilitySliderKey = "RegularAutoOfferTokenAddRatio", UtilityParentKeys = {"RegularAutoOfferTokensEnabled", "RegularAutoOfferMatchTokensWithTokens"}, SeparatorGroup = "RegularAutoOfferMatchTokensWithTokensGroup", MinValue = 1, MaxValue = 10, UnitLabel = "Multiplier"},
 			{Label = "Minimum Tokens to Match", UtilitySliderKey = "RegularAutoOfferLowestTokensToMatch", UtilityParentKeys = {"RegularAutoOfferTokensEnabled", "RegularAutoOfferMatchTokensWithTokens"}, SeparatorGroup = "RegularAutoOfferMatchTokensWithTokensGroup", MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"},
@@ -12204,12 +12576,12 @@ end)()
 			{Label = "Brainrot Rarity to Offer", UtilityDropdownKey = "RegularAutoOfferTokenRarity", UtilityParentKeys = {"RegularAutoOfferTokensEnabled", "RegularAutoOfferMatchTokensWithBrainrots"}, SeparatorGroup = "RegularAutoOfferMatchTokensWithBrainrotsGroup", Placeholder = "Select", Options = OUTGOING_BRAINROT_RARITY_OPTIONS},
 		})
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 39, 1, 3, "Chat-Based Offers", {
-			{Label = "Enable Chat-Based Offers", UtilityToggleKey = "RegularAutoOfferBasedOnTradeChat", TradeChatOfferManager = true, TradeChatOffersKey = "RegularAutoOfferTradeChatOffers"},
+			{Label = "Chat-Based Offers", UtilityToggleKey = "RegularAutoOfferBasedOnTradeChat", TradeChatOfferManager = true, TradeChatOffersKey = "RegularAutoOfferTradeChatOffers"},
 		})
 
 		local regularOpeningFeatures = {
 			{Label = "Show Best Brainrots", UtilityToggleKey = "RegularOpeningAutoshowBestBrainrots", UtilityExclusiveGroup = "RegularOpeningBrainrotMode"},
-			{Label = "Use Custom Brainrots", UtilityToggleKey = "RegularOpeningCustomBrainrots", UtilityExclusiveGroup = "RegularOpeningBrainrotMode", SeparatorGroup = "RegularOpeningBrainrotsGroup"},
+			{Label = "Custom Brainrots", UtilityToggleKey = "RegularOpeningCustomBrainrots", UtilityExclusiveGroup = "RegularOpeningBrainrotMode", SeparatorGroup = "RegularOpeningBrainrotsGroup"},
 		}
 		for slotIndex = 1, 6 do
 			regularOpeningFeatures[#regularOpeningFeatures + 1] = {
@@ -12224,11 +12596,11 @@ end)()
 			}
 		end
 		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Show All Tokens", UtilityToggleKey = "RegularOpeningAutoshowAllTokens", UtilityExclusiveGroup = "RegularOpeningTokenMode"}
-		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Use Custom Token Amount", UtilityToggleKey = "RegularOpeningCustomTokens", UtilityExclusiveGroup = "RegularOpeningTokenMode", SeparatorGroup = "RegularOpeningTokensGroup"}
+		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Custom Token Amount", UtilityToggleKey = "RegularOpeningCustomTokens", UtilityExclusiveGroup = "RegularOpeningTokenMode", SeparatorGroup = "RegularOpeningTokensGroup"}
 		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Token Amount", UtilitySliderKey = "RegularOpeningTokenAmount", UtilityParentKey = "RegularOpeningCustomTokens", SeparatorGroup = "RegularOpeningTokensGroup", MinValue = 0, MaxValue = 1000000, MaxValueProvider = function() return autoServerHopState.CurrentTradeTokenBalance() end, UnitLabel = "Tokens"}
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 34, 2, 3, "Opening Offer", regularOpeningFeatures)
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 35, 1, 4, "Trade Timing", {
-			{Label="Use Custom Timing", UtilityToggleKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup"},
+			{Label="Custom Timing", UtilityToggleKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup"},
 			{Label="Trade Request Delay", UtilitySliderKey="AutoAcceptTradesInitialDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
 			{Label="Post-Message Delay", UtilitySliderKey="AutoAcceptTradesDelayAfterTradeMessage", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
 			{Label="Reaction Delay", UtilitySliderKey="AutoAcceptTradesReactionDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
@@ -12241,9 +12613,9 @@ end)()
 	end
 	do
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Cancel, 5, 1, 1, "Trade Timeouts", {
-			{Label = "Enable Trade Timeout", UtilityToggleKey = "AutoCancelTradeTimeoutEnabled", SeparatorGroup = "AutoCancelTradeTimeoutGroup"},
+			{Label = "Trade Timeout", UtilityToggleKey = "AutoCancelTradeTimeoutEnabled", SeparatorGroup = "AutoCancelTradeTimeoutGroup"},
 			{Label = "Trade Timeout", UtilitySliderKey = "AutoCancelTradeTimeout", UtilityParentKey = "AutoCancelTradeTimeoutEnabled", SeparatorGroup = "AutoCancelTradeTimeoutGroup", MinValue = 1, MaxValue = 60, UnitLabel = "Seconds"},
-			{Label = "Enable No-Value Timeout", UtilityToggleKey = "AutoCancelNoValueTimeoutEnabled", SeparatorGroup = "AutoCancelNoValueTimeoutGroup"},
+			{Label = "No-Value Timeout", UtilityToggleKey = "AutoCancelNoValueTimeoutEnabled", SeparatorGroup = "AutoCancelNoValueTimeoutGroup"},
 			{Label = "No-Value Timeout", UtilitySliderKey = "AutoCancelNoValueTimeout", UtilityParentKey = "AutoCancelNoValueTimeoutEnabled", SeparatorGroup = "AutoCancelNoValueTimeoutGroup", MinValue = 1, MaxValue = 30, UnitLabel = "Seconds"},
 		})
 		local inventory = {
@@ -12268,7 +12640,7 @@ end)()
 		1,
 		"Server Hopping",
 		{
-			{Label = "Enable", ServerHopKey = "Enabled"},
+			{Label = "Server Hop", ServerHopKey = "Enabled"},
 			{
 				Label = "Server Time Limit",
 				ServerHopKey = "ServerTimeEnabled",
@@ -12295,10 +12667,10 @@ end)()
 		2,
 		"Server Eligibility",
 		{
-			{Label = "Hop If No Eligible Player Is in Server", UtilityToggleKey = "CheckServerHopNobodyServer"},
-			{Label = "Hop After All Eligible Server Players", UtilityToggleKey = "CheckServerHopPlayedEveryoneServer"},
-			{Label = "Hop If No Eligible Player Is in Minigame Area", UtilityToggleKey = "CheckServerHopNobodyMinigamesArea"},
-			{Label = "Hop After All Eligible Area Players", UtilityToggleKey = "CheckServerHopPlayedEveryoneMinigamesArea"},
+			{Label = "Hop If No Eligible Player Is in the Server", UtilityToggleKey = "CheckServerHopNobodyServer"},
+			{Label = "Hop After Queueing With All Eligible Players in the Server", UtilityToggleKey = "CheckServerHopPlayedEveryoneServer"},
+			{Label = "Hop If No Eligible Player Is in the Minigame Area", UtilityToggleKey = "CheckServerHopNobodyMinigamesArea"},
+			{Label = "Hop After Queueing With All Eligible Players in the Minigame Area", UtilityToggleKey = "CheckServerHopPlayedEveryoneMinigamesArea"},
 			{Label = "Rarities", UtilityMultiDropdownKey = "CheckServerBrainrotRarities", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "None", Options = BRAINROT_RARITY_OPTIONS},
 			{Label = "Mutations", UtilityMultiDropdownKey = "CheckServerMutations", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
 			{Label = "Traits", UtilityMultiDropdownKey = "CheckServerTraits", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
@@ -12317,7 +12689,7 @@ end)()
 		1,
 		"Auto Chat",
 		{
-			{Label = "Enable Auto Chat", UtilityToggleKey = "AutoChat", SeparatorGroup = "AutoChatGroup"},
+			{Label = "Auto Chat", UtilityToggleKey = "AutoChat", SeparatorGroup = "AutoChatGroup"},
 			{
 				Label = "Message",
 				UtilityTextKey = "AutoChatMessage",
@@ -12361,7 +12733,7 @@ end)()
 		1,
 		"Trade Messages",
 		{
-			{Label = "Enable Trade Messages", UtilityToggleKey = "AutoTradeChat", SeparatorGroup = "AutoTradeBaseGroup"},
+			{Label = "Trade Messages", UtilityToggleKey = "AutoTradeChat", SeparatorGroup = "AutoTradeBaseGroup"},
 			{
 				Label = "Message",
 				UtilityTextKey = "AutoTradeMessage",
@@ -12423,7 +12795,7 @@ end)()
 				UnitLabel = "Seconds",
 			},
 			{
-				Label = "Enable Custom Replies",
+				Label = "Custom Replies",
 				UtilityToggleKey = "AutoTradeCustomRepliesEnabled",
 				UtilityParentKey = "AutoTradeChat",
 				CustomReplyManager = true,
@@ -12439,7 +12811,7 @@ end)()
 		"Inventory Cleanup",
 		{
 			{
-				Label = "Enable Auto Cleanup",
+				Label = "Auto Cleanup",
 				UtilityToggleKey = "AutoDeleteWorstInventory",
 				SeparatorGroup = "AutoDeleteCoreGroup",
 			},
@@ -12458,7 +12830,7 @@ end)()
 				UtilityExclusiveGroup = "DeletePriority",
 			},
 			{
-				Label = "Start at Inventory Count",
+				Label = "Cleanup Threshold",
 				UtilitySliderKey = "DeleteInventoryThreshold",
 				SeparatorGroup = "AutoDeleteCoreGroup",
 				UtilityParentKey = "AutoDeleteWorstInventory",
@@ -12522,10 +12894,12 @@ end)()
 			{Label = "Brainrot to Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHold", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipHoldGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = false},
 			{Label = "Mount Mode", UtilityToggleKey = "AutoEquipModeMount", UtilityExclusiveGroup = "AutoEquipMode", SeparatorGroup = "AutoEquipMountGroup"},
 			{Label = "Equip Best Mountable Brainrot", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipMountGroup"},
+			{Label = "Mount Biggest Mountable Brainrot", UtilityToggleKey = "MountEquipBiggestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount"}, SeparatorGroup = "AutoEquipMountGroup"},
 			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipMountGroup"},
 			{Label = "Brainrot to Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeMount", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipMountGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedMountableBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = false},
 			{Label = "Hold + Mount Mode", UtilityToggleKey = "AutoEquipModeHoldMount", UtilityExclusiveGroup = "AutoEquipMode", SeparatorGroup = "AutoEquipHoldMountGroup"},
-			{Label = "Equip Best Hold + Mount Brainrots", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipHoldMountGroup"},
+			{Label = "Equip Best for Hold + Mount", UtilityToggleKey = "AutoEquipUseBestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipHoldMountGroup"},
+			{Label = "Mount Biggest Mountable Brainrot", UtilityToggleKey = "MountEquipBiggestBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount"}, SeparatorGroup = "AutoEquipHoldMountGroup"},
 			{Label = "Equip Specific Brainrot", UtilityToggleKey = "AutoEquipUseSpecificBrainrot", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount"}, UtilityExclusiveGroup = "AutoEquipChoice", UtilityExclusiveRequired = true, SeparatorGroup = "AutoEquipHoldMountGroup"},
 			{Label = "Brainrot to Hold", UtilityDropdownKey = "HoldSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipHoldMountGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = false},
 			{Label = "Brainrot to Mount", UtilityDropdownKey = "MountSpecificBrainrotId", UtilityParentKeys = {"AutoEquipBestBrainrot", "AutoEquipModeHoldMount", "AutoEquipUseSpecificBrainrot"}, SeparatorGroup = "AutoEquipHoldMountGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.RefreshOwnedMountableBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = false},
@@ -12539,7 +12913,7 @@ end)()
 		"Opening Offer",
 		{
 			{Label = "Show Best Brainrots", UtilityToggleKey = "AutoshowBestBrainrots", UtilityExclusiveGroup = "OpeningOfferBrainrotMode"},
-			{Label = "Use Custom Brainrots", UtilityToggleKey = "CustomOpeningOffer", UtilityExclusiveGroup = "OpeningOfferBrainrotMode", SeparatorGroup = "OpeningOfferBrainrotsGroup"},
+			{Label = "Custom Brainrots", UtilityToggleKey = "CustomOpeningOffer", UtilityExclusiveGroup = "OpeningOfferBrainrotMode", SeparatorGroup = "OpeningOfferBrainrotsGroup"},
 			{
 				Label = "Brainrot 1",
 				UtilityDropdownKey = "OpeningOfferBrainrot1",
@@ -12601,7 +12975,7 @@ end)()
 				ClearIfMissing = true,
 			},
 			{Label = "Show All Tokens", UtilityToggleKey = "AutoshowAllTokens", UtilityExclusiveGroup = "OpeningOfferTokenMode"},
-			{Label = "Use Custom Token Amount", UtilityToggleKey = "CustomOpeningTokens", UtilityExclusiveGroup = "OpeningOfferTokenMode", SeparatorGroup = "OpeningOfferTokensGroup"},
+			{Label = "Custom Token Amount", UtilityToggleKey = "CustomOpeningTokens", UtilityExclusiveGroup = "OpeningOfferTokenMode", SeparatorGroup = "OpeningOfferTokensGroup"},
 			{Label = "Token Amount", UtilitySliderKey = "OpeningOfferTokenAmount", UtilityParentKey = "CustomOpeningTokens", SeparatorGroup = "OpeningOfferTokensGroup", MinValue = 0, MaxValue = 1000000, MaxValueProvider = function() return autoServerHopState.CurrentTradeTokenBalance() end, UnitLabel = "Tokens"},
 		}
 	)
@@ -12612,7 +12986,7 @@ end)()
 		3,
 		"Trade Timing",
 		{
-			{Label = "Use Custom Timing", UtilityToggleKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup"},
+			{Label = "Custom Timing", UtilityToggleKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup"},
 			{Label = "Initial Delay", UtilitySliderKey = "InitialJoinDelay", UtilityParentKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
 			{Label = "Post-Message Delay", UtilitySliderKey = "DelayAfterTradeMessage", UtilityParentKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
 			{Label = "Reaction Delay", UtilitySliderKey = "ReactionDelay", UtilityParentKey = "CustomDelays", SeparatorGroup = "MinigameTradeDelaysGroup", MinValue = 0, MaxValue = 5, Step = 0.0005, Decimals = 4, UnitLabel = "Seconds"},
@@ -12631,13 +13005,14 @@ end)()
 		"Game & Round Selection",
 		{
 			{Label = "Auto Choose Minigame", UtilityToggleKey = "AutoChooseGame", SeparatorGroup = "AutoChooseGameGroup"},
+			{Label = "Adaptive Game Selection", UtilityToggleKey = "AdaptiveGameSelection", UtilityParentKey = "AutoChooseGame", SeparatorGroup = "AutoChooseGameGroup"},
 			{
 				Label = "Preferred Minigame",
 				UtilityDropdownKey = "GameToChoose",
 				SeparatorGroup = "AutoChooseGameGroup",
 				UtilityParentKey = "AutoChooseGame",
 				ClearsUtilityMultiDropdownKey = "FallbackGameChoices",
-				Options = {"Candy Bomb", "Popcorn Burst", "Higher Or Lower", "Connect 4", "Battle Ship", "Knockout", "Football Draft", "Hot Potato"},
+				Options = {"Candy Bomb", "Popcorn Burst", "Higher Or Lower", "Connect 4", "Battle Ship", "Knockout", "Football Draft", "Hot Potato", "Bat Battle"},
 			},
 			{
 				Label = "Round 1 Choice Delay",
@@ -12661,18 +13036,18 @@ end)()
 				MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds",
 			},
 			{
-				Label = "Match Opponent Before Delay",
+				Label = "Match Opponent Choice",
 				UtilityToggleKey = "MatchOpponentGame",
 				SeparatorGroup = "AutoChooseGameGroup",
 				UtilityParentKey = "AutoChooseGame",
 			},
 			{
-				Label = "Choices Allowed to Match",
+				Label = "Allowed Match Choices",
 				UtilityMultiDropdownKey = "FallbackGameChoices",
 				SeparatorGroup = "AutoChooseGameGroup",
 				UtilityParentKeys = {"AutoChooseGame", "MatchOpponentGame"},
 				ExcludeUtilityDropdownKey = "GameToChoose",
-				Options = {"Candy Bomb", "Popcorn Burst", "Higher Or Lower", "Connect 4", "Battle Ship", "Knockout", "Football Draft", "Hot Potato"},
+				Options = {"Candy Bomb", "Popcorn Burst", "Higher Or Lower", "Connect 4", "Battle Ship", "Knockout", "Football Draft", "Hot Potato", "Bat Battle"},
 			},
 			{Label = "Auto Choose Round Count", UtilityToggleKey = "AutoChooseRounds", SeparatorGroup = "AutoChooseRoundsGroup"},
 			{
@@ -12687,13 +13062,13 @@ end)()
 			{Label = "Round 2 Choice Delay", UtilitySliderKey = "AutoChooseRoundsRound2Delay", UtilityParentKey = "AutoChooseRounds", SeparatorGroup = "AutoChooseRoundsGroup", MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds"},
 			{Label = "Round 3 Choice Delay", UtilitySliderKey = "AutoChooseRoundsRound3Delay", UtilityParentKey = "AutoChooseRounds", SeparatorGroup = "AutoChooseRoundsGroup", MinValue = 0, MaxValue = 10, Step = 0.1, Decimals = 1, UnitLabel = "Seconds"},
 			{
-				Label = "Match Opponent Before Delay",
+				Label = "Match Opponent Choice",
 				UtilityToggleKey = "MatchOpponentRounds",
 				SeparatorGroup = "AutoChooseRoundsGroup",
 				UtilityParentKey = "AutoChooseRounds",
 			},
 			{
-				Label = "Choices Allowed to Match",
+				Label = "Allowed Match Choices",
 				UtilityMultiDropdownKey = "FallbackRoundChoices",
 				SeparatorGroup = "AutoChooseRoundsGroup",
 				UtilityParentKeys = {"AutoChooseRounds", "MatchOpponentRounds"},
@@ -12712,7 +13087,7 @@ end)()
 			{Label = "Wins & Losses", UtilityToggleKey = "PrintWinsLossesToTerminal"},
 			{Label = "Kicks", UtilityToggleKey = "PrintKicksToTerminal"},
 			{Label = "Disconnects", UtilityToggleKey = "PrintDisconnectsToTerminal"},
-			{Label = "Auto Deletes", UtilityToggleKey = "PrintAutoDeletesToTerminal"},
+			{Label = "Inventory Cleanup", UtilityToggleKey = "PrintAutoDeletesToTerminal"},
 			{Label = "Booth Purchases", UtilityToggleKey = "PrintPurchasedBoothListingsToTerminal"},
 		}
 	)
@@ -12772,37 +13147,55 @@ end)()
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Booth, 31, 1, 2, "Listings", listings)
 	end
 	do
-		-- All three fallback types stay visible and independent. Each enabled type
-		-- reveals only its own controls immediately beneath it.
+		local function fallbackPriorityOptions()
+			return FALLBACK_PRIORITY_OPTIONS
+		end
 		local features = {
-			{Label = "Fallback to Next Lower Rarity", UtilityToggleKey = "FallbackToNextLowerRarityBrainrot", UtilityExclusiveGroup = "MinigameFallbackRarityDirection", SeparatorGroup = "MinigameFallbackLowerGroup"},
-			{Label = "Brainrots to Offer", UtilitySliderKey = "FallbackNextLowerRarityAmount", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
-			{Label = "Excluded Mutations", UtilityMultiDropdownKey = "FallbackAvoidMutations", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Excluded Traits", UtilityMultiDropdownKey = "FallbackAvoidTraits", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Exclude Signed Brainrots", UtilityToggleKey = "FallbackAvoidSignedBrainrots", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot"},
-			{Label = "Excluded Sizes", UtilityMultiDropdownKey = "FallbackAvoidSizes", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
-			{Label = "Excluded Levels", UtilityMultiDropdownKey = "FallbackAvoidLevels", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
-			{Label = "Fallback to Next Higher Rarity", UtilityToggleKey = "FallbackToNextHigherRarityBrainrot", UtilityExclusiveGroup = "MinigameFallbackRarityDirection", SeparatorGroup = "MinigameFallbackHigherGroup"},
-			{Label = "Brainrots to Offer", UtilitySliderKey = "FallbackNextHigherRarityAmount", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
-			{Label = "Excluded Mutations", UtilityMultiDropdownKey = "FallbackAvoidMutations", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Excluded Traits", UtilityMultiDropdownKey = "FallbackAvoidTraits", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Exclude Signed Brainrots", UtilityToggleKey = "FallbackAvoidSignedBrainrots", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot"},
-			{Label = "Excluded Sizes", UtilityMultiDropdownKey = "FallbackAvoidSizes", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
-			{Label = "Excluded Levels", UtilityMultiDropdownKey = "FallbackAvoidLevels", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
-			{Label = "Fallback to Specific Brainrots & Items", UtilityToggleKey = "FallbackToSpecificBrainrotItem"},
+			{Label = "Customize Fallback Priority", UtilityToggleKey = "FallbackCustomPriority", SeparatorGroup = "MinigameFallbackPriorityGroup"},
 		}
+		for priorityIndex = 1, 5 do
+			local slotIndex = priorityIndex
+			features[#features + 1] = {
+				Label = "Priority " .. tostring(priorityIndex),
+				UtilityDropdownKey = "FallbackPriority" .. tostring(priorityIndex),
+				UtilityParentKey = "FallbackCustomPriority",
+				SeparatorGroup = "MinigameFallbackPriorityGroup",
+				Placeholder = "Select",
+				OptionsProvider = fallbackPriorityOptions,
+				UtilityDropdownSwapPrefix = "Fallback",
+				UtilityDropdownSwapIndex = slotIndex,
+			}
+		end
+		features[#features + 1] = {Label = "Next Higher Rarity", UtilityToggleKey = "FallbackToNextHigherRarityBrainrot", SeparatorGroup = "MinigameFallbackHigherGroup"}
+		features[#features + 1] = {Label = "Brainrots to Offer", UtilitySliderKey = "FallbackNextHigherRarityAmount", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"}
+		features[#features + 1] = {Label = "Excluded Mutations", UtilityMultiDropdownKey = "FallbackAvoidMutations", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end}
+		features[#features + 1] = {Label = "Excluded Traits", UtilityMultiDropdownKey = "FallbackAvoidTraits", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end}
+		features[#features + 1] = {Label = "Exclude Signed Brainrots", UtilityToggleKey = "FallbackAvoidSignedBrainrots", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot"}
+		features[#features + 1] = {Label = "Excluded Sizes", UtilityMultiDropdownKey = "FallbackAvoidSizes", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end}
+		features[#features + 1] = {Label = "Excluded Levels", UtilityMultiDropdownKey = "FallbackAvoidLevels", SeparatorGroup = "MinigameFallbackHigherGroup", UtilityParentKey = "FallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end}
+		features[#features + 1] = {Label = "Specific Brainrots & Items", UtilityToggleKey = "FallbackToSpecificBrainrotItem", SeparatorGroup = "MinigameFallbackSpecificGroup"}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 			local sourceRarity = rarity
 			features[#features + 1] = {
 				Label = sourceRarity .. " Fallback Items",
 				UtilityMultiDropdownKey = "FallbackSpecific" .. sourceRarity .. "Items",
 				UtilityParentKey = "FallbackToSpecificBrainrotItem",
+				SeparatorGroup = "MinigameFallbackSpecificGroup",
 				Placeholder = "Select",
 				OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end,
 			}
 		end
-		features[#features + 1] = {Label = "Fallback to Tokens", UtilityToggleKey = "FallbackToTokens"}
+		features[#features + 1] = {Label = "Next Lower Rarity", UtilityToggleKey = "FallbackToNextLowerRarityBrainrot", SeparatorGroup = "MinigameFallbackLowerGroup"}
+		features[#features + 1] = {Label = "Brainrots to Offer", UtilitySliderKey = "FallbackNextLowerRarityAmount", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"}
+		features[#features + 1] = {Label = "Excluded Mutations", UtilityMultiDropdownKey = "FallbackAvoidMutations", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end}
+		features[#features + 1] = {Label = "Excluded Traits", UtilityMultiDropdownKey = "FallbackAvoidTraits", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end}
+		features[#features + 1] = {Label = "Exclude Signed Brainrots", UtilityToggleKey = "FallbackAvoidSignedBrainrots", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot"}
+		features[#features + 1] = {Label = "Excluded Sizes", UtilityMultiDropdownKey = "FallbackAvoidSizes", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end}
+		features[#features + 1] = {Label = "Excluded Levels", UtilityMultiDropdownKey = "FallbackAvoidLevels", SeparatorGroup = "MinigameFallbackLowerGroup", UtilityParentKey = "FallbackToNextLowerRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end}
+		features[#features + 1] = {Label = "Best Available Brainrots", UtilityToggleKey = "FallbackToBestAvailableBrainrots", SeparatorGroup = "MinigameFallbackBestGroup"}
+		features[#features + 1] = {Label = "Brainrots to Offer", UtilitySliderKey = "FallbackBestAvailableBrainrotAmount", UtilityParentKey = "FallbackToBestAvailableBrainrots", SeparatorGroup = "MinigameFallbackBestGroup", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"}
+		features[#features + 1] = {Label = "Token Fallback", UtilityToggleKey = "FallbackToTokens"}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 			features[#features + 1] = {Label = rarity .. " Tokens", UtilitySliderKey = "FallbackTokens" .. rarity, UtilityParentKey = "FallbackToTokens", SeparatorGroup = "FallbackTokens" .. rarity .. "Group", MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"}
 			features[#features + 1] = {Label = rarity .. " Offer All Tokens", UtilityToggleKey = "Fallback" .. rarity .. "OfferAllTokens", UtilityParentKey = "FallbackToTokens", SeparatorGroup = "FallbackTokens" .. rarity .. "Group"}
@@ -12810,34 +13203,51 @@ end)()
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Fallbacks, 17, 1, 1, "Minigame Fallbacks", features)
 
 		local regularFeatures = {
-			{Label = "Fallback to Next Lower Rarity", UtilityToggleKey = "RegularFallbackOffers", UtilityExclusiveGroup = "RegularFallbackRarityDirection", SeparatorGroup = "RegularFallbackLowerGroup"},
-			{Label = "Brainrots to Offer", UtilitySliderKey = "RegularFallbackNextLowerRarityAmount", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
-			{Label = "Excluded Mutations", UtilityMultiDropdownKey = "RegularFallbackAvoidMutations", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Excluded Traits", UtilityMultiDropdownKey = "RegularFallbackAvoidTraits", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Exclude Signed Brainrots", UtilityToggleKey = "RegularFallbackAvoidSignedBrainrots", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers"},
-			{Label = "Excluded Sizes", UtilityMultiDropdownKey = "RegularFallbackAvoidSizes", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
-			{Label = "Excluded Levels", UtilityMultiDropdownKey = "RegularFallbackAvoidLevels", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
-			{Label = "Fallback to Next Higher Rarity", UtilityToggleKey = "RegularFallbackToNextHigherRarityBrainrot", UtilityExclusiveGroup = "RegularFallbackRarityDirection", SeparatorGroup = "RegularFallbackHigherGroup"},
-			{Label = "Brainrots to Offer", UtilitySliderKey = "RegularFallbackNextHigherRarityAmount", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"},
-			{Label = "Excluded Mutations", UtilityMultiDropdownKey = "RegularFallbackAvoidMutations", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Excluded Traits", UtilityMultiDropdownKey = "RegularFallbackAvoidTraits", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Exclude Signed Brainrots", UtilityToggleKey = "RegularFallbackAvoidSignedBrainrots", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot"},
-			{Label = "Excluded Sizes", UtilityMultiDropdownKey = "RegularFallbackAvoidSizes", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
-			{Label = "Excluded Levels", UtilityMultiDropdownKey = "RegularFallbackAvoidLevels", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
-			{Label = "Fallback to Specific Brainrots & Items", UtilityToggleKey = "RegularFallbackToSpecificItems"},
+			{Label = "Customize Fallback Priority", UtilityToggleKey = "RegularFallbackCustomPriority", SeparatorGroup = "RegularFallbackPriorityGroup"},
 		}
+		for priorityIndex = 1, 5 do
+			local slotIndex = priorityIndex
+			regularFeatures[#regularFeatures + 1] = {
+				Label = "Priority " .. tostring(priorityIndex),
+				UtilityDropdownKey = "RegularFallbackPriority" .. tostring(priorityIndex),
+				UtilityParentKey = "RegularFallbackCustomPriority",
+				SeparatorGroup = "RegularFallbackPriorityGroup",
+				Placeholder = "Select",
+				OptionsProvider = fallbackPriorityOptions,
+				UtilityDropdownSwapPrefix = "RegularFallback",
+				UtilityDropdownSwapIndex = slotIndex,
+			}
+		end
+		regularFeatures[#regularFeatures + 1] = {Label = "Next Higher Rarity", UtilityToggleKey = "RegularFallbackToNextHigherRarityBrainrot", SeparatorGroup = "RegularFallbackHigherGroup"}
+		regularFeatures[#regularFeatures + 1] = {Label = "Brainrots to Offer", UtilitySliderKey = "RegularFallbackNextHigherRarityAmount", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"}
+		regularFeatures[#regularFeatures + 1] = {Label = "Excluded Mutations", UtilityMultiDropdownKey = "RegularFallbackAvoidMutations", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end}
+		regularFeatures[#regularFeatures + 1] = {Label = "Excluded Traits", UtilityMultiDropdownKey = "RegularFallbackAvoidTraits", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end}
+		regularFeatures[#regularFeatures + 1] = {Label = "Exclude Signed Brainrots", UtilityToggleKey = "RegularFallbackAvoidSignedBrainrots", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot"}
+		regularFeatures[#regularFeatures + 1] = {Label = "Excluded Sizes", UtilityMultiDropdownKey = "RegularFallbackAvoidSizes", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end}
+		regularFeatures[#regularFeatures + 1] = {Label = "Excluded Levels", UtilityMultiDropdownKey = "RegularFallbackAvoidLevels", SeparatorGroup = "RegularFallbackHigherGroup", UtilityParentKey = "RegularFallbackToNextHigherRarityBrainrot", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end}
+		regularFeatures[#regularFeatures + 1] = {Label = "Specific Brainrots & Items", UtilityToggleKey = "RegularFallbackToSpecificItems", SeparatorGroup = "RegularFallbackSpecificGroup"}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 			local sourceRarity = rarity
 			regularFeatures[#regularFeatures + 1] = {
 				Label = sourceRarity .. " Fallback Items",
 				UtilityMultiDropdownKey = "RegularFallbackSpecific" .. sourceRarity .. "Items",
 				UtilityParentKey = "RegularFallbackToSpecificItems",
+				SeparatorGroup = "RegularFallbackSpecificGroup",
 				Placeholder = "Select",
 				OptionsProvider = function() return autoServerHopState.RefreshOwnedTradeableItemOptions() end,
 				OptionLabelProvider = function(id) return autoServerHopState.OwnedTradeableItemOptionLabel(id) end,
 			}
 		end
-		regularFeatures[#regularFeatures + 1] = {Label = "Fallback to Tokens", UtilityToggleKey = "RegularFallbackToTokens"}
+		regularFeatures[#regularFeatures + 1] = {Label = "Next Lower Rarity", UtilityToggleKey = "RegularFallbackOffers", SeparatorGroup = "RegularFallbackLowerGroup"}
+		regularFeatures[#regularFeatures + 1] = {Label = "Brainrots to Offer", UtilitySliderKey = "RegularFallbackNextLowerRarityAmount", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"}
+		regularFeatures[#regularFeatures + 1] = {Label = "Excluded Mutations", UtilityMultiDropdownKey = "RegularFallbackAvoidMutations", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end}
+		regularFeatures[#regularFeatures + 1] = {Label = "Excluded Traits", UtilityMultiDropdownKey = "RegularFallbackAvoidTraits", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end}
+		regularFeatures[#regularFeatures + 1] = {Label = "Exclude Signed Brainrots", UtilityToggleKey = "RegularFallbackAvoidSignedBrainrots", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers"}
+		regularFeatures[#regularFeatures + 1] = {Label = "Excluded Sizes", UtilityMultiDropdownKey = "RegularFallbackAvoidSizes", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end}
+		regularFeatures[#regularFeatures + 1] = {Label = "Excluded Levels", UtilityMultiDropdownKey = "RegularFallbackAvoidLevels", SeparatorGroup = "RegularFallbackLowerGroup", UtilityParentKey = "RegularFallbackOffers", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end}
+		regularFeatures[#regularFeatures + 1] = {Label = "Best Available Brainrots", UtilityToggleKey = "RegularFallbackToBestAvailableBrainrots", SeparatorGroup = "RegularFallbackBestGroup"}
+		regularFeatures[#regularFeatures + 1] = {Label = "Brainrots to Offer", UtilitySliderKey = "RegularFallbackBestAvailableBrainrotAmount", UtilityParentKey = "RegularFallbackToBestAvailableBrainrots", SeparatorGroup = "RegularFallbackBestGroup", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"}
+		regularFeatures[#regularFeatures + 1] = {Label = "Token Fallback", UtilityToggleKey = "RegularFallbackToTokens"}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 			regularFeatures[#regularFeatures + 1] = {Label = rarity .. " Tokens", UtilitySliderKey = "RegularFallbackTokens" .. rarity, UtilityParentKey = "RegularFallbackToTokens", SeparatorGroup = "RegularFallbackTokens" .. rarity .. "Group", MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"}
 			regularFeatures[#regularFeatures + 1] = {Label = rarity .. " Offer All Tokens", UtilityToggleKey = "RegularFallback" .. rarity .. "OfferAllTokens", UtilityParentKey = "RegularFallbackToTokens", SeparatorGroup = "RegularFallbackTokens" .. rarity .. "Group"}
@@ -12867,7 +13277,7 @@ end)()
 		{
 			{Label = "Pause Script", UtilityToggleKey = "PauseScript"},
 			{Label = "Auto Reconnect", UtilityToggleKey = "AutoReconnect"},
-			{Label = "Leave If Another TuffHub User Is Present", ServerHopKey = "LeaveIfScriptUserInServer", ServerHopIndependent = true},
+			{Label = "Leave If Another DroidHub User Is Present", ServerHopKey = "LeaveIfScriptUserInServer", ServerHopIndependent = true},
 		}
 	)
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
@@ -12916,19 +13326,19 @@ local function syncRightPanelGeometry(
 	local simpleAutofarmBannerHeight = simpleAutofarmMode
 		and px(isPhonePanelLayout() and 28 or 34)
 		or 0
-	local panelTopPadding = CONTENT_TOP_PADDING
+	local panelTopPadding = UI.CONTENT_TOP_PADDING
 	if simpleAutofarmBanner and simpleAutofarmBanner.Parent then
 		simpleAutofarmBanner.Visible = simpleAutofarmMode
 		if simpleAutofarmMode then
 			local bannerInset = px(14)
-			simpleAutofarmBanner.Position = U2O(bannerInset, CONTENT_TOP_PADDING)
+			simpleAutofarmBanner.Position = U2O(bannerInset, UI.CONTENT_TOP_PADDING)
 			simpleAutofarmBanner.Size = U2O(
 				math.max(px(1), contentWidth - (bannerInset * 2)),
 				simpleAutofarmBannerHeight
 			)
 			local constraint = autoServerHopState.RuntimeSimpleAutofarmModeBannerTextConstraint
 			if constraint then constraint.MaxTextSize = isPhonePanelLayout() and 18 or 22 end
-			panelTopPadding += simpleAutofarmBannerHeight + CONTENT_ROW_GAP
+			panelTopPadding += simpleAutofarmBannerHeight + UI.CONTENT_ROW_GAP
 		end
 	end
 	rightContent.Position = U2O(
@@ -12956,7 +13366,7 @@ local function syncRightPanelGeometry(
 			),
 		math.max(
 			CONTROL_BUTTON_SIZE,
-			CONTENT_TOP_PADDING - CONTROL_TOP_MARGIN - px(2)
+			UI.CONTENT_TOP_PADDING - CONTROL_TOP_MARGIN - px(2)
 		)
 		)
 	if controlHolder then
@@ -12971,7 +13381,7 @@ local function syncRightPanelGeometry(
 				CONTROL_BUTTON_SIZE
 			)
 		local controlStrokeThickness = math.max(
-			LINE_THICKNESS,
+			UI.LINE_THICKNESS,
 			logicalPixelsForRenderedMinimum(1)
 		)
 		local minimizeGlyphWidth = math.max(
@@ -13009,8 +13419,8 @@ local function syncRightPanelGeometry(
 	local usablePanelWidth = math.max(
 		px(2),
 		contentWidth
-			- (CONTENT_SIDE_PADDING * 2)
-			- (PANEL_SCROLL_EDGE_INSET * 2)
+			- (UI.CONTENT_SIDE_PADDING * 2)
+			- (UI.PANEL_SCROLL_EDGE_INSET * 2)
 		)
 	local responsiveWindowScale = window:FindFirstChild("ResponsiveWindowScale")
 	local renderedPanelScale = responsiveWindowScale and responsiveWindowScale.Scale or 1
@@ -13034,16 +13444,16 @@ local function syncRightPanelGeometry(
 			math.floor(
 				(
 					usablePanelWidth
-						- CONTENT_COLUMN_GAP
+						- UI.CONTENT_COLUMN_GAP
 					)
 					* 0.5
 				)
 			)
-	local leftX = CONTENT_SIDE_PADDING
-			+ PANEL_SCROLL_EDGE_INSET
+	local leftX = UI.CONTENT_SIDE_PADDING
+			+ UI.PANEL_SCROLL_EDGE_INSET
 	local rightX = leftX
 			+ cardWidth
-			+ CONTENT_COLUMN_GAP
+			+ UI.CONTENT_COLUMN_GAP
 	local activePanels = unsupportedPanelGroups[
 			selectedMenuItem
 			]
@@ -13051,9 +13461,9 @@ local function syncRightPanelGeometry(
 		}
 	local columnBottom = {
 		[1] = panelTopPadding
-			+ PANEL_SCROLL_EDGE_INSET,
+			+ UI.PANEL_SCROLL_EDGE_INSET,
 		[2] = panelTopPadding
-			+ PANEL_SCROLL_EDGE_INSET
+			+ UI.PANEL_SCROLL_EDGE_INSET
 	}
 	local maxPanelOrder = 0
 	for _, data in ipairs(activePanels) do
@@ -13067,8 +13477,8 @@ local function syncRightPanelGeometry(
 			data.RelayoutRows(true)
 		end
 		local targetHeight = data.Expanded
-			and (data.ExpandedHeight or PANEL_EXPANDED_HEIGHT)
-			or (data.HeaderHeight or PANEL_COLLAPSED_HEIGHT)
+			and (data.ExpandedHeight or UI.PANEL_EXPANDED_HEIGHT)
+			or (data.HeaderHeight or UI.PANEL_COLLAPSED_HEIGHT)
 		local x = layoutColumn == 1 and leftX or rightX
 		local y = columnBottom[layoutColumn]
 		data.Frame.Position = U2O(x, y)
@@ -13083,7 +13493,7 @@ local function syncRightPanelGeometry(
 		end
 		columnBottom[layoutColumn] = y
 			+ targetHeight
-			+ CONTENT_ROW_GAP
+			+ UI.CONTENT_ROW_GAP
 	end
 	local speciallyPlaced = {}
 	if singleColumn and selectedMenuItem == tabs.Autofarm then
@@ -13116,11 +13526,11 @@ local function syncRightPanelGeometry(
 	if panelContentBottom
 		> (
 		panelTopPadding
-			+ PANEL_SCROLL_EDGE_INSET
+			+ UI.PANEL_SCROLL_EDGE_INSET
 		) then
-		panelContentBottom -= CONTENT_ROW_GAP
+		panelContentBottom -= UI.CONTENT_ROW_GAP
 	end
-	local contentEdgeSpacing = CONTENT_SIDE_PADDING + PANEL_SCROLL_EDGE_INSET
+	local contentEdgeSpacing = UI.CONTENT_SIDE_PADDING + UI.PANEL_SCROLL_EDGE_INSET
 	local canvasHeight = math.max(
 		contentHeight,
 		panelContentBottom
@@ -13133,7 +13543,11 @@ local function syncRightPanelGeometry(
 			)
 		)
 end
-rawset(_G, "__TUFFHUB_SYNC_RIGHT_PANEL_GEOMETRY", syncRightPanelGeometry)
+rawset(_G, "__DROIDHUB_SYNC_RIGHT_PANEL_GEOMETRY", syncRightPanelGeometry)
+if autoServerHopState.RuntimeSidebarContentSyncPending == true then
+	autoServerHopState.RuntimeSidebarContentSyncPending = false
+	task.defer(syncRightPanelGeometry, true)
+end
 performSearch = function(resetScroll)
 	local query=string.lower(searchBox.Text:match("^%s*(.-)%s*$"))
 	for _,data in ipairs(allUnsupportedPanels) do
@@ -13199,7 +13613,7 @@ for _, data in ipairs(
 	end)
 end
 refreshUnsupportedPanels()
-rawset(_G, "__TUFFHUB_REFRESH_ALL_SETTINGS_UI", function()
+rawset(_G, "__DROIDHUB_REFRESH_ALL_SETTINGS_UI", function()
 	for _, data in ipairs(allUnsupportedPanels) do
 		for _, rowData in ipairs(data.FeatureRows or {}) do
 			if type(rowData.RefreshFromState) == "function" then
@@ -13224,57 +13638,244 @@ if MINIGAME_MODE then
 		for index, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 			rarityIndex[rarity] = index
 		end
+		local simpleFarmGameIds = {
+			"ConnectFour", "FootballDraft", "CandyBomb", "Battleship",
+			"NumberGuess", "Knockout", "PopcornBurst", "HotPotato", "BatBattle",
+		}
+		local simpleFarmResponseTokens = {
+			Common=100, Uncommon=100, Rare=100, Epic=100, Legendary=100, Mythical=100,
+			Cosmic=100, Secret=100, Celestial=100, Divine=250, Infinity=500,
+			Meta=1000, Paradox=15000, Eternal=250000,
+		}
+		local simpleFarmFallbackTokens = {
+			Common=200, Uncommon=200, Rare=200, Epic=200, Legendary=200, Mythical=200,
+			Cosmic=200, Secret=200, Celestial=200, Divine=500, Infinity=1000,
+			Meta=2000, Paradox=30000, Eternal=500000,
+		}
 		while screenGui.Parent do
 			if autoServerHopState.Utility.PauseScript == true then
 				task.wait(0.50)
 				continue
 			end
 			if autoServerHopState.Utility.SimpleAutofarmEnabled == true then
-				local total, highest, counts, inventoryReady = autoServerHopState.SimpleAutofarmInventorySummary()
+				local total, highest, counts, inventoryReady, lowest = autoServerHopState.SimpleAutofarmInventorySummary()
 				if inventoryReady ~= true then
 					task.wait(0.50)
 					continue
 				end
-				if (tonumber(total) or 0) <= 0 or not rarityIndex[highest] then
-					local toggle = rawget(_G, "__TUFFHUB_SET_SIMPLE_AUTOFARM")
+				if (tonumber(total) or 0) <= 0 or not rarityIndex[lowest] then
+					local toggle = rawget(_G, "__DROIDHUB_SET_SIMPLE_AUTOFARM")
 					if type(toggle) == "function" then pcall(toggle, false) end
-					local show = rawget(_G, "__TUFFHUB_SHOW_SIMPLE_AUTOFARM_WARNING")
+					local show = rawget(_G, "__DROIDHUB_SHOW_SIMPLE_AUTOFARM_WARNING")
 					if type(show) == "function" then
 						autoServerHopState.RuntimeSimpleAutofarmWarningUntil = os.clock() + 5
 						pcall(show)
 					end
 				else
-					-- The inventory query can yield during startup. Recheck the mode before
-					-- touching live settings so disabling Simple Autofarm always restores
-					-- the regular profile without a final Autofarm write racing afterward.
-					if autoServerHopState.Utility.SimpleAutofarmEnabled ~= true then
-						continue
+					-- Simple Auto Farm progresses the weakest owned Brainrot. This prevents one
+					-- lucky high-tier win from making the farm ignore the rest of inventory.
+					if autoServerHopState.Utility.SimpleAutofarmEnabled ~= true then continue end
+					-- Auto Booth is intentionally not part of Simple Auto Farm. Keep it off even
+					-- if an older imported profile or a stale UI toggle tries to re-enable it.
+					autoServerHopState.Utility.AutoBooth = false
+					-- Keep the high-throughput farm policy authoritative across imported profiles.
+					autoServerHopState.Utility.AutoPlayMaster = true
+					for _, farmGameId in ipairs(simpleFarmGameIds) do
+						minigameAutoplayState[farmGameId] = true
 					end
-					local highestIndex = rarityIndex[highest]
+					autoServerHopState.Utility.AutoOfferMaster = true
+					autoServerHopState.Utility.AutoOfferTokensEnabled = true
+					autoServerHopState.Utility.AutoOfferTokenAddRatio = 1
+					autoServerHopState.Utility.AutoOfferBasedOnTradeChat = false
+					autoServerHopState.Utility.AutoAcceptMaster = true
+					autoServerHopState.Utility.AutoAcceptMustHaveOne = true
+					autoServerHopState.Utility.AutoAcceptMustHaveAll = false
+					autoServerHopState.Utility.AutoCancelMaster = true
+					autoServerHopState.Utility.AutoCancelCheckOpponentsBrainrots = true
+					autoServerHopState.Utility.AutoCancelTradeTimeoutEnabled = true
+					autoServerHopState.Utility.AutoCancelTradeTimeout = 15
+					autoServerHopState.Utility.AutoCancelNoValueTimeoutEnabled = true
+					autoServerHopState.Utility.AutoCancelNoValueTimeout = 6
+					autoServerHopState.Utility.AutoCancelBrainrotConditionDelay = 0
+					autoServerHopState.Utility.CustomDelays = true
+					autoServerHopState.Utility.InitialJoinDelay = 0.85
+					autoServerHopState.Utility.DelayAfterTradeMessage = 0.80
+					autoServerHopState.Utility.ReactionDelay = 0.95
+					autoServerHopState.Utility.AddBrainrotDelay = 0.22
+					autoServerHopState.Utility.RemoveBrainrotDelay = 0.18
+					autoServerHopState.Utility.AddTokenDelay = 0.10
+					autoServerHopState.Utility.RemoveTokenDelay = 0.10
+					autoServerHopState.Utility.AcceptOfferDelay = 0.45
+					autoServerHopState.Utility.AutoCancelNoValueTimeout = 6
+					if autoSitState.EmptyTables then autoSitState.EmptyTables.Enabled = true end
+					if autoSitState.OneOfTwo then autoSitState.OneOfTwo.Enabled = true end
+					autoServerHopState.Utility.AutoSitMustOwnAllSelected = false
+					autoServerHopState.Utility.AutoSitMustOwnOneSelected = true
+					autoServerHopState.Enabled = true
+					autoServerHopState.ServerTimeEnabled = false
+					autoServerHopState.TimeSinceLastGameEnabled = true
+					autoServerHopState.TimeSinceLastGame = 1
+					autoServerHopState.WinWagerTimeAdded = 0
+					autoServerHopState.LeaveIfScriptUserInServer = true
+					autoServerHopState.ServerBlacklistMinutes = 30
+					autoServerHopState.Utility.AutoReconnect = true
+					autoServerHopState.Utility.LeaveWhenAboutToLose = true
+					autoServerHopState.Utility.AutoDeleteWorstInventory = true
+					autoServerHopState.Utility.DeleteInventoryThreshold = 95
+					autoServerHopState.Utility.AutoshowBestBrainrots = true
+					autoServerHopState.Utility.CustomOpeningOffer = false
+					autoServerHopState.Utility.AutoshowAllTokens = true
+					autoServerHopState.Utility.CustomOpeningTokens = false
+					autoServerHopState.Utility.AutoEquipBestBrainrot = true
+					autoServerHopState.Utility.AutoEquipModeHold = false
+					autoServerHopState.Utility.AutoEquipModeMount = false
+					autoServerHopState.Utility.AutoEquipModeHoldMount = true
+					autoServerHopState.Utility.AutoEquipUseBestBrainrot = true
+					autoServerHopState.Utility.AutoEquipUseSpecificBrainrot = false
+					autoServerHopState.Utility.MountEquipBiggestBrainrot = true
+					autoServerHopState.Utility.AutoChat = false
+					autoServerHopState.Utility.AutoTradeChat = false
+					autoServerHopState.Utility.AutoAcceptTradesAcceptOffers = false
+					autoServerHopState.Utility.AutoAcceptTradesAcceptRequests = false
+					autoServerHopState.Utility.RegularAutoOfferMaster = false
+					autoServerHopState.Utility.TempBlacklistPlayersAfterCanceledTrade = true
+					autoServerHopState.Utility.TempBlacklistAfterCanceledTrades = 1
+					autoServerHopState.Utility.PermanentBlacklistPlayersAfterCanceledTrade = true
+					autoServerHopState.Utility.PermanentBlacklistAfterCanceledTrades = 3
+					autoServerHopState.Utility.AvoidSamePlayerSeconds = 30
+					autoServerHopState.Utility.CheckServerHopNobodyMinigamesArea = true
+					autoServerHopState.Utility.CheckServerHopPlayedEveryoneMinigamesArea = true
+					autoServerHopState.Utility.CheckServerHopNobodyServer = false
+					autoServerHopState.Utility.CheckServerHopPlayedEveryoneServer = false
+					autoServerHopState.Utility.AutoChooseGame = true
+					autoServerHopState.Utility.AdaptiveGameSelection = true
+					autoServerHopState.Utility.GameToChoose = "Popcorn Burst"
+					autoServerHopState.Utility.MatchOpponentGame = true
+					autoServerHopState.Utility.FallbackGameChoices = {
+						["Candy Bomb"]=true, ["Higher Or Lower"]=true, ["Connect 4"]=true,
+						["Battle Ship"]=true, ["Knockout"]=true, ["Football Draft"]=true,
+						["Hot Potato"]=true, ["Bat Battle"]=true,
+					}
+					autoServerHopState.Utility.AutoChooseRounds = true
+					autoServerHopState.Utility.RoundsToChoose = "1"
+					autoServerHopState.Utility.MatchOpponentRounds = true
+					autoServerHopState.Utility.FallbackRoundChoices = {["3"]=true,["5"]=true}
+					autoServerHopState.Utility.AutoChooseRound1Delay = 1.0
+					autoServerHopState.Utility.AutoChooseRound2Delay = 2.5
+					autoServerHopState.Utility.AutoChooseRound3Delay = 5.0
+					autoServerHopState.Utility.AutoChooseRoundsRound1Delay = 1.0
+					autoServerHopState.Utility.AutoChooseRoundsRound2Delay = 2.5
+					autoServerHopState.Utility.AutoChooseRoundsRound3Delay = 5.0
+					autoServerHopState.Utility.FallbackToNextLowerRarityBrainrot = true
+					autoServerHopState.Utility.FallbackToNextHigherRarityBrainrot = true
+					autoServerHopState.Utility.FallbackToSpecificBrainrotItem = true
+					autoServerHopState.Utility.FallbackToBestAvailableBrainrots = true
+					autoServerHopState.Utility.FallbackCustomPriority = true
+					autoServerHopState.Utility.FallbackPriority1 = "Best Available Brainrots"
+					autoServerHopState.Utility.FallbackPriority2 = "Next Higher Rarity"
+					autoServerHopState.Utility.FallbackPriority3 = "Next Lower Rarity"
+					autoServerHopState.Utility.FallbackPriority4 = "Token Fallback"
+					autoServerHopState.Utility.FallbackPriority5 = "Specific Items"
+					autoServerHopState.Utility.FallbackBestAvailableBrainrotAmount = 6
+					autoServerHopState.Utility.PrintWinsLossesToTerminal = true
+					autoServerHopState.Utility.PrintKicksToTerminal = true
+					autoServerHopState.Utility.PrintDisconnectsToTerminal = true
+					autoServerHopState.Utility.PrintAutoDeletesToTerminal = true
+					autoServerHopState.Utility.PrintPurchasedBoothListingsToTerminal = true
+					autoServerHopState.Utility.MoveDelayConnectFour = 1.0
+					autoServerHopState.Utility.MoveDelayFootballDraft = 1.0
+					autoServerHopState.Utility.MoveDelayCandyBomb = 1.0
+					autoServerHopState.Utility.MoveDelayBattleship = 1.0
+					autoServerHopState.Utility.MoveDelayNumberGuess = 1.0
+					autoServerHopState.Utility.MoveDelayKnockout = 1.0
+					local lowestIndex = rarityIndex[lowest]
+					local highestIndex = rarityIndex[highest] or lowestIndex
 					local infinityIndex = rarityIndex.Infinity
 					local metaIndex = rarityIndex.Meta
-					local targetIndex = highestIndex
-					-- Before Meta, accept the best owned rarity and everything above it.
-					-- Once Meta+ is owned, keep Infinity in the target pool until inventory
-					-- reaches 90 and every owned brainrot is Infinity or better.
-					if metaIndex and infinityIndex and highestIndex >= metaIndex then
-						local allInfinityOrBetter = true
-						for index = 1, infinityIndex - 1 do
-							if math.max(0, math.floor(tonumber(counts[BRAINROT_RARITY_OPTIONS[index]]) or 0)) > 0 then
-								allInfinityOrBetter = false
-								break
-							end
+					local paradoxIndex = rarityIndex.Paradox
+					local eternalIndex = rarityIndex.Eternal
+					local hasInfinityOrHigher = false
+					for index = infinityIndex, eternalIndex do
+						if math.max(0, math.floor(tonumber(counts[BRAINROT_RARITY_OPTIONS[index]]) or 0)) > 0 then
+							hasInfinityOrHigher = true
+							break
 						end
-						targetIndex = ((tonumber(total) or 0) >= 90 and allInfinityOrBetter) and metaIndex or infinityIndex
+					end
+					local targetIndex
+					if not hasInfinityOrHigher and highestIndex < infinityIndex then
+						-- Before the first Infinity, only seek the best rarity already owned and
+						-- anything higher. This keeps wagers realistic while never stepping down.
+						targetIndex = highestIndex
+					elseif lowestIndex < infinityIndex then
+						-- Once Infinity is obtained, finish upgrading every remaining Brainrot.
+						targetIndex = infinityIndex
+					elseif lowestIndex < metaIndex then
+						targetIndex = metaIndex
+					elseif lowestIndex < paradoxIndex then
+						targetIndex = paradoxIndex
+					else
+						targetIndex = eternalIndex
 					end
 					local targetRarity = BRAINROT_RARITY_OPTIONS[targetIndex]
 					local changed = autoServerHopState.RuntimeSimpleAutofarmTargetRarity ~= targetRarity
 					autoServerHopState.RuntimeSimpleAutofarmTargetRarity = targetRarity
-					local startIndex = targetIndex
-					local tokenMinimum = highestIndex >= infinityIndex and 100 or 10
+
+					-- Keep a baseline count so newly won higher-tier Brainrots can replace obsolete
+					-- lower-tier ones instead of forcing the inventory to fill with trash first.
+					if not tonumber(autoServerHopState.RuntimeSimpleAutofarmBaselineBrainrots) then
+						autoServerHopState.RuntimeSimpleAutofarmBaselineBrainrots = math.max(1, math.floor(tonumber(total) or 1))
+					end
+
+					local allEternal = lowestIndex >= eternalIndex
+					autoServerHopState.RuntimeSimpleAutofarmAllEternal = allEternal
+
+					for _, responseRarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+						local config = autoOfferState[responseRarity]
+						if type(config) == "table" then
+							config.OfferModeRarity = true
+							config.OfferModeSpecific = false
+							config.SpecificTargets = {}
+							config.OfferAllTokens = false
+							config.Tokens = simpleFarmResponseTokens[responseRarity] or 100
+							if responseRarity == "Eternal" then
+								config.Targets = {Paradox=true}
+								config.Amounts = {Paradox=6}
+							else
+								config.Targets = {[responseRarity]=true}
+								config.Amounts = {[responseRarity]=1}
+							end
+						end
+						autoServerHopState.Utility["FallbackTokens" .. responseRarity] = simpleFarmFallbackTokens[responseRarity] or 200
+						autoServerHopState.Utility["Fallback" .. responseRarity .. "OfferAllTokens"] = false
+					end
+					autoServerHopState.Utility.FallbackToTokens = true
+					autoServerHopState.Utility.FallbackToNextHigherRarityBrainrot = true
+					autoServerHopState.Utility.FallbackToNextLowerRarityBrainrot = true
+					autoServerHopState.Utility.FallbackToSpecificBrainrotItem = true
+					autoServerHopState.Utility.FallbackToBestAvailableBrainrots = true
+					autoServerHopState.Utility.FallbackCustomPriority = true
+					autoServerHopState.Utility.FallbackPriority1 = "Best Available Brainrots"
+					autoServerHopState.Utility.FallbackPriority2 = "Next Higher Rarity"
+					autoServerHopState.Utility.FallbackPriority3 = "Next Lower Rarity"
+					autoServerHopState.Utility.FallbackPriority4 = "Token Fallback"
+					autoServerHopState.Utility.FallbackPriority5 = "Specific Items"
+					autoServerHopState.Utility.FallbackNextHigherRarityAmount = 6
+					autoServerHopState.Utility.FallbackNextLowerRarityAmount = 6
+					autoServerHopState.Utility.FallbackBestAvailableBrainrotAmount = 6
+
+					local tokenMinimum = 1000
+					autoServerHopState.RuntimeSimpleAutofarmTargetTokenMinimum = tokenMinimum
 					autoServerHopState.Utility.AutoOfferLowestTokensToMatch = tokenMinimum
+					-- Token-only opponents never outrank a Brainrot upgrade while progression is active.
+					-- Token Match remains enabled. A zero-token account can still bootstrap through
+					-- qualifying Brainrot wagers; token offers are always capped to the real balance.
+					autoServerHopState.Utility.AutoOfferMatchTokensWithTokens = true
+					autoServerHopState.Utility.AutoOfferMatchTokensWithBrainrots = false
+					autoServerHopState.Utility.AutoOfferTokenAmount = tokenMinimum
+					autoServerHopState.Utility.AutoOfferTokenRarity = nil
+
 					for index, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
-						local targeted = index >= startIndex
+						local targeted = index >= targetIndex
 						local accept = autoAcceptState[rarity]
 						if type(accept) == "table" then
 							accept.Enabled = targeted
@@ -13282,17 +13883,19 @@ if MINIGAME_MODE then
 						end
 						local offerConfig = autoOfferState[rarity]
 						if type(offerConfig) == "table" then
-							-- Lower rarities do not qualify Simple Autofarm by themselves, but
-							-- they still contribute their configured response/fallback whenever
-							-- they are offered alongside a qualifying rarity or token amount.
-							offerConfig.Enabled = true
-							offerConfig.AlongsideOnly = not targeted
+							-- Ignore junk below the current upgrade floor even when it is bundled
+							-- with a qualifying wager; paying extra for it only slows progression.
+							offerConfig.Enabled = targeted
+							offerConfig.AlongsideOnly = false
 						end
 						autoCancelState.Targets[rarity] = targeted and true or nil
 						autoCancelState.Amounts[rarity] = 1
 						autoSitState.OneOfTwo.Targets[rarity] = targeted and true or nil
 						autoSitState.OneOfTwo.Amounts[rarity] = 1
 					end
+
+					-- 1,000+ tokens are always a worthwhile Simple Auto Farm target, including
+					-- from a zero-token start. Auto Leave protects the wager if the game turns bad.
 					if autoAcceptState.Tokens then
 						autoAcceptState.Tokens.Enabled = true
 						autoAcceptState.Tokens.Amount = tokenMinimum
@@ -13301,27 +13904,27 @@ if MINIGAME_MODE then
 					autoCancelState.Tokens = tokenMinimum
 					autoSitState.OneOfTwo.Targets.Tokens = true
 					autoSitState.OneOfTwo.Tokens = tokenMinimum
+
 					local checkRarities = autoServerHopState.Utility.CheckServerBrainrotRarities
 					if type(checkRarities) ~= "table" then
 						checkRarities = {}
 						autoServerHopState.Utility.CheckServerBrainrotRarities = checkRarities
 					end
 					for index, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
-						checkRarities[rarity] = index >= startIndex and true or nil
+						checkRarities[rarity] = index >= targetIndex and true or nil
 					end
 					if changed then
-						autoServerHopState.RuntimePlayedMinigameUserIds = {}
 						autoServerHopState.RuntimeCheckServerHopRequested = false
-						local refresh = rawget(_G, "__TUFFHUB_REFRESH_ALL_SETTINGS_UI")
+						local refresh = rawget(_G, "__DROIDHUB_REFRESH_ALL_SETTINGS_UI")
 						if type(refresh) == "function" then pcall(refresh) end
 					end
 				end
 			end
-			task.wait(1.50)
+			task.wait(0.50)
 		end
 	end)
 end
-rawset(_G, "__TUFFHUB_REFRESH_DYNAMIC_DROPDOWNS", function()
+rawset(_G, "__DROIDHUB_REFRESH_DYNAMIC_DROPDOWNS", function()
 	for _, data in ipairs(allUnsupportedPanels) do
 		for _, rowData in ipairs(data.FeatureRows or {}) do
 			if type(rowData.RefreshUtilityDropdown) == "function" then
@@ -13333,6 +13936,10 @@ end)
 if MINIGAME_MODE then
 	task.spawn(function()
 		while screenGui.Parent do
+			if autoServerHopState.Utility.SimpleAutofarmEnabled == true then
+				task.wait(15)
+				continue
+			end
 			local previous = tonumber(autoServerHopState.RuntimeBoothMaxSlots) or 3
 			local current = autoServerHopState.RefreshBoothMaxSlots()
 			if current ~= previous then
@@ -13341,7 +13948,7 @@ if MINIGAME_MODE then
 						pcall(data.EnsureBoothSlots, current)
 					end
 				end
-				local refresh = rawget(_G, "__TUFFHUB_REFRESH_ALL_SETTINGS_UI")
+				local refresh = rawget(_G, "__DROIDHUB_REFRESH_ALL_SETTINGS_UI")
 				if type(refresh) == "function" then pcall(refresh) end
 			end
 			task.wait(15)
@@ -13401,7 +14008,7 @@ local function setSidebarCollapsed(
 	syncRightPanelGeometry(true)
 end
 logoToggleButton.MouseButton1Click:Connect(function()
-	-- On mobile the compact TH logo doubles as a window-drag handle. A drag
+	-- On mobile the compact DH logo doubles as a window-drag handle. A drag
 	-- must never also trigger the sidebar-collapse click when it is released.
 	if isPhonePanelLayout()
 		and os.clock() < (tonumber(autoServerHopState.RuntimeSuppressLogoToggleUntil) or 0)
@@ -13470,7 +14077,7 @@ local function createControlButton(
 		button,
 		CONTROL_CORNER_RADIUS
 	)
-	rawget(_G, "__TUFFHUB_ENSURE_INPUT_BORDER")(button)
+	rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(button)
 	local iconObjects = {}
 	local function setIconColor(
 		color
@@ -13528,7 +14135,7 @@ minimizeLine.Position = U2S(
 	)
 minimizeLine.Size = U2O(
 		math.max(px(9), logicalPixelsForRenderedMinimum(8)),
-		math.max(LINE_THICKNESS, logicalPixelsForRenderedMinimum(1))
+		math.max(UI.LINE_THICKNESS, logicalPixelsForRenderedMinimum(1))
 	)
 minimizeLine.BackgroundColor3 = CONTROL_ICON_COLOR
 minimizeLine.BorderSizePixel = 0
@@ -13565,7 +14172,7 @@ for index,
 		)
 	closeLine.Size = U2O(
 			math.max(px(10), logicalPixelsForRenderedMinimum(9)),
-			math.max(LINE_THICKNESS, logicalPixelsForRenderedMinimum(1))
+			math.max(UI.LINE_THICKNESS, logicalPixelsForRenderedMinimum(1))
 		)
 	closeLine.Rotation = rotation
 	closeLine.BackgroundColor3 = CONTROL_ICON_COLOR
@@ -13579,7 +14186,7 @@ for index,
 end
 ;(function()
 	local restoreButton = New("TextButton")
-	restoreButton.Name = "MinimizedTHButton"
+	restoreButton.Name = "MinimizedDHButton"
 	restoreButton.AnchorPoint = V2(0.5, 0)
 	restoreButton.Position = U2(0.5, 0, 0, px(10))
 	local function syncRestoreButtonSize()
@@ -13591,7 +14198,7 @@ end
 	end
 	syncRestoreButtonSize()
 	camera:GetPropertyChangedSignal("ViewportSize"):Connect(syncRestoreButtonSize)
-	restoreButton.BackgroundColor3 = BLACK
+	restoreButton.BackgroundColor3 = UI.BLACK
 	restoreButton.BackgroundTransparency = 0
 	restoreButton.BorderSizePixel = 0
 	restoreButton.AutoButtonColor = false
@@ -13612,7 +14219,7 @@ end
 	restoreStroke.LineJoinMode = Enum.LineJoinMode.Round
 	restoreStroke.Parent = restoreButton
 	local restoreLogoHolder = New("Frame")
-	restoreLogoHolder.Name = "CompactTHHolder"
+	restoreLogoHolder.Name = "CompactDHHolder"
 	restoreLogoHolder.AnchorPoint = V2(0.5, 0.5)
 	restoreLogoHolder.Position = U2S(0.5, 0.5)
 	restoreLogoHolder.Size = U2S(0.58, 0.58)
@@ -13620,23 +14227,23 @@ end
 	restoreLogoHolder.BorderSizePixel = 0
 	restoreLogoHolder.ZIndex = 65001
 	restoreLogoHolder.Parent = restoreButton
-	local restoreT = New("TextLabel")
-	restoreT.Name = "CompactT"
-	restoreT.AnchorPoint = V2(0, 0.5)
-	restoreT.Position = U2S(0.5, 0.5)
-	restoreT.Size = U2(0, px(1), 1, 0)
-	restoreT.BackgroundTransparency = 1
-	restoreT.BorderSizePixel = 0
-	restoreT.Text = "T"
-	restoreT.TextColor3 = BLACK
-	restoreT.TextStrokeColor3 = PINK
-	restoreT.TextStrokeTransparency = 0
-	restoreT.FontFace = LOGO_FONT_FACE
-	restoreT.TextScaled = false
-	restoreT.TextXAlignment = Enum.TextXAlignment.Center
-	restoreT.TextYAlignment = Enum.TextYAlignment.Center
-	restoreT.ZIndex = 65002
-	restoreT.Parent = restoreLogoHolder
+	local restoreD = New("TextLabel")
+	restoreD.Name = "CompactD"
+	restoreD.AnchorPoint = V2(0, 0.5)
+	restoreD.Position = U2S(0.5, 0.5)
+	restoreD.Size = U2(0, px(1), 1, 0)
+	restoreD.BackgroundTransparency = 1
+	restoreD.BorderSizePixel = 0
+	restoreD.Text = "D"
+	restoreD.TextColor3 = UI.BLACK
+	restoreD.TextStrokeColor3 = UI.PINK
+	restoreD.TextStrokeTransparency = 0
+	restoreD.FontFace = UI.LOGO_FONT_FACE
+	restoreD.TextScaled = false
+	restoreD.TextXAlignment = Enum.TextXAlignment.Center
+	restoreD.TextYAlignment = Enum.TextYAlignment.Center
+	restoreD.ZIndex = 65002
+	restoreD.Parent = restoreLogoHolder
 	local restoreH = New("TextLabel")
 	restoreH.Name = "CompactH"
 	restoreH.AnchorPoint = V2(0, 0.5)
@@ -13645,10 +14252,10 @@ end
 	restoreH.BackgroundTransparency = 1
 	restoreH.BorderSizePixel = 0
 	restoreH.Text = "H"
-	restoreH.TextColor3 = PINK
-	restoreH.TextStrokeColor3 = PINK
+	restoreH.TextColor3 = UI.PINK
+	restoreH.TextStrokeColor3 = UI.PINK
 	restoreH.TextStrokeTransparency = 0
-	restoreH.FontFace = LOGO_FONT_FACE
+	restoreH.FontFace = UI.LOGO_FONT_FACE
 	restoreH.TextScaled = false
 	restoreH.TextXAlignment = Enum.TextXAlignment.Center
 	restoreH.TextYAlignment = Enum.TextYAlignment.Center
@@ -13657,20 +14264,20 @@ end
 	local function syncRestoreLogoTextSize()
 		local textPixels = math.max(
 			1,
-			roundPixel(restoreLogoHolder.AbsoluteSize.Y * 1.235 * FONT_SIZE_SCALE)
+			roundPixel(restoreLogoHolder.AbsoluteSize.Y * 1.235 * UI.FONT_SIZE_SCALE)
 		)
-		restoreT.TextSize = textPixels
+		restoreD.TextSize = textPixels
 		restoreH.TextSize = textPixels
-		local tWidth = math.max(1, restoreT.TextBounds.X)
+		local dWidth = math.max(1, restoreD.TextBounds.X)
 		local hWidth = math.max(1, restoreH.TextBounds.X)
 		local strokeRoom = px(2)
-		local tBoxWidth = tWidth + strokeRoom
+		local dBoxWidth = dWidth + strokeRoom
 		local hBoxWidth = hWidth + strokeRoom
-		local totalWidth = tBoxWidth + hBoxWidth
+		local totalWidth = dBoxWidth + hBoxWidth
 		local startX = roundPixel(-totalWidth * 0.5)
-		restoreT.Position = U2(0.5, startX, 0.5, 0)
-		restoreT.Size = U2O(tBoxWidth, restoreLogoHolder.AbsoluteSize.Y)
-		restoreH.Position = U2(0.5, startX + tBoxWidth, 0.5, 0)
+		restoreD.Position = U2(0.5, startX, 0.5, 0)
+		restoreD.Size = U2O(dBoxWidth, restoreLogoHolder.AbsoluteSize.Y)
+		restoreH.Position = U2(0.5, startX + dBoxWidth, 0.5, 0)
 		restoreH.Size = U2O(hBoxWidth, restoreLogoHolder.AbsoluteSize.Y)
 	end
 	syncRestoreLogoTextSize()
@@ -13688,7 +14295,7 @@ end
 		TweenService:Create(
 			restoreButton,
 			menuTweenInfo,
-			{BackgroundColor3 = BLACK}
+			{BackgroundColor3 = UI.BLACK}
 		):Play()
 	end)
 	local iconDragging = false
@@ -13811,7 +14418,7 @@ autoServerHopState.ConnectPersistent(UserInputService.InputBegan,
 		then
 			return
 		end
-		if input.KeyCode == TOGGLE_KEY then
+		if input.KeyCode == UI.TOGGLE_KEY then
 			setPanelOpen(
 				not panelOpen
 			)
@@ -13891,7 +14498,7 @@ autoServerHopState.ConnectPersistent(UserInputService.InputBegan,
 		if object == window or not object:IsA("GuiObject") then
 			return false
 		end
-		-- Mobile-only: the compact TH logo is an explicit window drag handle.
+		-- Mobile-only: the compact DH logo is an explicit window drag handle.
 		-- Desktop keeps the existing non-draggable logo behavior.
 		if isMobileLogoObject(object) then
 			return false
@@ -14176,7 +14783,7 @@ end)()
 		scan(player.Character)
 		return {Records = records, Tokens = publicTokens(player)}
 	end
-	rawset(_G, "__TUFFHUB_PUBLIC_OWNERSHIP_SNAPSHOT", snapshot)
+	rawset(_G, "__DROIDHUB_PUBLIC_OWNERSHIP_SNAPSHOT", snapshot)
 end)()
 if MINIGAME_MODE then
 	task.spawn(function()
@@ -14522,12 +15129,21 @@ if MINIGAME_MODE then
 			then return false end
 			return autoServerHopState.ToolMatchesSpecificRule(tool, rule)
 		end
+		local ownershipCacheAS = setmetatable({}, {__mode = "k"})
+		local function ownershipSnapshotAS(player)
+			local now = os.clock()
+			local cached = ownershipCacheAS[player]
+			if cached and now - cached.At <= 0.12 then return cached.Value end
+			local snapshotter = rawget(_G, "__DROIDHUB_PUBLIC_OWNERSHIP_SNAPSHOT")
+			local value = type(snapshotter) == "function" and snapshotter(player) or nil
+			ownershipCacheAS[player] = {At = now, Value = value}
+			return value
+		end
 		local function mustOwnMatchesAS(player)
 			local config = autoSitState and autoSitState.OneOfTwo
 			if not config or typeof(player) ~= "Instance" or not player:IsA("Player") then return false end
 			if isBlacklistedAS(player) then return false end
-			local snapshotter = rawget(_G, "__TUFFHUB_PUBLIC_OWNERSHIP_SNAPSHOT")
-			local ownership = type(snapshotter) == "function" and snapshotter(player) or nil
+			local ownership = ownershipSnapshotAS(player)
 			if type(ownership) ~= "table" then return false end
 			local records = type(ownership.Records) == "table" and ownership.Records or {}
 			local selected, matched = 0, 0
@@ -14607,10 +15223,58 @@ if MINIGAME_MODE then
 			end
 			return best
 		end
+		-- Simple Auto Farm prioritizes the most valuable eligible opponent, not the
+		-- nearest table. Distance is only a tie-breaker after wager potential.
+		local farmRarityRankAS = {}
+		for index, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do farmRarityRankAS[rarity] = index end
+		local function annotateFarmValueAS(candidate, player)
+			if not candidate or not player or autoServerHopState.Utility.SimpleAutofarmEnabled ~= true then return end
+			local ownership = ownershipSnapshotAS(player)
+			local highestRank, highestQualifyingRank, progressScore, qualifyingCount = 0, 0, 0
+			local targetRank = farmRarityRankAS[autoServerHopState.RuntimeSimpleAutofarmTargetRarity] or 1
+			for _, record in ipairs(type(ownership) == "table" and type(ownership.Records) == "table" and ownership.Records or {}) do
+				local rank = farmRarityRankAS[record.Rarity] or 0
+				if rank > 0 then
+					highestRank = math.max(highestRank, rank)
+					if rank >= targetRank then
+						highestQualifyingRank = math.max(highestQualifyingRank, rank)
+						qualifyingCount += 1
+						-- One item can complete several future floor milestones. Six items at the
+						-- current target can therefore beat one jackpot item when that advances the
+						-- whole inventory faster.
+						progressScore += (rank - targetRank) + 1
+					end
+				end
+			end
+			candidate.FarmHighestRank = highestRank
+			candidate.FarmHighestQualifyingRank = highestQualifyingRank
+			candidate.FarmQualifyingCount = qualifyingCount
+			candidate.FarmProgressScore = progressScore
+			candidate.FarmTokens = math.max(0, tonumber(type(ownership) == "table" and ownership.Tokens or 0) or 0)
+			local queued = autoServerHopState.RuntimeQueuedMinigameUserIds
+			candidate.FarmAlreadyQueued = type(queued)=="table" and queued[tostring(player.UserId)] == true
+		end
 		-- Auto Sit only needs the best candidate. Select it in one pass instead of
 		-- allocating/sorting full partner and empty-table arrays every scheduler tick.
 		local function betterPartnerAS(a, b)
 			if not b then return true end
+			if autoServerHopState.Utility.SimpleAutofarmEnabled == true then
+				-- Work through every eligible player once before revisiting anyone already queued.
+				if a.FarmAlreadyQueued ~= b.FarmAlreadyQueued then return a.FarmAlreadyQueued ~= true end
+				local at, bt = tonumber(a.FarmTokens) or 0, tonumber(b.FarmTokens) or 0
+				if autoServerHopState.RuntimeSimpleAutofarmAllEternal == true then
+					-- Once progression is complete, currency is the only remaining farm objective.
+					if at ~= bt then return at > bt end
+				else
+					local ap, bp = tonumber(a.FarmProgressScore) or 0, tonumber(b.FarmProgressScore) or 0
+					if ap ~= bp then return ap > bp end
+					local ac, bc = tonumber(a.FarmQualifyingCount) or 0, tonumber(b.FarmQualifyingCount) or 0
+					if ac ~= bc then return ac > bc end
+					local ah, bh = tonumber(a.FarmHighestQualifyingRank) or 0, tonumber(b.FarmHighestQualifyingRank) or 0
+					if ah ~= bh then return ah > bh end
+					if at ~= bt then return at > bt end
+				end
+			end
 			if a.PromptReady ~= b.PromptReady then return a.PromptReady == true end
 			if a.MachineDistance ~= b.MachineDistance then return a.MachineDistance < b.MachineDistance end
 			return a.TravelDistance < b.TravelDistance
@@ -14638,6 +15302,7 @@ if MINIGAME_MODE then
 							local candidate = bestOpenSeatAS(model, 1)
 							if candidate then
 								candidate.Partner, candidate.LockedAsPartner = player, true
+								annotateFarmValueAS(candidate, player)
 								if betterPartnerAS(candidate, bestPartner) then bestPartner = candidate end
 							end
 						end
@@ -14653,6 +15318,7 @@ if MINIGAME_MODE then
 							if candidate then
 								if typeof(partner) == "Instance" and partner:IsA("Player") and mustOwnMatchesAS(partner) then
 									candidate.Partner, candidate.LockedAsPartner = partner, true
+									annotateFarmValueAS(candidate, partner)
 									if betterPartnerAS(candidate, bestPartner) then bestPartner = candidate end
 								elseif partner == nil and (count == nil or count == 0) and betterEmptyAS(candidate, bestEmpty) then
 									bestEmpty = candidate
@@ -15004,7 +15670,7 @@ if MINIGAME_MODE then
 		local function releaseMovementAS()
 			pcall(function()
 				RunServiceAS:UnbindFromRenderStep(
-					"__TUFFHUB_AUTOSIT_MOVE_" .. tostring(LocalPlayerAS.UserId)
+					"__DROIDHUB_AUTOSIT_MOVE_" .. tostring(LocalPlayerAS.UserId)
 				)
 			end)
 		end
@@ -15042,7 +15708,7 @@ if MINIGAME_MODE then
 			local jumpRearmAnchor
 			local nextPartnerScan = 0
 			local deadline = os.clock() + TABLE_MOVE_TIMEOUT_AS
-			local movementBindName = "__TUFFHUB_AUTOSIT_MOVE_" .. tostring(LocalPlayerAS.UserId)
+			local movementBindName = "__DROIDHUB_AUTOSIT_MOVE_" .. tostring(LocalPlayerAS.UserId)
 			local movementBound = false
 			pcall(function() RunServiceAS:UnbindFromRenderStep(movementBindName) end)
 			local function bindContinuousMovementAS()
@@ -16368,9 +17034,9 @@ if MINIGAME_MODE then
 				] = os.clock()
 			end
 		end
-		local oldStopSP = rawget(_G, "__TUFFHUB_PRESENCE_STOP")
+		local oldStopSP = rawget(_G, "__DROIDHUB_PRESENCE_STOP")
 		if type(oldStopSP) == "function" then pcall(oldStopSP) end
-		rawset(_G, "__TUFFHUB_PRESENCE_STOP", nil)
+		rawset(_G, "__DROIDHUB_PRESENCE_STOP", nil)
 		local function hash32SP(value, seed)
 			local h = seed or 5381
 			value = tostring(value or "")
@@ -16379,16 +17045,16 @@ if MINIGAME_MODE then
 			end
 			return string.format("%08x", h)
 		end
-		local materialSP = "THP10|" .. tostring(TUFFHUB_HOP_PLACE_ID) .. "|" .. tostring(game.JobId) .. "|8f31c6"
+		local materialSP = "DHP10|" .. tostring(DROIDHUB_HOP_PLACE_ID) .. "|" .. tostring(game.JobId) .. "|8f31c6"
 		local serverKeySP = hash32SP(materialSP, 5381) .. hash32SP(materialSP, 2166136261)
 		local roomSP = "thp10-" .. serverKeySP
-		local globalMaterialSP = "THP10G|" .. tostring(TUFFHUB_HOP_PLACE_ID) .. "|8f31c6"
+		local globalMaterialSP = "DHP10G|" .. tostring(DROIDHUB_HOP_PLACE_ID) .. "|8f31c6"
 		local globalKeySP = hash32SP(globalMaterialSP, 5381) .. hash32SP(globalMaterialSP, 2166136261)
 		local globalRoomSP = "thp10g-" .. globalKeySP
 		local heartbeatEverySP = 0.75
 		local staleAfterMsSP = 8000
 		local reconnectEverySP = 0.75
-		local identityKeySP = "__TUFFHUB_PRESENCE_IDENTITY"
+		local identityKeySP = "__DROIDHUB_PRESENCE_IDENTITY"
 		local identitySP = rawget(_G, identityKeySP)
 		if type(identitySP) ~= "table"
 			or identitySP.jobId ~= tostring(game.JobId)
@@ -16908,7 +17574,7 @@ if MINIGAME_MODE then
 				seenAt[userId] = nil
 			end
 		end)
-		rawset(_G, "__TUFFHUB_PRESENCE_STOP", function()
+		rawset(_G, "__DROIDHUB_PRESENCE_STOP", function()
 			stoppedSP = true
 			disconnectSignalSP(playerAddedConnectionSP)
 			disconnectSignalSP(playerRemovingConnectionSP)
@@ -16969,8 +17635,8 @@ if MINIGAME_MODE then
 		playerAddedConnectionSP = nil
 		playerRemovingConnectionSP = nil
 		cleanupAllChannelsSP(true)
-		if rawget(_G, "__TUFFHUB_PRESENCE_STOP") then
-			rawset(_G, "__TUFFHUB_PRESENCE_STOP", nil)
+		if rawget(_G, "__DROIDHUB_PRESENCE_STOP") then
+			rawset(_G, "__DROIDHUB_PRESENCE_STOP", nil)
 		end
 	end)
 end
@@ -17110,6 +17776,46 @@ if MINIGAME_MODE then
 			then
 				return false
 			end
+			if autoServerHopState.Utility.SimpleAutofarmEnabled == true then
+				local utility = autoServerHopState.Utility
+				local userId = tostring(player.UserId)
+				local scriptUsers = autoServerHopState.RuntimeScriptUserIds
+				if type(scriptUsers) == "table" and scriptUsers[userId] == true then return false end
+				if utility.TempBlacklistPlayersAfterCanceledTrade == true then
+					local checker = autoServerHopState.IsTempBlacklistedUser
+					if type(checker) == "function" and checker(player.UserId) then return false end
+				end
+				if utility.PermanentBlacklistPlayersAfterCanceledTrade == true then
+					local permanent = utility.PermanentBlacklistedUserIds
+					if type(permanent) == "table" and permanent[userId] == true then return false end
+				end
+				-- A short same-player reuse cooldown is an Auto Sit concern, not a reason to
+				-- abandon an otherwise profitable server.
+				local snapshotter = rawget(_G, "__DROIDHUB_PUBLIC_OWNERSHIP_SNAPSHOT")
+				local ownership = type(snapshotter) == "function" and snapshotter(player) or nil
+				if type(ownership) ~= "table" then return false end
+				local config = autoSitState and autoSitState.OneOfTwo
+				if type(config) ~= "table" then return false end
+				local records = type(ownership.Records) == "table" and ownership.Records or {}
+				local selected, matched = 0, 0
+				for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+					if type(config.Targets) == "table" and config.Targets[rarity] == true then
+						selected += 1
+						local required = math.max(1, math.floor(tonumber(config.Amounts and config.Amounts[rarity]) or 1))
+						local count = 0
+						for _, record in ipairs(records) do
+							if record.Rarity == rarity then count += 1 end
+						end
+						if count >= required then matched += 1 end
+					end
+				end
+				if type(config.Targets) == "table" and config.Targets.Tokens == true then
+					selected += 1
+					local required = math.max(1, math.floor(tonumber(config.Tokens) or 1))
+					if (tonumber(ownership.Tokens) or 0) >= required then matched += 1 end
+				end
+				return selected > 0 and matched > 0
+			end
 			if type(criteria) ~= "table" or #criteria == 0 then return false end
 			local tools = {}
 			local function scan(container)
@@ -17228,16 +17934,43 @@ if MINIGAME_MODE then
 			end
 			return list
 		end
-		local function everyonePlayedCS(players)
+		local function everyoneQueuedCS(players)
 			if #players == 0 then return false end
-			local played = autoServerHopState.RuntimePlayedMinigameUserIds
-			if type(played) ~= "table" then return false end
+			local queuedWith = autoServerHopState.RuntimeQueuedMinigameUserIds
+			if type(queuedWith) ~= "table" then return false end
 			for _, player in ipairs(players) do
-				if played[tostring(player.UserId)] ~= true then
+				if queuedWith[tostring(player.UserId)] ~= true then
 					return false
 				end
 			end
 			return true
+		end
+		local function minigameQueuedCS(active)
+			local queued = tryCS(active, {"queued"})
+			if queued ~= nil then return queued == true end
+			local ok, direct = pcall(function()
+				return active and active.Data and active.Data.queued
+			end)
+			return ok and direct == true
+		end
+		local function lifecycleOpponentCS(negotiation, active)
+			local opponent = tryCS(negotiation, {"player2", "player"})
+			if not (typeof(opponent) == "Instance" and opponent:IsA("Player") and opponent ~= LocalPlayerCS) then
+				opponent = tryCS(negotiation, {"player1", "player"})
+			end
+			if not (typeof(opponent) == "Instance" and opponent:IsA("Player") and opponent ~= LocalPlayerCS) then
+				opponent = tryCS(active, {"session", "private", "opponent"})
+			end
+			return typeof(opponent) == "Instance"
+				and opponent:IsA("Player")
+				and opponent ~= LocalPlayerCS
+				and opponent or nil
+		end
+		local function markQueuedOpponentCS(opponent)
+			if not opponent then return end
+			autoServerHopState.RuntimeQueuedMinigameUserIds =
+				autoServerHopState.RuntimeQueuedMinigameUserIds or {}
+			autoServerHopState.RuntimeQueuedMinigameUserIds[tostring(opponent.UserId)] = true
 		end
 		local function refreshStartupDecisionCS()
 			local refresh = autoServerHopState.RefreshStartupServerDecision
@@ -17254,42 +17987,50 @@ if MINIGAME_MODE then
 				refreshStartupDecisionCS()
 			end
 		end
+		local nextEligibilityEvaluationAtCS = 0
 		while screenGui.Parent do
-			task.wait(1.00)
 			local utility = autoServerHopState.Utility
+			local queueTrackingEnabled = utility.CheckServerHopPlayedEveryoneServer == true
+				or utility.CheckServerHopPlayedEveryoneMinigamesArea == true
+			task.wait(queueTrackingEnabled and 0.12 or 0.75)
+			utility = autoServerHopState.Utility
 			if utility.PauseScript == true
 				or utility.PauseMinigameFeatures == true
 			then
 				autoServerHopState.RuntimeCheckServerHopRequested = false
 				continue
 			end
-			local active
-			active = safeRepGet(ReplicatorCS, "ActiveMinigame")
-			if tryCS(active, {"phase"}) == "Playing" then
-				local opponent =
-					tryCS(active, {"session", "private", "opponent"})
-				if typeof(opponent) == "Instance"
-					and opponent:IsA("Player")
-					and opponent ~= LocalPlayerCS
-				then
-					local resetStreak = autoServerHopState.ResetCanceledTradeStreak
-					if type(resetStreak) == "function" then resetStreak(opponent.UserId) end
-					autoServerHopState.RuntimePlayedMinigameUserIds =
-						autoServerHopState.RuntimePlayedMinigameUserIds or {}
-					autoServerHopState.RuntimePlayedMinigameUserIds[
-						tostring(opponent.UserId)
-					] = true
-				end
-			end
+			local active = safeRepGet(ReplicatorCS, "ActiveMinigame")
 			local negotiationCS = safeRepGet(ReplicatorCS, "ActiveNegotiation")
-			if tryCS(negotiationCS, {"guid"}) ~= nil
-				or tryCS(active, {"phase"}) ~= nil
+			local negotiationActive = tryCS(negotiationCS, {"guid"}) ~= nil
+			local minigameQueued = minigameQueuedCS(active)
+			local lifecycleOpponent = lifecycleOpponentCS(negotiationCS, active)
+			-- Server Eligibility counts a player as handled as soon as we actually enter
+			-- the minigame negotiation/queue with them. The round does not need to start.
+			if lifecycleOpponent and (negotiationActive or minigameQueued) then
+				markQueuedOpponentCS(lifecycleOpponent)
+			end
+			-- Canceled-trade streaks keep their existing meaning: only a real playing
+			-- minigame resets the opponent's cancellation streak.
+			local activePhaseCS = tryCS(active, {"phase"})
+			if lifecycleOpponent and activePhaseCS == "Playing" then
+				local resetStreak = autoServerHopState.ResetCanceledTradeStreak
+				if type(resetStreak) == "function" then resetStreak(lifecycleOpponent.UserId) end
+			end
+			-- Once queued with an eligible player, keep them marked handled for this
+			-- server. The "played everyone" condition can then rotate to the next
+			-- profitable server instead of farming one person forever.
+			if negotiationActive
+				or activePhaseCS ~= nil
 				or tryCS(active, {"session", "gameId"}) ~= nil
 				or type(tryCS(active, {"voting"})) == "table"
 			then
 				autoServerHopState.RuntimeCheckServerHopRequested = false
 				continue
 			end
+			local nowCS = os.clock()
+			if nowCS < nextEligibilityEvaluationAtCS then continue end
+			nextEligibilityEvaluationAtCS = nowCS + 0.90
 			local anyCondition =
 				utility.CheckServerHopNobodyServer == true
 				or utility.CheckServerHopPlayedEveryoneServer == true
@@ -17335,7 +18076,7 @@ if MINIGAME_MODE then
 				end
 				if not shouldHop
 					and utility.CheckServerHopPlayedEveryoneServer == true
-					and everyonePlayedCS(serverPlayers)
+					and everyoneQueuedCS(serverPlayers)
 				then
 					shouldHop = true
 				end
@@ -17354,7 +18095,7 @@ if MINIGAME_MODE then
 				end
 				if not shouldHop
 					and utility.CheckServerHopPlayedEveryoneMinigamesArea == true
-					and everyonePlayedCS(areaPlayers)
+					and everyoneQueuedCS(areaPlayers)
 				then
 					shouldHop = true
 				end
@@ -17471,6 +18212,7 @@ if MINIGAME_MODE then
 		local tryIndexHP = safeTryIndex
 		autoServerHopState.ConnectPersistent(TeleportServiceHP.TeleportInitFailed, function(player)
 			if player == LocalPlayerHP then
+				clearIntentionalDeparture("ServerHop")
 				hoppingHP = false
 				serverCacheAtHP = 0
 			end
@@ -17752,7 +18494,7 @@ if MINIGAME_MODE then
 			return okDecode and type(decoded) == "table" and decoded or nil
 		end
 		local function fetchServerPageHP(requestFn, cursor)
-			local url = "https://games.roblox.com/v1/games/" .. tostring(TUFFHUB_HOP_PLACE_ID)
+			local url = "https://games.roblox.com/v1/games/" .. tostring(DROIDHUB_HOP_PLACE_ID)
 				.. "/servers/Public?sortOrder=Desc&limit=100&excludeFullGames=true"
 			if cursor and cursor ~= "" then url ..= "&cursor=" .. HttpServiceHP:UrlEncode(cursor) end
 			if requestFn then
@@ -17948,10 +18690,12 @@ if MINIGAME_MODE then
 				autoServerHopState.RuntimeServerHopPending = false
 				return
 			end
+			markIntentionalDeparture("ServerHop", 12)
 			local ok = pcall(function()
-				TeleportServiceHP:TeleportToPlaceInstance(TUFFHUB_HOP_PLACE_ID, chosen.id, LocalPlayerHP)
+				TeleportServiceHP:TeleportToPlaceInstance(DROIDHUB_HOP_PLACE_ID, chosen.id, LocalPlayerHP)
 			end)
 			if not ok then
+				clearIntentionalDeparture("ServerHop")
 				serverCacheAtHP = 0
 				hoppingHP = false
 				return
@@ -17960,6 +18704,9 @@ if MINIGAME_MODE then
 			-- request flags intentionally stay set until the teleport actually wins.
 			task.delay(4, function()
 				if screenGui.Parent and game.JobId == originJobId then
+					-- Keep the short intentional-departure marker alive. Roblox can accept
+					-- a teleport and remove the replicator a little later; clearing it here
+					-- would let that normal hop be misclassified as a disconnect again.
 					hoppingHP = false
 					serverCacheAtHP = 0
 				end
@@ -18166,42 +18913,37 @@ if MINIGAME_MODE then
 	(function()
 		local GuiServiceAR = game:GetService("GuiService")
 		local TeleportServiceAR = TeleportService
-		local PlayersAR = Players
-		local LocalPlayerAR = PlayersAR.LocalPlayer
+		local LocalPlayerAR = Players.LocalPlayer
 		local reconnectingAR = false
 		local reconnectSerialAR = 0
-		local function isConnectionLossAR(message)
-			if type(message) ~= "string" or message == "" then return false end
-			local text = string.lower(message)
-			if string.find(text, "kicked", 1, true)
-				or string.find(text, "error code: 267", 1, true)
-				or string.find(text, "error code: 268", 1, true)
-			then
-				return false
-			end
-			return string.find(text, "error code: 277", 1, true) ~= nil
-				or string.find(text, "error code: 279", 1, true) ~= nil
-				or string.find(text, "error code: 266", 1, true) ~= nil
-				or string.find(text, "server shut", 1, true) ~= nil
-				or string.find(text, "server shutdown", 1, true) ~= nil
-				or string.find(text, "failed to connect", 1, true) ~= nil
-				or string.find(text, "connection timed out", 1, true) ~= nil
-				or string.find(text, "lost connection", 1, true) ~= nil
-				or string.find(text, "internet connection", 1, true) ~= nil
-				or (
-					string.find(text, "disconnect", 1, true) ~= nil
-					and string.find(text, "same account", 1, true) == nil
-				)
+
+		local function fatalErrorScreenAR(message)
+			return type(message) == "string" and string.find(message, "%S") ~= nil
 		end
+
+		local function requestImmediateServerHopAR()
+			local state = autoServerHopState
+			local utility = state and state.Utility
+			if not state or not utility or utility.PauseScript == true then return false end
+			-- Error-screen recovery is a committed departure. Reuse the manual-kick
+			-- bypass so an active/stale lifecycle can never hold the player on the
+			-- Roblox error prompt instead of allowing the recovery teleport.
+			state.RuntimeManualKickRequested = true
+			state.RuntimeManualServerHopRequested = true
+			state.RuntimeServerHopFreezeCFrame = nil
+			state.RuntimeServerHopHardFreeze = true
+			state.RuntimeServerHopPending = true
+			markIntentionalDeparture("ErrorRecoveryHop", 12)
+			local wake = state.RuntimeServerHopWake
+			if type(wake) == "function" then
+				return pcall(wake)
+			end
+			return false
+		end
+
 		local function beginReconnectAR()
 			local utility = autoServerHopState and autoServerHopState.Utility
-			if reconnectingAR
-				or not utility
-				or utility.PauseScript == true
-				or utility.AutoReconnect ~= true
-			then
-				return
-			end
+			if reconnectingAR or not utility or utility.PauseScript == true then return end
 			reconnectingAR = true
 			reconnectSerialAR += 1
 			local serial = reconnectSerialAR
@@ -18210,51 +18952,64 @@ if MINIGAME_MODE then
 				local attempt = 0
 				while screenGui.Parent
 					and serial == reconnectSerialAR
-					and autoServerHopState.Utility.AutoReconnect == true
 					and autoServerHopState.Utility.PauseScript ~= true
 					and game.JobId == originJobId
 				do
 					attempt += 1
-					pcall(function()
-						TeleportServiceAR:Teleport(TUFFHUB_HOP_PLACE_ID, LocalPlayerAR)
-					end)
-					local retryAt = os.clock() + math.min(8, 3 + attempt)
+					requestImmediateServerHopAR()
+
+					-- Give the normal server-hop selector a short head start. If Roblox
+					-- has already disconnected us or server discovery cannot complete,
+					-- fall back to a direct place teleport so no error prompt can strand
+					-- the client indefinitely.
+					local fallbackAt = os.clock() + 1.0
 					while screenGui.Parent
 						and serial == reconnectSerialAR
-						and autoServerHopState.Utility.AutoReconnect == true
+						and autoServerHopState.Utility.PauseScript ~= true
+						and game.JobId == originJobId
+						and os.clock() < fallbackAt
+					do
+						task.wait(0.10)
+					end
+					if screenGui.Parent
+						and serial == reconnectSerialAR
+						and autoServerHopState.Utility.PauseScript ~= true
+						and game.JobId == originJobId
+					then
+						markIntentionalDeparture("AutoReconnectFallback", 12)
+						local teleportOk = pcall(function()
+							TeleportServiceAR:Teleport(DROIDHUB_HOP_PLACE_ID, LocalPlayerAR)
+						end)
+						if not teleportOk then clearIntentionalDeparture("AutoReconnectFallback") end
+					end
+
+					local retryAt = os.clock() + math.min(4, 1.25 + (attempt * 0.50))
+					while screenGui.Parent
+						and serial == reconnectSerialAR
 						and autoServerHopState.Utility.PauseScript ~= true
 						and game.JobId == originJobId
 						and os.clock() < retryAt
 					do
-						task.wait(0.20)
+						task.wait(0.15)
 					end
 				end
-				if serial == reconnectSerialAR then
-					reconnectingAR = false
-				end
+				if serial == reconnectSerialAR then reconnectingAR = false end
 			end)
 		end
+
+		-- GuiService.ErrorMessageChanged represents the fatal Roblox error prompt.
+		-- Any non-empty prompt (kick, disconnect, shutdown, teleport failure, etc.)
+		-- starts recovery immediately so the client never remains parked on it.
 		autoServerHopState.ConnectPersistent(GuiServiceAR.ErrorMessageChanged, function(message)
-			if not screenGui.Parent then return end
-			if autoServerHopState.Utility.AutoReconnect ~= true
-				or autoServerHopState.Utility.PauseScript == true
-			then
-				return
-			end
-			if isConnectionLossAR(message) then
-				beginReconnectAR()
-			end
+			if not screenGui.Parent or autoServerHopState.Utility.PauseScript == true then return end
+			if fatalErrorScreenAR(message) then beginReconnectAR() end
 		end)
-		autoServerHopState.ConnectPersistent(TeleportServiceAR.TeleportInitFailed, function(player, _, errorMessage)
+
+		autoServerHopState.ConnectPersistent(TeleportServiceAR.TeleportInitFailed, function(player)
 			if player ~= LocalPlayerAR or not screenGui.Parent then return end
-			if autoServerHopState.Utility.AutoReconnect ~= true
-				or autoServerHopState.Utility.PauseScript == true
-			then
-				return
-			end
-			if isConnectionLossAR(errorMessage) then
-				beginReconnectAR()
-			end
+			clearIntentionalDeparture("ErrorRecoveryHop")
+			clearIntentionalDeparture("AutoReconnectFallback")
+			if autoServerHopState.Utility.PauseScript ~= true then beginReconnectAR() end
 		end)
 	end)()
 end
@@ -18851,7 +19606,8 @@ if MINIGAME_MODE then
 			then
 				return nil
 			end
-			local explicit = item.sub and item.sub.rarity
+			local sub = type(item.sub) == "table" and item.sub or nil
+			local explicit = item.rarity or item.Rarity or (sub and (sub.rarity or sub.Rarity))
 			if type(explicit) == "string" and RARITY_ORDER_ADI[explicit] then
 				return explicit
 			end
@@ -18859,9 +19615,14 @@ if MINIGAME_MODE then
 			return ok and type(rarity) == "string" and rarity or nil
 		end
 		local function brainrotIsMetaADI(item)
-			local name = type(item) == "table"
-				and (item.name or (item.sub and item.sub.name))
-				or nil
+			if type(item) ~= "table" then return false end
+			local sub = type(item.sub) == "table" and item.sub or nil
+			if item.meta == true or item.Meta == true or item.isMeta == true or item.IsMeta == true
+				or (sub and (sub.meta == true or sub.Meta == true or sub.isMeta == true or sub.IsMeta == true))
+			then
+				return true
+			end
+			local name = item.name or (sub and sub.name)
 			if type(name) ~= "string" then return false end
 			local lower = string.lower(name)
 			local metaNames = rawget(_G, "__TSUNAMI_META_NAMES_V215")
@@ -18881,6 +19642,11 @@ if MINIGAME_MODE then
 				end
 			end
 			return string.find(lower, "%f[%a]meta%f[%A]") ~= nil
+		end
+		local function effectiveBrainrotRarityADI(item)
+			local rarity = getItemRarityADI(item)
+			if rarity == "Infinity" and brainrotIsMetaADI(item) then return "Meta" end
+			return rarity
 		end
 		local function deleteBlockedADI()
 			if autoServerHopState.Utility.PauseScript == true
@@ -18963,14 +19729,20 @@ if MINIGAME_MODE then
 		local function neverDeleteADI(item)
 			local state = autoServerHopState and autoServerHopState.Utility
 			if not state or type(item) ~= "table" then return false end
-			-- Auto Delete never unlocks inventory entries implicitly. Locked items are
-			-- always excluded; the visible locked toggle remains backward-compatible.
-			if item.locked == true then return true end
-			local itemType = inventoryItemTypeADI(item)
-			local effectiveRarity = getItemRarityADI(item)
-			if effectiveRarity == "Infinity" and brainrotIsMetaADI(item) then
-				effectiveRarity = "Meta"
+			-- Regular Mode never unlocks a protected item implicitly. Simple Auto Farm may
+			-- unlock obsolete low-tier Brainrots when its locked-item protection is off,
+			-- otherwise one locked trash item could permanently block floor progression.
+			if item.locked == true
+				and not (
+					state.SimpleAutofarmEnabled == true
+					and state.AvoidDeletingLockedItems ~= true
+					and inventoryItemTypeADI(item) == "Brainrot"
+				)
+			then
+				return true
 			end
+			local itemType = inventoryItemTypeADI(item)
+			local effectiveRarity = effectiveBrainrotRarityADI(item)
 			-- Eternal is a terminal progression reward; never discard it automatically.
 			if effectiveRarity == "Eternal" then return true end
 			if state.NeverDeleteNonBrainrots == true and itemType ~= "Brainrot" then
@@ -19115,20 +19887,17 @@ if MINIGAME_MODE then
 			then
 				return nil
 			end
-			local rarity = getItemRarityADI(item)
-			if rarity == "Paradox" or rarity == "Eternal" then
+			local rarity = effectiveBrainrotRarityADI(item)
+			if rarity == "Eternal" then return nil end
+			if rarity == "Paradox"
+				and not (
+					autoServerHopState.Utility.SimpleAutofarmEnabled == true
+					and autoServerHopState.RuntimeSimpleAutofarmTargetRarity == "Eternal"
+				)
+			then
 				return nil
 			end
-			local rarityRank = type(rarity) == "string"
-				and RARITY_ORDER_ADI[rarity]
-				or nil
-			if rarityRank == nil then
-				return nil
-			end
-			if rarity == "Infinity" then
-				return brainrotIsMetaADI(item) and 1001 or 1000
-			end
-			return rarityRank
+			return type(rarity) == "string" and RARITY_ORDER_ADI[rarity] or nil
 		end
 		local function worstBrainrotIdADI()
 			local inventory = inventoryDataADI()
@@ -19156,6 +19925,38 @@ if MINIGAME_MODE then
 			end
 			if #exactWorst == 0 then return nil end
 			return exactWorst[math.random(1, #exactWorst)]
+		end
+
+		local function simpleProgressionReplacementIdADI()
+			if autoServerHopState.Utility.SimpleAutofarmEnabled ~= true then return nil end
+			local baseline = math.max(1, math.floor(tonumber(autoServerHopState.RuntimeSimpleAutofarmBaselineBrainrots) or 0))
+			if baseline <= 0 then return nil end
+			local target = autoServerHopState.RuntimeSimpleAutofarmTargetRarity
+			local targetRank = RARITY_ORDER_ADI[target]
+			if not targetRank then return nil end
+			local inventory = inventoryDataADI()
+			if not inventory then return nil end
+			local listed = boothListedIdsADI()
+			local brainrotCount = 0
+			for id, item in pairs(inventory) do
+				if listed[tostring(id)] ~= true and inventoryItemTypeADI(item) == "Brainrot" then
+					brainrotCount += 1
+				end
+			end
+			if brainrotCount <= baseline then return nil end
+			local bestId, bestRank = nil, math.huge
+			for id, item in pairs(inventory) do
+				if listed[tostring(id)] ~= true and not neverDeleteADI(item) then
+					local rarity = effectiveBrainrotRarityADI(item)
+					local rank = RARITY_ORDER_ADI[rarity]
+					if rank and rank < targetRank and rank < bestRank
+						and deletionBucketADI(item, id, listed) ~= nil
+					then
+						bestId, bestRank = id, rank
+					end
+				end
+			end
+			return bestId
 		end
 
 		local function unlockInventoryEntryIfNeededADI(id)
@@ -19315,11 +20116,17 @@ if MINIGAME_MODE then
 				then
 					return nil
 				end
-				local rarity = getItemRarityADI(item)
+				local rarity = effectiveBrainrotRarityADI(item)
 				if type(rarity) ~= "string"
 					or RARITY_ORDER_ADI[rarity] == nil
-					or rarity == "Paradox"
 					or rarity == "Eternal"
+					or (
+					rarity == "Paradox"
+					and not (
+						autoServerHopState.Utility.SimpleAutofarmEnabled == true
+						and autoServerHopState.RuntimeSimpleAutofarmTargetRarity == "Eternal"
+					)
+				)
 				then
 					return nil
 				end
@@ -19446,10 +20253,11 @@ if MINIGAME_MODE then
 				1,
 				100
 			)
-			if effectiveInventoryCountADI() < threshold then
+			local progressionReplacementId = simpleProgressionReplacementIdADI()
+			if progressionReplacementId == nil and effectiveInventoryCountADI() < threshold then
 				continue
 			end
-			if not confirmBoothPriorityBeforeDeleteADI() then
+			if progressionReplacementId == nil and not confirmBoothPriorityBeforeDeleteADI() then
 				continue
 			end
 			local deleteNonFirst = state.DeleteNonBrainrotsFirst == true
@@ -19461,16 +20269,22 @@ if MINIGAME_MODE then
 					continue
 				end
 			end
-			local brainrotId = worstBrainrotIdADI()
-			local junkIds = nonBrainrotIdsADI()
-			local junkId = #junkIds > 0
-				and junkIds[math.random(1, #junkIds)]
-				or nil
+			local brainrotId, junkId
+			if progressionReplacementId == nil then
+				brainrotId = worstBrainrotIdADI()
+				local junkIds = nonBrainrotIdsADI()
+				junkId = #junkIds > 0
+					and junkIds[math.random(1, #junkIds)]
+					or nil
+			end
 			local selectedId
 			local selectedKind
+			if progressionReplacementId ~= nil then
+				selectedId = progressionReplacementId
+				selectedKind = "Brainrot"
 			-- Either priority mode can delete both categories; the toggle only decides
 			-- which eligible category is tried first before falling through to the other.
-			if deleteNonFirst then
+			elseif deleteNonFirst then
 				if junkId ~= nil then
 					selectedId = junkId
 					selectedKind = "NonBrainrot"
@@ -19735,7 +20549,7 @@ if MINIGAME_MODE then
 			return not autoServerHopState.SpecificRuleHasActiveAttributes(rule)
 		end
 		local function tradeRequestRequirements(u, player)
-			local snapshotter=rawget(_G,"__TUFFHUB_PUBLIC_OWNERSHIP_SNAPSHOT")
+			local snapshotter=rawget(_G,"__DROIDHUB_PUBLIC_OWNERSHIP_SNAPSHOT")
 			local ownership=type(snapshotter)=="function" and snapshotter(player) or nil
 			local records=type(ownership)=="table" and type(ownership.Records)=="table" and ownership.Records or {}
 			local enabled,matched=0,0
@@ -19980,57 +20794,74 @@ if MINIGAME_MODE then
 					TargetRarity=missingTargetRarity,
 					ExactAdded=math.max(0,math.floor(tonumber(exactAdded) or 0)),
 				}
-				if u.RegularFallbackToTokens==true then
-					if u["RegularFallback"..sourceRarity.."OfferAllTokens"]==true then
-						forceAllTokens=true
-					else
-						tokens+=math.max(0,math.floor(tonumber(u["RegularFallbackTokens"..sourceRarity]) or 0))
-					end
-				end
 			end
 			local function applyQueuedFallbacks()
 				if #pendingFallbackRequests==0 then return end
-				-- Specific fallback is globally higher priority than directional fallback.
-				-- Reserve every applicable unique specific item first, up to the six-slot cap.
-				if u.RegularFallbackToSpecificItems==true then
-					for _,request in ipairs(pendingFallbackRequests) do
-						if #desired>=6 then break end
-						local selected=type(u["RegularFallbackSpecific"..request.SourceRarity.."Items"])=="table"
-							and u["RegularFallbackSpecific"..request.SourceRarity.."Items"] or {}
-						addSelectedInInventoryOrder(selected,nil,nil,nil,nil)
-					end
-				end
-				local useLower=u.RegularFallbackOffers==true
-				local useHigher=u.RegularFallbackToNextHigherRarityBrainrot==true
-				if useLower and useHigher then useHigher=false end
-				if not (useLower or useHigher) or #desired>=6 then return end
-				local fallbackTotal=math.clamp(math.floor(tonumber(
-					useHigher and u.RegularFallbackNextHigherRarityAmount
-						or u.RegularFallbackNextLowerRarityAmount
-				) or 1),1,6)
+				local fallbackOrder = resolveFallbackPriority(
+					u.RegularFallbackCustomPriority == true,
+					{
+						u.RegularFallbackPriority1,
+						u.RegularFallbackPriority2,
+						u.RegularFallbackPriority3,
+						u.RegularFallbackPriority4,
+						u.RegularFallbackPriority5,
+					}
+				)
 				for _,request in ipairs(pendingFallbackRequests) do
-					if #desired>=6 then break end
-					local remaining=math.max(0,fallbackTotal-request.ExactAdded)
+					local selected = type(u["RegularFallbackSpecific"..request.SourceRarity.."Items"])=="table"
+						and u["RegularFallbackSpecific"..request.SourceRarity.."Items"] or {}
+					local selectedCount=0
+					for _,on in pairs(selected) do if on==true then selectedCount+=1 end end
+					local goal=1
+					if u.RegularFallbackToNextHigherRarityBrainrot==true then
+						goal=math.max(goal,math.clamp(math.floor(tonumber(u.RegularFallbackNextHigherRarityAmount) or 1),1,6))
+					end
+					if u.RegularFallbackOffers==true then
+						goal=math.max(goal,math.clamp(math.floor(tonumber(u.RegularFallbackNextLowerRarityAmount) or 1),1,6))
+					end
+					if u.RegularFallbackToBestAvailableBrainrots==true then
+						goal=math.max(goal,math.clamp(math.floor(tonumber(u.RegularFallbackBestAvailableBrainrotAmount) or 6),1,6))
+					end
+					if u.RegularFallbackToSpecificItems==true then goal=math.max(goal,math.min(6,selectedCount)) end
+					local remaining=math.max(0,goal-request.ExactAdded)
 					local targetIndex=table.find(OUTGOING_BRAINROT_RARITY_OPTIONS,request.TargetRarity)
 					if not targetIndex then
 						local fullIndex=table.find(BRAINROT_RARITY_OPTIONS,request.TargetRarity)
 						if fullIndex then targetIndex=math.min(fullIndex,#OUTGOING_BRAINROT_RARITY_OPTIONS+1) end
 					end
-					if targetIndex and remaining>0 then
-						if useHigher then
+					for _,mode in ipairs(fallbackOrder) do
+						if remaining<=0 then break end
+						if mode=="Specific Items" and u.RegularFallbackToSpecificItems==true then
+							local before=#desired
+							addSelectedInInventoryOrder(selected,remaining,nil,nil,nil)
+							remaining-=math.max(0,#desired-before)
+						elseif mode=="Next Higher Rarity" and u.RegularFallbackToNextHigherRarityBrainrot==true and targetIndex then
 							for higherIndex=targetIndex+1,#OUTGOING_BRAINROT_RARITY_OPTIONS do
 								if remaining<=0 or #desired>=6 then break end
 								remaining-=addRarity(OUTGOING_BRAINROT_RARITY_OPTIONS[higherIndex],remaining,true)
 							end
-						else
+						elseif mode=="Next Lower Rarity" and u.RegularFallbackOffers==true and targetIndex then
 							for lowerIndex=math.min(targetIndex-1,#OUTGOING_BRAINROT_RARITY_OPTIONS),1,-1 do
 								if remaining<=0 or #desired>=6 then break end
 								remaining-=addRarity(OUTGOING_BRAINROT_RARITY_OPTIONS[lowerIndex],remaining,true)
 							end
+						elseif mode=="Best Available Brainrots" and u.RegularFallbackToBestAvailableBrainrots==true then
+							for rarityIndex=#OUTGOING_BRAINROT_RARITY_OPTIONS,1,-1 do
+								if remaining<=0 or #desired>=6 then break end
+								remaining-=addRarity(OUTGOING_BRAINROT_RARITY_OPTIONS[rarityIndex],remaining,false)
+							end
+						elseif mode=="Token Fallback" and u.RegularFallbackToTokens==true then
+							if u["RegularFallback"..request.SourceRarity.."OfferAllTokens"]==true then
+								forceAllTokens=true
+							else
+								tokens+=math.max(0,math.floor(tonumber(u["RegularFallbackTokens"..request.SourceRarity]) or 0))
+							end
+							remaining=0
 						end
 					end
 				end
 			end
+
 			local reactiveMatched=false
 			local chatRule=matchingRegularTradeChatOffer(u)
 			if chatRule then
@@ -20140,7 +20971,7 @@ if MINIGAME_MODE then
 			local u=autoServerHopState.Utility
 			if u.PauseScript==true or autoServerHopState.RuntimeServerHopPending == true then
 				releaseAutomatedReady()
-				rawset(_G,"__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID",nil)
+				rawset(_G,"__DROIDHUB_NORMAL_TRADE_AUTOMATION_GUID",nil)
 				lastGuid=nil; openingAppliedGuid=nil; table.clear(opponentItemCache)
 				task.wait(0.30); continue
 			end
@@ -20149,7 +20980,7 @@ if MINIGAME_MODE then
 				or regularOfferAutomationEnabled(u)
 			if not regularAutomationActive then
 				releaseAutomatedReady()
-				rawset(_G,"__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID",nil)
+				rawset(_G,"__DROIDHUB_NORMAL_TRADE_AUTOMATION_GUID",nil)
 				lastGuid=nil; openingAppliedGuid=nil; autoReadyGuid=nil
 				table.clear(opponentItemCache)
 				task.wait(0.75)
@@ -20191,11 +21022,11 @@ if MINIGAME_MODE then
 
 			local guid=isNormalTrade()
 			if not guid then
-				rawset(_G,"__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID",nil)
+				rawset(_G,"__DROIDHUB_NORMAL_TRADE_AUTOMATION_GUID",nil)
 				lastGuid=nil; openingAppliedGuid=nil; autoReadyGuid=nil; table.clear(opponentItemCache)
 				task.wait(0.30); continue
 			end
-			rawset(_G,"__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID",guid)
+			rawset(_G,"__DROIDHUB_NORMAL_TRADE_AUTOMATION_GUID",guid)
 			if tostring(guid)~=tostring(lastGuid) then
 				lastGuid=guid
 				openingAppliedGuid=nil
@@ -20737,7 +21568,7 @@ if MINIGAME_MODE then
         -- Simple Autofarm's Eternal fallback needs the six strongest outgoing
         -- brainrots regardless of rarity. Eternals are deliberately excluded.
         local function highestNonEternalOfferIdsAO(limit)
-            limit = math.clamp(math.floor(tonumber(limit) or 6), 1, 6)
+            limit = math.clamp(math.floor(tonumber(limit) or 6), 1, 100)
             local inv = inventoryAO()
             if not inv then return nil end
             local byRarity = {}
@@ -20802,6 +21633,25 @@ if MINIGAME_MODE then
                         if tradeable then
                             counts[itemRarity] = (counts[itemRarity] or 0) + 1
                         end
+                    end
+                end
+            end
+            return counts
+        end
+        local function fallbackFilteredRarityCountsAO()
+            local counts = {}
+            local inv = inventoryAO()
+            if not inv then return counts end
+            for _, item in pairs(inv) do
+                if type(item) == "table" and not item.locked and passesFallbackFiltersAO(item) then
+                    local itemRarity = rarityAO(item)
+                    if itemRarity and itemRarity ~= "Eternal" then
+                        local tradeable = itemRarity == "Paradox" or itemRarity == "Meta"
+                        if not tradeable then
+                            local okTradeable, result = pcall(ItemIsTradeableAO, item)
+                            tradeable = okTradeable and result == true
+                        end
+                        if tradeable then counts[itemRarity] = (counts[itemRarity] or 0) + 1 end
                     end
                 end
             end
@@ -20928,7 +21778,7 @@ if MINIGAME_MODE then
         end
         while screenGui.Parent do
             local utilityAO = autoServerHopState.Utility
-            if rawget(_G, "__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID") ~= nil then task.wait(0.15) continue end
+            if rawget(_G, "__DROIDHUB_NORMAL_TRADE_AUTOMATION_GUID") ~= nil then task.wait(0.15) continue end
             if utilityAO.PauseScript == true
                 or utilityAO.PauseMinigameFeatures == true
                 or autoServerHopState.RuntimeServerHopPending == true
@@ -20965,7 +21815,6 @@ if MINIGAME_MODE then
             local aggregateTargets = {}
             local aggregateFallbackTargets = {}
             local aggregateFallbackRequests = {}
-            local specificFallbackSourceRequests = {}
             local aggregateTokens = 0
             local aggregateSignature = {}
             local hasEnabledSource = false
@@ -20979,7 +21828,9 @@ if MINIGAME_MODE then
                 or utilityAO.FallbackToNextLowerRarityBrainrot == true
                 or utilityAO.FallbackToNextHigherRarityBrainrot == true
                 or utilityAO.FallbackToSpecificBrainrotItem == true
+                or utilityAO.FallbackToBestAvailableBrainrots == true
             local availableCounts = availableRarityCountsAO()
+            local filteredAvailableCounts = fallbackFilteredRarityCountsAO()
             local plannedInventoryUse = {}
             local primaryRequests = {}
             local sourceOccurrences = {}
@@ -20987,6 +21838,13 @@ if MINIGAME_MODE then
                 return math.max(
                     0,
                     math.floor(tonumber(availableCounts[rarity]) or 0)
+                        - math.floor(tonumber(plannedInventoryUse[rarity]) or 0)
+                )
+            end
+            local function filteredAvailableForRarityAO(rarity)
+                return math.max(
+                    0,
+                    math.floor(tonumber(filteredAvailableCounts[rarity]) or 0)
                         - math.floor(tonumber(plannedInventoryUse[rarity]) or 0)
                 )
             end
@@ -21181,6 +22039,12 @@ if MINIGAME_MODE then
                         )
                         if tokenUnit > 0 then
                             local brainrotUnits = math.floor(math.max(0, opponentTokens) / tokenUnit)
+                            if utilityAO.SimpleAutofarmEnabled == true and brainrotUnits > 0 then
+                                -- One obsolete Brainrot is enough to make a token-only wager
+                                -- actionable; never burn multiple progression items just because
+                                -- the opponent offers a large token stack.
+                                brainrotUnits = 1
+                            end
                             if brainrotUnits > 0 then
                                 openingTakeoverAO = true
                                 primaryRequests[#primaryRequests + 1] = {
@@ -21201,7 +22065,6 @@ if MINIGAME_MODE then
                 table.clear(primaryRequests)
                 table.clear(sourceOccurrences)
                 table.clear(plannedInventoryUse)
-                table.clear(specificFallbackSourceRequests)
                 fallbackRuleAuthoritative = false
                 tokenRuleAuthoritative = true
                 hasEnabledSource = true
@@ -21266,7 +22129,6 @@ if MINIGAME_MODE then
                 table.clear(primaryRequests)
                 table.clear(sourceOccurrences)
                 table.clear(plannedInventoryUse)
-                table.clear(specificFallbackSourceRequests)
                 table.clear(specificPrimaryIdsAO)
                 table.clear(specificPrimarySeenAO)
                 fallbackEnabled = false
@@ -21328,203 +22190,162 @@ if MINIGAME_MODE then
                     end
                 end
             end
-            -- First determine which fallback modes apply. Brainrot substitution is
-            -- planned below after exact-rarity reservations and specific fallback
-            -- slots are known, so it can preserve the requested total precisely.
-            if fallbackEnabled then
-                for _, occurrence in ipairs(sourceOccurrences) do
-                    if occurrence.NeedsFallback == true then
-                        if utilityAO.FallbackToTokens == true then
-                            if utilityAO["Fallback" .. tostring(occurrence.SourceRarity) .. "OfferAllTokens"] == true then
-                                forceAllTokensAO = true
-                            else
-                                local fallbackTokens = math.clamp(
-                                    math.floor(tonumber(utilityAO["FallbackTokens" .. occurrence.SourceRarity]) or 0),
-                                    0,
-                                    1000000
-                                )
-                                if utilityAO.SimpleAutofarmEnabled == true then
-                                    -- Replace the normal source token amount with the fallback
-                                    -- token amount instead of adding it twice.
-                                    aggregateTokens += fallbackTokens
-                                        - math.max(0, math.floor(tonumber(occurrence.ResponseTokens) or 0))
-                                else
-                                    aggregateTokens += fallbackTokens
-                                end
-                            end
-                        end
-                        if utilityAO.FallbackToSpecificBrainrotItem == true
-                            and #selectedSpecificFallbackIdsAO(occurrence.SourceRarity) > 0
-                        then
-                            specificFallbackSourceRequests[occurrence.SourceRarity] = true
-                        end
-                    end
-                end
-            end
+            -- Brainrot/token fallback substitution is planned below after exact-rarity
+            -- reservations and specific fallback slots are known.
             local reservedPrimarySlots = 0
             for _, amount in pairs(aggregateTargets) do
                 reservedPrimarySlots += math.max(0, math.floor(tonumber(amount) or 0))
             end
-            -- Specific fallback IDs reserve fallback slots first. Directional
-            -- rarity fallback (higher OR lower) can only use the remaining slots.
             local plannedSpecificFallbackIdsAO = {}
             local plannedSpecificFallbackSeenAO = {}
-            if fallbackEnabled and utilityAO.FallbackToSpecificBrainrotItem == true then
-                local specificCapacityAO = math.max(
-                    0,
-                    6 - reservedPrimarySlots - #specificPrimaryIdsAO
-                )
-                for _, sourceRarity in ipairs(BRAINROT_RARITY_OPTIONS) do
-                    if specificFallbackSourceRequests[sourceRarity] == true then
-                        for _, valid in ipairs(selectedSpecificFallbackIdsAO(sourceRarity)) do
-                            if #plannedSpecificFallbackIdsAO >= specificCapacityAO then break end
-                            if not specificPrimarySeenAO[valid]
-                                and not plannedSpecificFallbackSeenAO[valid]
-                            then
-                                plannedSpecificFallbackSeenAO[valid] = true
-                                plannedSpecificFallbackIdsAO[#plannedSpecificFallbackIdsAO + 1] = valid
-                            end
-                        end
-                    end
-                    if #plannedSpecificFallbackIdsAO >= specificCapacityAO then break end
-                end
-            end
-            local plannedSpecificFallbackCountAO = #plannedSpecificFallbackIdsAO
-            -- Reserve the actual inventory copies selected by specific fallback so
-            -- directional planning cannot count those same copies as available.
-            do
-                local inventory = inventoryAO()
-                if type(inventory) == "table" then
-                    for _, id in ipairs(plannedSpecificFallbackIdsAO) do
-                        local item = inventory[id]
-                            or inventory[tostring(id)]
-                            or (tonumber(id) and inventory[tonumber(id)] or nil)
-                        local rarity = rarityAO(item)
-                        if rarity then
-                            plannedInventoryUse[rarity] =
-                                (plannedInventoryUse[rarity] or 0) + 1
-                        end
-                    end
-                end
-            end
-            local fallbackSlotsLeft = math.max(
-                0,
-                6 - reservedPrimarySlots - #specificPrimaryIdsAO - plannedSpecificFallbackCountAO
+            local fallbackSlotsLeft = math.max(0, 6 - reservedPrimarySlots - #specificPrimaryIdsAO)
+            local fallbackOrderAO = resolveFallbackPriority(
+                utilityAO.FallbackCustomPriority == true,
+                {
+                    utilityAO.FallbackPriority1,
+                    utilityAO.FallbackPriority2,
+                    utilityAO.FallbackPriority3,
+                    utilityAO.FallbackPriority4,
+                    utilityAO.FallbackPriority5,
+                }
             )
-            local useLowerFallbackAO = utilityAO.FallbackToNextLowerRarityBrainrot == true
-            local useHigherFallbackAO = utilityAO.FallbackToNextHigherRarityBrainrot == true
-            -- Malformed/legacy state can never make both directions active at once.
-            if useLowerFallbackAO and useHigherFallbackAO then
-                useHigherFallbackAO = false
+            local function reserveDirectFallbackIdAO(id)
+                if fallbackSlotsLeft <= 0 then return false end
+                local valid = validOfferItemIdAO(id)
+                if not valid or specificPrimarySeenAO[valid] or plannedSpecificFallbackSeenAO[valid] then return false end
+                local inv = inventoryAO()
+                local item = inv and (inv[valid] or (tonumber(valid) and inv[tonumber(valid)] or nil)) or nil
+                local itemRarity = rarityAO(item)
+                if not itemRarity or availableForRarityAO(itemRarity) <= 0 then return false end
+                plannedSpecificFallbackSeenAO[valid] = true
+                plannedSpecificFallbackIdsAO[#plannedSpecificFallbackIdsAO + 1] = valid
+                plannedInventoryUse[itemRarity] = (plannedInventoryUse[itemRarity] or 0) + 1
+                fallbackSlotsLeft -= 1
+                return true
             end
-            if fallbackEnabled
-                and (useLowerFallbackAO or useHigherFallbackAO)
-                and fallbackSlotsLeft > 0
-            then
-                local fallbackTotal = math.clamp(
-                    math.floor(tonumber(
-                        useHigherFallbackAO
-                            and utilityAO.FallbackNextHigherRarityAmount
-                            or utilityAO.FallbackNextLowerRarityAmount
-                    ) or 1),
-                    1,
-                    6
-                )
-                local fallbackPlanUseAO = {}
+            local function reserveDirectionalAO(targetIndex, higher, wanted)
+                local remaining = math.max(0, math.floor(tonumber(wanted) or 0))
+                if remaining <= 0 or fallbackSlotsLeft <= 0 or not targetIndex then return 0 end
+                local reservedTotal = 0
+                if higher then
+                    for rarityIndex = targetIndex + 1, #OUTGOING_BRAINROT_RARITY_OPTIONS do
+                        if remaining <= 0 or fallbackSlotsLeft <= 0 then break end
+                        local fallbackRarity = OUTGOING_BRAINROT_RARITY_OPTIONS[rarityIndex]
+                        local take = math.min(remaining, fallbackSlotsLeft, filteredAvailableForRarityAO(fallbackRarity))
+                        if take > 0 then
+                            plannedInventoryUse[fallbackRarity] = (plannedInventoryUse[fallbackRarity] or 0) + take
+                            aggregateFallbackRequests[fallbackRarity] = (aggregateFallbackRequests[fallbackRarity] or 0) + take
+                            remaining -= take
+                            fallbackSlotsLeft -= take
+                            reservedTotal += take
+                        end
+                    end
+                else
+                    for rarityIndex = math.min(targetIndex - 1, #OUTGOING_BRAINROT_RARITY_OPTIONS), 1, -1 do
+                        if remaining <= 0 or fallbackSlotsLeft <= 0 then break end
+                        local fallbackRarity = OUTGOING_BRAINROT_RARITY_OPTIONS[rarityIndex]
+                        local take = math.min(remaining, fallbackSlotsLeft, filteredAvailableForRarityAO(fallbackRarity))
+                        if take > 0 then
+                            plannedInventoryUse[fallbackRarity] = (plannedInventoryUse[fallbackRarity] or 0) + take
+                            aggregateFallbackRequests[fallbackRarity] = (aggregateFallbackRequests[fallbackRarity] or 0) + take
+                            remaining -= take
+                            fallbackSlotsLeft -= take
+                            reservedTotal += take
+                        end
+                    end
+                end
+                return reservedTotal
+            end
+            if fallbackEnabled then
                 for _, occurrence in ipairs(sourceOccurrences) do
-                    if occurrence.NeedsFallback == true and fallbackSlotsLeft > 0 then
+                    if occurrence.NeedsFallback == true then
+                        local specificCandidates = selectedSpecificFallbackIdsAO(occurrence.SourceRarity)
+                        local goal = 1
+                        if utilityAO.FallbackToNextHigherRarityBrainrot == true then
+                            goal = math.max(goal, math.clamp(math.floor(tonumber(utilityAO.FallbackNextHigherRarityAmount) or 1), 1, 6))
+                        end
+                        if utilityAO.FallbackToNextLowerRarityBrainrot == true then
+                            goal = math.max(goal, math.clamp(math.floor(tonumber(utilityAO.FallbackNextLowerRarityAmount) or 1), 1, 6))
+                        end
+                        if utilityAO.FallbackToBestAvailableBrainrots == true then
+                            goal = math.max(goal, math.clamp(math.floor(tonumber(utilityAO.FallbackBestAvailableBrainrotAmount) or 6), 1, 6))
+                        end
+                        if utilityAO.FallbackToSpecificBrainrotItem == true then goal = math.max(goal, math.min(6, #specificCandidates)) end
                         for missingRarity in pairs(occurrence.MissingTargets or {}) do
-                            if fallbackSlotsLeft <= 0 then break end
                             local exactReserved = type(occurrence.ExactReserved) == "table"
-                                and math.max(0, math.floor(tonumber(occurrence.ExactReserved[missingRarity]) or 0))
-                                or 0
-                            -- Exact copies count toward the desired total; only the
-                            -- shortfall is cascaded in the selected direction.
-                            local remaining = math.max(0, fallbackTotal - exactReserved)
-                            local targetIndex = table.find(
-                                OUTGOING_BRAINROT_RARITY_OPTIONS,
-                                missingRarity
-                            )
+                                and math.max(0, math.floor(tonumber(occurrence.ExactReserved[missingRarity]) or 0)) or 0
+                            local remaining = math.max(0, goal - exactReserved)
+                            local targetIndex = table.find(OUTGOING_BRAINROT_RARITY_OPTIONS, missingRarity)
                             if not targetIndex then
                                 local fullIndex = table.find(BRAINROT_RARITY_OPTIONS, missingRarity)
-                                if fullIndex then
-                                    targetIndex = math.min(
-                                        fullIndex,
-                                        #OUTGOING_BRAINROT_RARITY_OPTIONS + 1
-                                    )
-                                end
+                                if fullIndex then targetIndex = math.min(fullIndex, #OUTGOING_BRAINROT_RARITY_OPTIONS + 1) end
                             end
-                            if targetIndex then
-                                if useHigherFallbackAO then
-                                    for higherIndex = targetIndex + 1,
-                                        #OUTGOING_BRAINROT_RARITY_OPTIONS
-                                    do
+                            for _, mode in ipairs(fallbackOrderAO) do
+                                if remaining <= 0 then break end
+                                if mode == "Specific Items" and utilityAO.FallbackToSpecificBrainrotItem == true then
+                                    local before = fallbackSlotsLeft
+                                    for _, id in ipairs(specificCandidates) do
                                         if remaining <= 0 or fallbackSlotsLeft <= 0 then break end
-                                        local higherRarity = OUTGOING_BRAINROT_RARITY_OPTIONS[higherIndex]
-                                        local alreadyPlanned = fallbackPlanUseAO[higherRarity] or 0
-                                        local available = math.max(
+                                        if reserveDirectFallbackIdAO(id) then remaining -= 1 end
+                                    end
+                                elseif mode == "Next Higher Rarity" and utilityAO.FallbackToNextHigherRarityBrainrot == true then
+                                    local added = reserveDirectionalAO(targetIndex, true, remaining)
+                                    remaining -= added
+                                elseif mode == "Next Lower Rarity" and utilityAO.FallbackToNextLowerRarityBrainrot == true then
+                                    local added = reserveDirectionalAO(targetIndex, false, remaining)
+                                    remaining -= added
+                                elseif mode == "Best Available Brainrots" and utilityAO.FallbackToBestAvailableBrainrots == true then
+                                    local strongest = highestNonEternalOfferIdsAO(6) or {}
+                                    for _, id in ipairs(strongest) do
+                                        if remaining <= 0 or fallbackSlotsLeft <= 0 then break end
+                                        if reserveDirectFallbackIdAO(id) then remaining -= 1 end
+                                    end
+                                elseif mode == "Token Fallback" and utilityAO.FallbackToTokens == true then
+                                    if utilityAO["Fallback" .. tostring(occurrence.SourceRarity) .. "OfferAllTokens"] == true then
+                                        forceAllTokensAO = true
+                                    else
+                                        local fallbackTokens = math.clamp(
+                                            math.floor(tonumber(utilityAO["FallbackTokens" .. occurrence.SourceRarity]) or 0),
                                             0,
-                                            availableForRarityAO(higherRarity) - alreadyPlanned
+                                            1000000
                                         )
-                                        local take = math.min(remaining, available, fallbackSlotsLeft)
-                                        if take > 0 then
-                                            fallbackPlanUseAO[higherRarity] = alreadyPlanned + take
-                                            aggregateFallbackRequests[higherRarity] =
-                                                (aggregateFallbackRequests[higherRarity] or 0) + take
-                                            remaining -= take
-                                            fallbackSlotsLeft -= take
+                                        if utilityAO.SimpleAutofarmEnabled == true then
+                                            aggregateTokens += fallbackTokens
+                                                - math.max(0, math.floor(tonumber(occurrence.ResponseTokens) or 0))
+                                        else
+                                            aggregateTokens += fallbackTokens
                                         end
                                     end
-                                else
-                                    for lowerIndex = math.min(
-                                        targetIndex - 1,
-                                        #OUTGOING_BRAINROT_RARITY_OPTIONS
-                                    ), 1, -1 do
-                                        if remaining <= 0 or fallbackSlotsLeft <= 0 then break end
-                                        local lowerRarity = OUTGOING_BRAINROT_RARITY_OPTIONS[lowerIndex]
-                                        local alreadyPlanned = fallbackPlanUseAO[lowerRarity] or 0
-                                        local available = math.max(
-                                            0,
-                                            availableForRarityAO(lowerRarity) - alreadyPlanned
-                                        )
-                                        local take = math.min(remaining, available, fallbackSlotsLeft)
-                                        if take > 0 then
-                                            fallbackPlanUseAO[lowerRarity] = alreadyPlanned + take
-                                            aggregateFallbackRequests[lowerRarity] =
-                                                (aggregateFallbackRequests[lowerRarity] or 0) + take
-                                            remaining -= take
-                                            fallbackSlotsLeft -= take
-                                        end
-                                    end
+                                    -- Token fallback satisfies this missing response; lower-priority
+                                    -- Brainrot strategies are not added after a successful token fallback.
+                                    remaining = 0
                                 end
                             end
                         end
                     end
                 end
-                local commitSlotsLeft = math.max(
-                    0,
-                    6 - reservedPrimarySlots - #specificPrimaryIdsAO - plannedSpecificFallbackCountAO
-                )
-                for rarityIndex = #OUTGOING_BRAINROT_RARITY_OPTIONS, 1, -1 do
-                    local fallbackRarity = OUTGOING_BRAINROT_RARITY_OPTIONS[rarityIndex]
-                    local wantedFallback = math.max(
-                        0,
-                        math.floor(tonumber(aggregateFallbackRequests[fallbackRarity]) or 0)
-                    )
-                    if wantedFallback > 0 and commitSlotsLeft > 0 then
-                        local reserved = reserveFallbackAO(
-                            fallbackRarity,
-                            wantedFallback,
-                            commitSlotsLeft
-                        )
-                        commitSlotsLeft -= reserved
-                    end
-                    if commitSlotsLeft <= 0 then break end
+            end
+            -- Directional fallbacks are stored as rarity counts. Commit those counts
+            -- after direct-ID fallbacks have reserved their inventory copies.
+            for rarityIndex = #OUTGOING_BRAINROT_RARITY_OPTIONS, 1, -1 do
+                local fallbackRarity = OUTGOING_BRAINROT_RARITY_OPTIONS[rarityIndex]
+                local wantedFallback = math.max(0, math.floor(tonumber(aggregateFallbackRequests[fallbackRarity]) or 0))
+                if wantedFallback > 0 then
+                    aggregateFallbackTargets[fallbackRarity] = (aggregateFallbackTargets[fallbackRarity] or 0) + wantedFallback
                 end
             end
             if forceAllTokensAO then
                 aggregateTokens = tokenBalanceAO()
                 tokenRuleAuthoritative = true
+            end
+            if utilityAO.SimpleAutofarmEnabled == true then
+                -- Never let a token rule request more than the farm can actually offer.
+                -- This lets a zero-token account accept a qualifying Brainrot wager and
+                -- bootstrap tokens instead of stalling on an impossible currency match.
+                aggregateTokens = math.min(
+                    math.max(0, math.floor(tonumber(aggregateTokens) or 0)),
+                    tokenBalanceAO()
+                )
             end
             if not hasEnabledSource and not autoOfferOwnsAO then
                 lastAppliedSignature = nil
@@ -21657,6 +22478,30 @@ if MINIGAME_MODE then
                         slotIndex += 1
                     end
                     if slotIndex > 6 then break end
+                end
+            end
+            -- Final safety net for Best Available: planning is rarity-based, while
+            -- exact-rarity selection happens later by item ID. If those two stages
+            -- collide on the same inventory copy, refill from the strongest remaining
+            -- tradeable non-Eternal Brainrots so a usable fallback is never lost.
+            if fallbackRuleAuthoritative
+                and utilityAO.FallbackToBestAvailableBrainrots == true
+                and slotIndex <= 6
+            then
+                local bestGoal = math.clamp(
+                    math.floor(tonumber(utilityAO.FallbackBestAvailableBrainrotAmount) or 6),
+                    1,
+                    6
+                )
+                if (slotIndex - 1) < bestGoal then
+                    for _, itemId in ipairs(highestNonEternalOfferIdsAO(100) or {}) do
+                        if slotIndex > 6 or (slotIndex - 1) >= bestGoal then break end
+                        if not usedIds[itemId] then
+                            usedIds[itemId] = true
+                            desiredIds[slotIndex] = itemId
+                            slotIndex += 1
+                        end
+                    end
                 end
             end
             local tokenAmount = math.min(
@@ -21957,7 +22802,7 @@ if MINIGAME_MODE then
 		end
 		while screenGui.Parent do
 			local utilityAAC = autoServerHopState.Utility
-			if rawget(_G, "__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID") ~= nil then task.wait(0.15) continue end
+			if rawget(_G, "__DROIDHUB_NORMAL_TRADE_AUTOMATION_GUID") ~= nil then task.wait(0.15) continue end
 			if utilityAAC.PauseScript == true
 			or utilityAAC.PauseMinigameFeatures == true
 				or autoServerHopState.RuntimeServerHopPending == true
@@ -22237,6 +23082,8 @@ if MINIGAME_MODE then
 			local bestRank
 			local bestRideableId
 			local bestRideableName
+			local biggestRideableId
+			local biggestRideableScale = -math.huge
 			for _, id in ipairs(sortedIdsAE(inventory)) do
 				local item = inventory[id] or inventory[tostring(id)]
 				if type(item) == "table" and itemTypeAE(item) == "Brainrot" then
@@ -22249,17 +23096,23 @@ if MINIGAME_MODE then
 					-- sortedIdsAE is already strongest-first, so the first
 					-- rideable item is the best mountable brainrot regardless
 					-- of how far below the absolute best rarity it sits.
-					if not bestRideableId then
-						local itemName = item.name or (item.sub and item.sub.name)
-						local rideable = false
-						if type(itemName) == "string" and itemName ~= "" then
-							pcall(function()
-								rideable = RideableAE.isRideable(itemName) == true
-							end)
-						end
-						if rideable then
+					local itemName = item.name or (item.sub and item.sub.name)
+					local rideable = false
+					if type(itemName) == "string" and itemName ~= "" then
+						pcall(function()
+							rideable = RideableAE.isRideable(itemName) == true
+						end)
+					end
+					if rideable then
+						if not bestRideableId then
 							bestRideableId = tostring(id)
 							bestRideableName = itemName
+						end
+						local sub = type(item.sub) == "table" and item.sub or nil
+						local scale = tonumber(item.scale or item.Scale or (sub and (sub.scale or sub.Scale))) or 1
+						if scale > biggestRideableScale then
+							biggestRideableScale = scale
+							biggestRideableId = tostring(id)
 						end
 					end
 				end
@@ -22301,7 +23154,9 @@ if MINIGAME_MODE then
 			end
 			local mountId, mountItem, mountName
 			if modeMount or modeBoth then
-				if useSpecific then
+				if state.MountEquipBiggestBrainrot == true then
+					mountId, mountItem = validBrainrotIdAE(biggestRideableId)
+				elseif useSpecific then
 					mountId, mountItem = validBrainrotIdAE(state.MountSpecificBrainrotId)
 					-- Keep the configured selection and retry after transient replication/state changes.
 				elseif useBest then
@@ -22357,7 +23212,7 @@ if MINIGAME_MODE then
 				((modeHold or modeBoth) and state.HoldSpecificBrainrotId == nil)
 				or ((modeMount or modeBoth) and state.MountSpecificBrainrotId == nil)
 			) then
-				local refreshSettings = rawget(_G, "__TUFFHUB_REFRESH_DYNAMIC_DROPDOWNS")
+				local refreshSettings = rawget(_G, "__DROIDHUB_REFRESH_DYNAMIC_DROPDOWNS")
 				if type(refreshSettings) == "function" then task.defer(refreshSettings) end
 			end
 		end
@@ -22491,9 +23346,7 @@ if MINIGAME_MODE then
 			local explicit = item.rarity
 				or item.Rarity
 				or (item.sub and (item.sub.rarity or item.sub.Rarity))
-			if explicit == "Eternal" then
-				return autoServerHopState.Utility.SimpleAutofarmEnabled == true
-			end
+			if explicit == "Eternal" then return false end
 			if explicit == "Paradox" then return true end
 			local rarity
 			local name = item.name or (item.sub and item.sub.name)
@@ -22503,9 +23356,7 @@ if MINIGAME_MODE then
 					pcall(function() rarity = EconomyMathAO2.GetBrainrotRarity(name) end)
 				end
 			end
-			if rarity == "Eternal" then
-				return autoServerHopState.Utility.SimpleAutofarmEnabled == true
-			end
+			if rarity == "Eternal" then return false end
 			if rarity == "Paradox"
 				or (type(name) == "string" and protectedDisplayNamesAO2[name] == true)
 			then
@@ -22562,7 +23413,7 @@ if MINIGAME_MODE then
 					used[tostring(selectedId)] = true
 				elseif selectedId ~= nil then
 					state["OpeningOfferBrainrot" .. tostring(slotIndex)] = nil
-					local refreshSettings = rawget(_G, "__TUFFHUB_REFRESH_DYNAMIC_DROPDOWNS")
+					local refreshSettings = rawget(_G, "__DROIDHUB_REFRESH_DYNAMIC_DROPDOWNS")
 					if type(refreshSettings) == "function" then
 						task.defer(refreshSettings)
 					end
@@ -22688,7 +23539,7 @@ if MINIGAME_MODE then
 				and autoServerHopState.RuntimeServerHopPending ~= true
 				and (showItems or showTokens)
 			task.wait(openingEnabled and 0.10 or 0.75)
-			if rawget(_G, "__TUFFHUB_NORMAL_TRADE_AUTOMATION_GUID") ~= nil then continue end
+			if rawget(_G, "__DROIDHUB_NORMAL_TRADE_AUTOMATION_GUID") ~= nil then continue end
 			if not openingEnabled then
 				appliedSignatureAO2 = nil
 				scheduledSignatureAO2 = nil
@@ -22805,6 +23656,7 @@ if MINIGAME_MODE then
 			["Knockout"]="Knockout",
 			["Football Draft"]="FootballDraft",
 			["Hot Potato"]="HotPotato",
+			["Bat Battle"]="BatBattle",
 		}
 		local gameLabelVC = {}
 		for label, id in pairs(gameMapVC) do gameLabelVC[id] = label end
@@ -22893,6 +23745,18 @@ if MINIGAME_MODE then
 				and tonumber(voting.voteRound) or tonumber(voteRoundSeenVC) or 1
 			local state = autoServerHopState.Utility
 			local primary = gameMapVC[state.GameToChoose] or "PopcornBurst"
+			if state.AdaptiveGameSelection == true then
+				local allowed = {primary}
+				local enabled = type(state.FallbackGameChoices) == "table" and state.FallbackGameChoices or {}
+				for label, gameId in pairs(gameMapVC) do
+					if enabled[label] == true then allowed[#allowed + 1] = gameId end
+				end
+				local chooser = autoServerHopState.BestAdaptiveGame
+				if type(chooser) == "function" then
+					local ok, choice = pcall(chooser, allowed, primary)
+					if ok and gameLabelVC[choice] then primary = choice end
+				end
+			end
 			local function submit(choice)
 				if not sendGameVC(generation, selectionRound, choice) then return end
 				task.spawn(function()
@@ -22928,10 +23792,12 @@ if MINIGAME_MODE then
 							and liveVoting.opponentVote.gameId or nil
 						local label = gameLabelVC[opponentChoice]
 						local choicesToMatch = state.FallbackGameChoices
-						if label
-							and type(choicesToMatch) == "table"
-							and choicesToMatch[label] == true
-						then
+						local acceptsChoice = label and (
+							state.SimpleAutofarmEnabled == true
+							or opponentChoice == (gameMapVC[state.GameToChoose] or "PopcornBurst")
+							or (type(choicesToMatch) == "table" and choicesToMatch[label] == true)
+						)
+						if acceptsChoice then
 							submit(opponentChoice)
 							return
 						end
@@ -22944,14 +23810,12 @@ if MINIGAME_MODE then
 					and liveVoting.opponentVote.gameId or nil
 				local label = gameLabelVC[opponentChoice]
 				local choicesToMatch = state.FallbackGameChoices
-				submit(
-					state.MatchOpponentGame == true
-						and label
-						and type(choicesToMatch) == "table"
-						and choicesToMatch[label] == true
-						and opponentChoice
-						or primary
+				local acceptsOpponent = state.MatchOpponentGame == true and label and (
+					state.SimpleAutofarmEnabled == true
+					or opponentChoice == (gameMapVC[state.GameToChoose] or "PopcornBurst")
+					or (type(choicesToMatch) == "table" and choicesToMatch[label] == true)
 				)
+				submit(acceptsOpponent and opponentChoice or primary)
 			end)
 		end
 		local function startRoundsVoteVC()
@@ -22989,10 +23853,13 @@ if MINIGAME_MODE then
 						local opponentChoice = type(liveVoting.opponentVote) == "table"
 							and tonumber(liveVoting.opponentVote.bestOf) or nil
 						local choicesToMatch = state.FallbackRoundChoices
-						if opponentChoice
-							and type(choicesToMatch) == "table"
-							and choicesToMatch[tostring(opponentChoice)] == true
-						then
+						local validRound = opponentChoice == 1 or opponentChoice == 3 or opponentChoice == 5
+						local acceptsChoice = validRound and (
+							state.SimpleAutofarmEnabled == true
+							or opponentChoice == primary
+							or (type(choicesToMatch) == "table" and choicesToMatch[tostring(opponentChoice)] == true)
+						)
+						if acceptsChoice then
 							submit(opponentChoice)
 							return
 						end
@@ -23004,14 +23871,13 @@ if MINIGAME_MODE then
 				local opponentChoice = type(liveVoting.opponentVote) == "table"
 					and tonumber(liveVoting.opponentVote.bestOf) or nil
 				local choicesToMatch = state.FallbackRoundChoices
-				submit(
-					state.MatchOpponentRounds == true
-						and opponentChoice
-						and type(choicesToMatch) == "table"
-						and choicesToMatch[tostring(opponentChoice)] == true
-						and opponentChoice
-						or primary
+				local validRound = opponentChoice == 1 or opponentChoice == 3 or opponentChoice == 5
+				local acceptsOpponent = state.MatchOpponentRounds == true and validRound and (
+					state.SimpleAutofarmEnabled == true
+					or opponentChoice == primary
+					or (type(choicesToMatch) == "table" and choicesToMatch[tostring(opponentChoice)] == true)
 				)
+				submit(acceptsOpponent and opponentChoice or primary)
 			end)
 		end
 		while screenGui.Parent do
@@ -23104,8 +23970,10 @@ if MINIGAME_MODE then
 		local lastWagerLG
 		local queuedResultLG
 		local wasPlayingLG = false
+		local playingStartedAtLG
+		local playingGameIdLG
 		local sharedLogContextLG = {}
-		rawset(_G, "__TUFFHUB_MINIGAME_LOG_CONTEXT", sharedLogContextLG)
+		rawset(_G, "__DROIDHUB_MINIGAME_LOG_CONTEXT", sharedLogContextLG)
 		local namesLG = {
 			PopcornBurst="Popcorn Burst",
 			ConnectFour="Connect Four",
@@ -23115,6 +23983,7 @@ if MINIGAME_MODE then
 			Knockout="Knockout",
 			Battleship="Battleship",
 			HotPotato="Hot Potato",
+			BatBattle="Bat Battle",
 		}
 		local configuredRarityLG = {}
 		if type(BrainrotsConfigLG) == "table" then
@@ -23203,6 +24072,15 @@ if MINIGAME_MODE then
 			print(string.rep("\\", 10))
 			return true
 		end
+		sharedLogContextLG.RecordAdaptiveLoss = function(gameIdOverride)
+			local gameId = type(gameIdOverride)=="string" and gameIdOverride~="" and gameIdOverride or lastGameLG
+			if not playingStartedAtLG or playingGameIdLG ~= gameId then return false end
+			local recorder = autoServerHopState.RecordAdaptiveGameResult
+			local duration = os.clock() - playingStartedAtLG
+			playingStartedAtLG = nil
+			playingGameIdLG = nil
+			return type(recorder)=="function" and pcall(recorder, gameId, false, duration) or false
+		end
 		local function printResultLG(result)
 			if type(result) ~= "table" then return end
 			local winner = tonumber(result.winnerIndex)
@@ -23213,11 +24091,19 @@ if MINIGAME_MODE then
 				.. ":" .. tostring(result.round or result.roundIndex or result.bestOf or "")
 			if identity == lastPrintedLG then return end
 			lastPrintedLG = identity
+			local won = winner == 1
+			if playingStartedAtLG and playingGameIdLG == lastGameLG then
+				local recorder = autoServerHopState.RecordAdaptiveGameResult
+				if type(recorder) == "function" then
+					pcall(recorder, lastGameLG, won, os.clock() - playingStartedAtLG)
+				end
+				playingStartedAtLG = nil
+				playingGameIdLG = nil
+			end
 			if autoServerHopState.Utility.PauseScript ~= true
 				and autoServerHopState.Utility.PauseMinigameFeatures ~= true
 				and autoServerHopState.Utility.PrintWinsLossesToTerminal == true
 			then
-				local won = winner == 1
 				sharedLogContextLG.PrintEvent(won and "WIN" or "LOSS", won, lastGameLG, lastOpponentUserLG)
 			end
 		end
@@ -23249,6 +24135,8 @@ if MINIGAME_MODE then
 				and gameId ~= ""
 			if playingNow and not wasPlayingLG then
 				lastPrintedLG = nil
+				playingStartedAtLG = os.clock()
+				playingGameIdLG = gameId
 			end
 			wasPlayingLG = playingNow
 			if type(gameId) == "string" and gameId ~= "" then
@@ -24196,8 +25084,8 @@ end
 if MINIGAME_MODE then
 task.spawn(function()
 while screenGui.Parent do
-    local flags = rawget(_G, "__TUFFHUB_MINIGAME_AUTOPLAY")
-    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    local flags = rawget(_G, "__DROIDHUB_MINIGAME_AUTOPLAY")
+    local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
     local enabled = false
     if type(utility) == "table"
         and utility.PauseScript ~= true
@@ -24241,10 +25129,10 @@ if not (ClientGlobals and Remotes) then return end
 local ActiveMinigame = ClientGlobals.ActiveMinigame
 local MinigameGameAction = Remotes.MinigameGameAction
 local LocalPlayer = Players.LocalPlayer
-local MINIGAME_AUTOPLAY_KEY = "__TUFFHUB_MINIGAME_AUTOPLAY"
+local MINIGAME_AUTOPLAY_KEY = "__DROIDHUB_MINIGAME_AUTOPLAY"
 local function minigameAutoplayEnabled(id)
     local flags = rawget(_G, MINIGAME_AUTOPLAY_KEY)
-    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
     if type(utility) ~= "table"
         or utility.PauseScript == true
         or utility.PauseMinigameFeatures == true
@@ -24349,7 +25237,7 @@ controller.MoveDelaySeconds = function(id)
     if id == "PopcornBurst" then
         return 0
     end
-    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
     if type(utility) ~= "table" or type(id) ~= "string" then
         return 0
     end
@@ -24463,7 +25351,7 @@ local function fireAction(action, ...)
             end
         end
     end
-    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
     if type(utility) ~= "table"
         or utility.PauseScript == true
         or utility.PauseMinigameFeatures == true
@@ -24478,6 +25366,464 @@ end
 local function randomRange(rng, a, b)
     return a + (b - a) * rng:NextNumber()
 end
+
+-- Bat Battle ---------------------------------------------------------------
+-- Bat Battle Autoplay is intentionally focused on three jobs only:
+--   1) pursue the opponent continuously,
+--   2) keep the local character on safe arena geometry, and
+--   3) activate/contact the equipped Bat every simulation frame with no added delay.
+-- There is no separate Anti Knockback feature or knockback-suppression hook.
+do
+    local BAT_GAME_ID = "BatBattle"
+    local batState = {
+        safeCFrame = nil,
+        safeArena = nil,
+        safeArenaCenter = nil,
+        safeArenaRadius = nil,
+        movementActive = false,
+        lastRoot = nil,
+        movementConnection = nil,
+        hitConnection = nil,
+    }
+
+    local function batPlayerFromIdentity(value, seen, depth)
+        if depth <= 0 then return nil end
+        if typeof(value) == "Instance" then
+            if value:IsA("Player") and value ~= LocalPlayer then return value end
+            if value:IsA("Model") then
+                local player = Players:GetPlayerFromCharacter(value)
+                return player ~= LocalPlayer and player or nil
+            end
+            return nil
+        end
+        if type(value) == "number" then
+            local player = Players:GetPlayerByUserId(math.floor(value))
+            return player ~= LocalPlayer and player or nil
+        end
+        if type(value) == "string" then
+            local numericId = tonumber(value)
+            if numericId then
+                local player = Players:GetPlayerByUserId(math.floor(numericId))
+                if player and player ~= LocalPlayer then return player end
+            end
+            local player = Players:FindFirstChild(value)
+            return player and player ~= LocalPlayer and player or nil
+        end
+        if type(value) ~= "table" then return nil end
+        seen = seen or {}
+        if seen[value] then return nil end
+        seen[value] = true
+        for _, key in ipairs({
+            "opponent", "opponentPlayer", "opponentUserId", "opponentId",
+            "player", "Player", "userId", "UserId", "playerId", "PlayerId",
+            "username", "Username", "name", "Name",
+        }) do
+            local child = rawget(value, key)
+            if child ~= nil then
+                local player = batPlayerFromIdentity(child, seen, depth - 1)
+                if player then return player end
+            end
+        end
+        for _, child in pairs(value) do
+            local player = batPlayerFromIdentity(child, seen, depth - 1)
+            if player then return player end
+        end
+        return nil
+    end
+
+    local function batOpponent()
+        local opponent = batPlayerFromIdentity(
+            tryIndex({"session", "private", "opponent"}), nil, 4
+        ) or batPlayerFromIdentity(
+            tryIndex({"session", "private"}), nil, 3
+        )
+        if opponent then return opponent end
+
+        local candidate
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player:GetAttribute("InArena") == true then
+                local character = player.Character
+                local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+                local root = character and character:FindFirstChild("HumanoidRootPart")
+                if humanoid and humanoid.Health > 0 and root then
+                    if candidate then return nil end
+                    candidate = player
+                end
+            end
+        end
+        return candidate
+    end
+
+    local function isBatTool(tool)
+        if not (tool and tool:IsA("Tool")) then return false end
+        local gearType = tostring(tool:GetAttribute("GearType") or "")
+        local displayName = tostring(tool:GetAttribute("DisplayName") or "")
+        local tooltip = tostring(tool.ToolTip or "")
+        local name = tostring(tool.Name or "")
+        return string.lower(gearType) == "bat"
+            or string.find(string.lower(displayName), "bat", 1, true) ~= nil
+            or string.find(string.lower(tooltip), "bat", 1, true) ~= nil
+            or string.find(string.lower(name), "bat", 1, true) ~= nil
+    end
+
+    local function equippedBat(character)
+        for _, child in ipairs(character and character:GetChildren() or {}) do
+            if isBatTool(child) then return child end
+        end
+        local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if backpack and humanoid then
+            for _, child in ipairs(backpack:GetChildren()) do
+                if isBatTool(child) then
+                    pcall(humanoid.EquipTool, humanoid, child)
+                    if child.Parent == character then return child end
+                end
+            end
+        end
+        return nil
+    end
+
+    local function batHandle(tool)
+        local handle = tool and tool:FindFirstChild("Handle", true)
+        if handle and handle:IsA("BasePart") then return handle end
+        for _, descendant in ipairs(tool and tool:GetDescendants() or {}) do
+            if descendant:IsA("BasePart") and string.lower(descendant.Name) ~= "hitbox" then
+                return descendant
+            end
+        end
+        return nil
+    end
+
+    local batTouch = envFunction("firetouchinterest")
+    local function firePartContacts(sourcePart, opponentCharacter)
+        if type(batTouch) ~= "function" then
+            batTouch = envFunction("firetouchinterest")
+        end
+        if type(batTouch) ~= "function"
+            or not sourcePart
+            or not sourcePart:IsA("BasePart")
+            or not opponentCharacter
+        then
+            return false
+        end
+        local fired = false
+        for _, name in ipairs({
+            "HumanoidRootPart", "UpperTorso", "Torso", "LowerTorso", "Head",
+            "LeftUpperLeg", "RightUpperLeg", "LeftUpperArm", "RightUpperArm",
+        }) do
+            local part = opponentCharacter:FindFirstChild(name)
+            if part and part:IsA("BasePart") then
+                local okBegin = pcall(batTouch, sourcePart, part, 0)
+                pcall(batTouch, sourcePart, part, 1)
+                fired = fired or okBegin
+            end
+        end
+        return fired
+    end
+
+    local function spamBatContacts(tool, opponentCharacter)
+        if not tool or not opponentCharacter then return end
+        local hitbox = tool:FindFirstChild("Hitbox", true)
+        local handle = batHandle(tool)
+        if hitbox and hitbox:IsA("BasePart") then
+            firePartContacts(hitbox, opponentCharacter)
+            firePartContacts(hitbox, opponentCharacter)
+            firePartContacts(hitbox, opponentCharacter)
+        end
+        if handle and handle ~= hitbox then
+            firePartContacts(handle, opponentCharacter)
+            firePartContacts(handle, opponentCharacter)
+        end
+    end
+
+    local function batArenaFor(root, character)
+        local cached = batState.safeArena
+        if cached and cached.Parent then
+            local center = cached:FindFirstChild("Center")
+            local radius = tonumber(batState.safeArenaRadius)
+            if center and center:IsA("BasePart") and radius and radius > 0 then
+                return cached, center.Position, radius
+            end
+        end
+
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = character and {character} or {}
+        params.IgnoreWater = true
+        local result = workspace:Raycast(
+            root.Position + Vector3.new(0, 6, 0),
+            Vector3.new(0, -120, 0),
+            params
+        )
+        local node = result and result.Instance or nil
+        for _ = 1, 18 do
+            if not node or node == workspace then break end
+            if node:IsA("Model") and node:FindFirstChild("Center") and node:FindFirstChild("Spawns") then
+                local center = node:FindFirstChild("Center")
+                local okSize, size = pcall(node.GetExtentsSize, node)
+                if center and center:IsA("BasePart") and okSize and typeof(size) == "Vector3" then
+                    local radius = math.max(size.X, size.Y, size.Z)
+                    batState.safeArena = node
+                    batState.safeArenaCenter = center.Position
+                    batState.safeArenaRadius = radius
+                    return node, center.Position, radius
+                end
+            end
+            node = node.Parent
+        end
+        return nil, batState.safeArenaCenter, batState.safeArenaRadius
+    end
+
+    local function flatBetween(a, b)
+        return Vector3.new(b.X - a.X, 0, b.Z - a.Z)
+    end
+
+    local function rotateFlat(direction, radians)
+        local c, s = math.cos(radians), math.sin(radians)
+        return Vector3.new(
+            direction.X * c - direction.Z * s,
+            0,
+            direction.X * s + direction.Z * c
+        )
+    end
+
+    local function groundAt(position, character, opponentCharacter, depth)
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        local excluded = {}
+        if character then excluded[#excluded + 1] = character end
+        if opponentCharacter then excluded[#excluded + 1] = opponentCharacter end
+        params.FilterDescendantsInstances = excluded
+        params.IgnoreWater = true
+        local result = workspace:Raycast(
+            position + Vector3.new(0, 5.5, 0),
+            Vector3.new(0, -(depth or 18), 0),
+            params
+        )
+        return result ~= nil and result.Instance ~= nil and result.Instance.CanCollide == true, result
+    end
+
+    local function directionSafe(root, direction, character, opponentCharacter, centerPosition, arenaRadius)
+        local flat = Vector3.new(direction.X, 0, direction.Z)
+        if flat.Magnitude < 0.01 then return false end
+        flat = flat.Unit
+        local side = Vector3.new(-flat.Z, 0, flat.X)
+
+        -- Probe the center and both foot lanes several studs ahead. This keeps pursuit
+        -- aggressive while refusing a direction before either side of the character
+        -- reaches unsupported space.
+        for _, distance in ipairs({2.25, 4.25, 6.25}) do
+            local forward = root.Position + flat * distance
+            if centerPosition and arenaRadius then
+                local radiusDistance = flatBetween(centerPosition, forward).Magnitude
+                if radiusDistance >= arenaRadius * 0.72 then return false end
+            end
+            for _, lateral in ipairs({0, 1.25, -1.25}) do
+                local safe = groundAt(forward + side * lateral, character, opponentCharacter, 16)
+                if not safe then return false end
+            end
+        end
+        return true
+    end
+
+    local function pursuitTarget(opponentRoot, centerPosition)
+        local velocity = opponentRoot.AssemblyLinearVelocity
+        local flatVelocity = Vector3.new(velocity.X, 0, velocity.Z)
+        local prediction = flatVelocity
+        if prediction.Magnitude > 38 then prediction = prediction.Unit * 38 end
+        local predicted = opponentRoot.Position + prediction * 0.12
+
+        -- Whenever arena center is known, approach from the inside of the opponent.
+        -- That keeps pressure pointed toward the arena edge instead of circling behind
+        -- them randomly.
+        if centerPosition then
+            local outward = flatBetween(centerPosition, predicted)
+            if outward.Magnitude > 0.1 then
+                predicted -= outward.Unit * 2.6
+            end
+        end
+        return predicted
+    end
+
+    local function pursuitDirection(root, character, opponentCharacter, opponentRoot, centerPosition, arenaRadius)
+        local target = pursuitTarget(opponentRoot, centerPosition)
+        local toward = flatBetween(root.Position, target)
+        if toward.Magnitude <= 2.1 then return Vector3.zero end
+        local base = toward.Unit
+
+        -- Straight-line pressure first, then progressively wider safe detours.
+        for _, degrees in ipairs({0, 14, -14, 28, -28, 45, -45, 65, -65, 90, -90}) do
+            local candidate = rotateFlat(base, math.rad(degrees))
+            if directionSafe(root, candidate, character, opponentCharacter, centerPosition, arenaRadius) then
+                return candidate
+            end
+        end
+
+        -- If the opponent is across an unsafe edge, move inward rather than freezing
+        -- at the ledge. This preserves the last-safe recovery position for the next chase.
+        if centerPosition then
+            local inward = flatBetween(root.Position, centerPosition)
+            if inward.Magnitude > 0.05 then
+                inward = inward.Unit
+                if directionSafe(root, inward, character, opponentCharacter, centerPosition, arenaRadius) then
+                    return inward
+                end
+            end
+        end
+        return Vector3.zero
+    end
+
+    local function stopMovement()
+        if not batState.movementActive then return end
+        batState.movementActive = false
+        pcall(function()
+            local character = LocalPlayer.Character
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            if humanoid then humanoid:Move(Vector3.zero, false) end
+        end)
+    end
+
+    local function resetBatState(root)
+        stopMovement()
+        batState.safeCFrame = root and root.CFrame or nil
+        batState.safeArena = nil
+        batState.safeArenaCenter = nil
+        batState.safeArenaRadius = nil
+        batState.lastRoot = root
+    end
+
+    local function currentBatActors()
+        if controller.destroyed or not screenGui.Parent then return end
+        if gameId() ~= BAT_GAME_ID or not minigameAutoplayEnabled(BAT_GAME_ID) then return end
+
+        local character = LocalPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        if not character or not humanoid or humanoid.Health <= 0 or not root then return end
+
+        local opponent = batOpponent()
+        local opponentCharacter = opponent and opponent.Character
+        local opponentHumanoid = opponentCharacter and opponentCharacter:FindFirstChildOfClass("Humanoid")
+        local opponentRoot = opponentCharacter and opponentCharacter:FindFirstChild("HumanoidRootPart")
+        if not opponentCharacter or not opponentHumanoid or opponentHumanoid.Health <= 0 or not opponentRoot then
+            return character, humanoid, root
+        end
+        return character, humanoid, root, opponentCharacter, opponentHumanoid, opponentRoot
+    end
+
+    batState.movementConnection = RunService.RenderStepped:Connect(function()
+        if controller.destroyed or not screenGui.Parent then return end
+        if gameId() ~= BAT_GAME_ID or not minigameAutoplayEnabled(BAT_GAME_ID) then
+            if batState.lastRoot ~= nil then resetBatState(nil) end
+            return
+        end
+
+        local character, humanoid, root, opponentCharacter, _, opponentRoot = currentBatActors()
+        if not character or not humanoid or not root then
+            resetBatState(nil)
+            return
+        end
+        if batState.lastRoot ~= root then resetBatState(root) end
+
+        local _, centerPosition, arenaRadius = batArenaFor(root, character)
+        local grounded = groundAt(root.Position, character, opponentCharacter, 16)
+        local distanceFromCenter = centerPosition and flatBetween(centerPosition, root.Position).Magnitude or nil
+        local velocity = root.AssemblyLinearVelocity
+        local horizontalVelocity = Vector3.new(velocity.X, 0, velocity.Z)
+
+        -- Keep the recovery point well inside the arena on real floor. It is updated
+        -- continuously while pursuit is safe, so recovery does not drag the player back
+        -- to an old part of the map.
+        local safelyInside = not distanceFromCenter
+            or not arenaRadius
+            or distanceFromCenter < arenaRadius * 0.60
+        if grounded
+            and safelyInside
+            and humanoid.FloorMaterial ~= Enum.Material.Air
+            and math.abs(velocity.Y) < 18
+        then
+            batState.safeCFrame = root.CFrame
+        elseif batState.safeCFrame == nil and grounded then
+            batState.safeCFrame = root.CFrame
+        end
+
+        -- Predict sudden launches as well as ordinary chase movement. If the next
+        -- fraction of a second has no floor or crosses the safe arena radius, recover
+        -- before the character can fall far enough for the server arena check to win.
+        local lookAhead = root.Position + horizontalVelocity * 0.14
+        local futureGround = groundAt(lookAhead, character, opponentCharacter, 20)
+        local futureDistance = centerPosition and flatBetween(centerPosition, lookAhead).Magnitude or nil
+        local currentUnsafe = not grounded
+            and (velocity.Y < -3 or (batState.safeCFrame and root.Position.Y < batState.safeCFrame.Position.Y - 4))
+        local futureUnsafe = horizontalVelocity.Magnitude > 6 and not futureGround
+        local radiusUnsafe = futureDistance and arenaRadius and futureDistance >= arenaRadius * 0.73
+
+        if batState.safeCFrame and (currentUnsafe or futureUnsafe or radiusUnsafe) then
+            stopMovement()
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            root.CFrame = batState.safeCFrame
+            humanoid.Sit = false
+            humanoid.PlatformStand = false
+            return
+        end
+
+        if not opponentRoot then
+            stopMovement()
+            return
+        end
+
+        local moveDirection = pursuitDirection(
+            root, character, opponentCharacter, opponentRoot, centerPosition, arenaRadius
+        )
+        batState.movementActive = moveDirection.Magnitude > 0.01
+        humanoid.AutoRotate = true
+        humanoid.Sit = false
+        humanoid.PlatformStand = false
+        humanoid:Move(moveDirection, false)
+    end)
+
+    -- Attack on Heartbeat so hit pressure is independent of the render framerate and
+    -- movement calculations. There is deliberately no DroidHub cooldown here; the Bat's
+    -- own server/tool cooldown remains the only limiter.
+    batState.hitConnection = RunService.Heartbeat:Connect(function()
+        local character, humanoid, root, opponentCharacter, opponentHumanoid, opponentRoot = currentBatActors()
+        if not character or not humanoid or not root
+            or not opponentCharacter or not opponentHumanoid or not opponentRoot
+        then
+            return
+        end
+
+        local tool = equippedBat(character)
+        if not tool then return end
+
+        -- Activate repeatedly every simulation frame. Multiple Activate/contact calls in
+        -- the same frame make DroidHub ready for the first server-accepted swing window
+        -- without adding any artificial reaction delay.
+        pcall(tool.Activate, tool)
+        pcall(tool.Activate, tool)
+
+        local distance = (opponentRoot.Position - root.Position).Magnitude
+        if distance <= 21 then
+            spamBatContacts(tool, opponentCharacter)
+            pcall(tool.Activate, tool)
+            spamBatContacts(tool, opponentCharacter)
+        end
+    end)
+
+    controller.BatBattleCleanup = function()
+        stopMovement()
+        if batState.movementConnection then
+            pcall(function() batState.movementConnection:Disconnect() end)
+            batState.movementConnection = nil
+        end
+        if batState.hitConnection then
+            pcall(function() batState.hitConnection:Disconnect() end)
+            batState.hitConnection = nil
+        end
+    end
+end
+
 function controller:Destroy()
     if self.destroyed then return end
     self.destroyed = true
@@ -24485,6 +25831,10 @@ function controller:Destroy()
     if type(self.HotPotatoCleanup) == "function" then
         pcall(self.HotPotatoCleanup)
         self.HotPotatoCleanup = nil
+    end
+    if type(self.BatBattleCleanup) == "function" then
+        pcall(self.BatBattleCleanup)
+        self.BatBattleCleanup = nil
     end
     local popController = rawget(_G, "__TSUNAMI_POPCORN_PERFECT_V17")
         or rawget(_G, "__TSUNAMI_POPCORN_PERFECT_V16")
@@ -24635,6 +25985,28 @@ local function median(values)
         return copy[(n + 1) // 2]
     end
     return (copy[n // 2] + copy[n // 2 + 1]) * 0.5
+end
+-- Popcorn timing is linear in the game itself, so the best improvement is to
+-- reject transient render/network outliers rather than alter the timing model.
+-- Median absolute deviation keeps normal samples untouched while preventing one
+-- stalled frame or ping spike from dragging the target away from the true ring crossing.
+local function robustMedian(values)
+    local center = median(values)
+    if center == nil or #values < 5 then return center end
+    local deviations = table.create(#values)
+    for i, value in ipairs(values) do
+        deviations[i] = math.abs(value - center)
+    end
+    local mad = median(deviations)
+    if not mad or mad <= 1e-9 then return center end
+    local limit = math.max(0.0005, mad * 3.5)
+    local filtered = {}
+    for _, value in ipairs(values) do
+        if math.abs(value - center) <= limit then
+            filtered[#filtered + 1] = value
+        end
+    end
+    return median(filtered) or center
 end
 local function pushSample(list, value, limit)
     if type(value) ~= "number" or value <= 0 then
@@ -25088,7 +26460,7 @@ local function runKernel(slot, duration, key, stateSeenAt)
                 while #crossingHistory > TRACKING_HISTORY do
                     table.remove(crossingHistory, 1)
                 end
-                visualTarget = median(crossingHistory) or crossing
+                visualTarget = robustMedian(crossingHistory) or crossing
                 sampleCount += 1
             end
             local nowClock = os.clock()
@@ -25107,7 +26479,7 @@ local function runKernel(slot, duration, key, stateSeenAt)
                     freshCompensation,
                     KERNEL_COMPENSATION_HISTORY
                 )
-                compensation = median(compensationHistory) or freshCompensation
+                compensation = robustMedian(compensationHistory) or freshCompensation
                 nextPingRefreshAt = nowClock + TRACKING_PING_REFRESH
             end
             local failsafeLead = sampleCount >= MIN_GEOMETRY_SAMPLES
@@ -26424,7 +27796,15 @@ task.spawn(function()
         for b = a + 1, 11 do
             for c = b + 1, 12 do
                 local key = tostring(a) .. "," .. tostring(b) .. "," .. tostring(c)
-                local combo = { a, b, c, key = key }
+                local combo = {
+                    a, b, c,
+                    key = key,
+                    mask = bit32.bor(
+                        bit32.lshift(1, a - 1),
+                        bit32.lshift(1, b - 1),
+                        bit32.lshift(1, c - 1)
+                    ),
+                }
                 combos[#combos + 1] = combo
                 comboByKey[key] = combo
             end
@@ -26461,7 +27841,7 @@ task.spawn(function()
         end
         return p
     end
-    local CANDY_LEARNING_PATH = "TuffHub_CandyLearning_v1.json"
+    local CANDY_LEARNING_PATH = "DroidHub_CandyLearning_v1.json"
     local model = rawget(_G, "__TSUNAMI_CANDY_ULTIMATE_V7")
         or rawget(_G, "__TSUNAMI_CANDY_ULTIMATE_V6")
     if type(model) ~= "table" then
@@ -26822,11 +28202,12 @@ task.spawn(function()
                                                 prior[#prior + 1] = idx
                                             end
                                         end
-                                        local terminalUtility =
-                                            5.0 * (stage <= 4 and 1 or 0)
-                                            + 2.6 * (stage <= 5 and 1 or 0)
-                                            + 1.2 * (stage <= 6 and 1 or 0)
-                                            + math.exp(-0.34 * (stage - 3))
+                                        -- A round is lost on the third bomb, so score a
+                                        -- placement by the exact stage at which all three
+                                        -- bombs have been consumed. Maximizing this value
+                                        -- is equivalent to minimizing the expected third-bomb
+                                        -- discovery stage under the learned eating policy.
+                                        local terminalUtility = 13 - stage
                                         for a = 1, #prior - 1 do
                                             for b = a + 1, #prior do
                                                 local triple = { prior[a], prior[b], chosen }
@@ -26866,10 +28247,21 @@ task.spawn(function()
     end
     local function chooseCandyToEat(cells, profile, attemptedCells)
         local available = {}
+        local eatenMask = 0
+        local observedBombMask = 0
+        local observedSafeMask = 0
+        local bombHits = 0
         for i = 1, 12 do
-            if cellValue(cells, i, "eaten") ~= true
-                and attemptedCells[i] ~= true
-            then
+            if cellValue(cells, i, "eaten") == true then
+                local bitValue = bit32.lshift(1, i - 1)
+                eatenMask = bit32.bor(eatenMask, bitValue)
+                if cellValue(cells, i, "wasBomb") == true then
+                    observedBombMask = bit32.bor(observedBombMask, bitValue)
+                    bombHits += 1
+                else
+                    observedSafeMask = bit32.bor(observedSafeMask, bitValue)
+                end
+            elseif attemptedCells[i] ~= true then
                 available[#available + 1] = i
             end
         end
@@ -26896,6 +28288,183 @@ task.spawn(function()
         if total <= 0 then
             return available[rng:NextInteger(1, #available)]
         end
+
+        -- Exact finite-horizon belief-state search. The posterior above contains
+        -- every bomb triple still consistent with the live board and the learned
+        -- opponent. For each possible candy we branch on Bomb/Safe, condition the
+        -- posterior, and maximize the expected number of non-fatal future picks.
+        -- Iterative deepening gives us the deepest complete answer that fits a
+        -- strict CPU budget, so autoplay never stalls a turn.
+        local searchDeadline = os.clock() + 0.045
+        local rootAvailableMask = 0
+        for _, cell in ipairs(available) do
+            rootAvailableMask = bit32.bor(
+                rootAvailableMask,
+                bit32.lshift(1, cell - 1)
+            )
+        end
+        local posterior = {}
+        for i, combo in ipairs(combos) do
+            local weight = weights[i] or 0
+            if weight > 0 then
+                posterior[#posterior + 1] = {
+                    mask = combo.mask,
+                    weight = weight,
+                }
+            end
+        end
+
+        local function searchAtDepth(maxDepth)
+            local valueMemo = {}
+            local beliefMemo = {}
+            local aborted = false
+            local function belief(bombMask, safeMask)
+                local key = tostring(bombMask) .. ":" .. tostring(safeMask)
+                local cached = beliefMemo[key]
+                if cached then return cached end
+                local totalWeight = 0
+                local bombByCell = table.create(12, 0)
+                for i = 1, 12 do bombByCell[i] = 0 end
+                for _, hypothesis in ipairs(posterior) do
+                    local mask = hypothesis.mask
+                    if bit32.band(mask, bombMask) == bombMask
+                        and bit32.band(mask, safeMask) == 0
+                    then
+                        local w = hypothesis.weight
+                        totalWeight += w
+                        for cell = 1, 12 do
+                            if bit32.band(mask, bit32.lshift(1, cell - 1)) ~= 0 then
+                                bombByCell[cell] += w
+                            end
+                        end
+                    end
+                end
+                local result = { total = totalWeight, bombByCell = bombByCell }
+                beliefMemo[key] = result
+                return result
+            end
+            local solve
+            solve = function(chosenMask, bombMask, safeMask, hits, depth)
+                if depth <= 0 or hits >= 3 then return 0 end
+                if os.clock() >= searchDeadline then aborted = true return nil end
+                local memoKey = tostring(chosenMask) .. ":" .. tostring(bombMask) .. ":" .. tostring(safeMask) .. ":" .. tostring(hits) .. ":" .. tostring(depth)
+                local cached = valueMemo[memoKey]
+                if cached ~= nil then return cached end
+                local stateBelief = belief(bombMask, safeMask)
+                if stateBelief.total <= 1e-15 then return 0 end
+                local candidateMask = bit32.band(rootAvailableMask, bit32.bnot(chosenMask))
+                if candidateMask == 0 then return 0 end
+                local best = -math.huge
+                for cell = 1, 12 do
+                    local bitValue = bit32.lshift(1, cell - 1)
+                    if bit32.band(candidateMask, bitValue) ~= 0 then
+                        local bombProbability = math.clamp(
+                            stateBelief.bombByCell[cell] / stateBelief.total,
+                            0,
+                            1
+                        )
+                        local nextChosen = bit32.bor(chosenMask, bitValue)
+                        local safeValue = solve(
+                            nextChosen,
+                            bombMask,
+                            bit32.bor(safeMask, bitValue),
+                            hits,
+                            depth - 1
+                        )
+                        if safeValue == nil then return nil end
+                        local bombValue = 0
+                        if hits + 1 < 3 then
+                            bombValue = solve(
+                                nextChosen,
+                                bit32.bor(bombMask, bitValue),
+                                safeMask,
+                                hits + 1,
+                                depth - 1
+                            )
+                            if bombValue == nil then return nil end
+                            bombValue += 1
+                        end
+                        safeValue += 1
+                        local value =
+                            (1 - bombProbability) * safeValue
+                            + bombProbability * bombValue
+                        if value > best then best = value end
+                    end
+                end
+                if best == -math.huge then best = 0 end
+                valueMemo[memoKey] = best
+                return best
+            end
+
+            local baseBelief = belief(observedBombMask, observedSafeMask)
+            if baseBelief.total <= 1e-15 then return nil, false end
+            local bestValue = -math.huge
+            local bestRisk = math.huge
+            local choices = {}
+            for _, cell in ipairs(available) do
+                if os.clock() >= searchDeadline then return nil, false end
+                local bitValue = bit32.lshift(1, cell - 1)
+                local bombProbability = math.clamp(
+                    baseBelief.bombByCell[cell] / baseBelief.total,
+                    0,
+                    1
+                )
+                local safeValue = solve(
+                    bitValue,
+                    observedBombMask,
+                    bit32.bor(observedSafeMask, bitValue),
+                    bombHits,
+                    maxDepth - 1
+                )
+                if safeValue == nil then return nil, false end
+                local bombValue = 0
+                if bombHits + 1 < 3 then
+                    bombValue = solve(
+                        bitValue,
+                        bit32.bor(observedBombMask, bitValue),
+                        observedSafeMask,
+                        bombHits + 1,
+                        maxDepth - 1
+                    )
+                    if bombValue == nil then return nil, false end
+                    bombValue += 1
+                end
+                safeValue += 1
+                local value =
+                    (1 - bombProbability) * safeValue
+                    + bombProbability * bombValue
+                if value > bestValue + 1e-10
+                    or (
+                        math.abs(value - bestValue) <= 1e-10
+                        and bombProbability < bestRisk - 1e-10
+                    )
+                then
+                    bestValue = value
+                    bestRisk = bombProbability
+                    table.clear(choices)
+                    choices[1] = cell
+                elseif math.abs(value - bestValue) <= 1e-10
+                    and math.abs(bombProbability - bestRisk) <= 1e-10
+                then
+                    choices[#choices + 1] = cell
+                end
+            end
+            if aborted or #choices == 0 then return nil, false end
+            return choices[rng:NextInteger(1, #choices)], true
+        end
+
+        local deepestChoice = nil
+        for depth = 2, 6 do
+            local choice, complete = searchAtDepth(depth)
+            if complete and choice then
+                deepestChoice = choice
+            else
+                break
+            end
+        end
+        if deepestChoice then return deepestChoice end
+
+        -- Guaranteed fallback if the search budget is exhausted on a slow frame.
         local bestRisk = math.huge
         local tied = {}
         for _, idx in ipairs(available) do
@@ -27053,7 +28622,7 @@ task.spawn(function()
             if roundKey and placementSentFor ~= roundKey then
                 placementSentFor = roundKey
                 local bombs = chooseBombPlacement(activeProfile)
-                task.wait(randomRange(rng, 0.045, 0.11))
+                task.wait()
                 if gameId() == "CandyBomb" and publicPhase() == "BombPlacement" then
                     fireAction("PlaceBombs", bombs)
                 end
@@ -27093,7 +28662,7 @@ task.spawn(function()
         end
         local choice = chooseCandyToEat(myCells, activeProfile, attemptedCells)
         if not choice then continue end
-        task.wait(randomRange(rng, 0.045, 0.10))
+        task.wait()
         local fresh = privateState()
         local freshCells = boardCells(safeIndex(fresh, "myBoard"))
         if gameId() == "CandyBomb"
@@ -27149,7 +28718,7 @@ task.spawn(function()
         end
         return profile
     end
-    local NUMBER_LEARNING_PATH = "TuffHub_NumberGuessLearning_v1.json"
+    local NUMBER_LEARNING_PATH = "DroidHub_NumberGuessLearning_v1.json"
     local model = rawget(_G, "__TSUNAMI_NUMBER_GUESS_OPTIMAL_V9")
         or rawget(_G, "__TSUNAMI_NUMBER_GUESS_OPTIMAL_V8")
         or rawget(_G, "__TSUNAMI_NUMBER_GUESS_OPTIMAL_V7")
@@ -27580,15 +29149,20 @@ task.spawn(function()
         end
         return choices
     end
-    local function expectedOpponentSteps(profile, secret)
+    local function expectedOpponentSteps(profile, secret, choiceCache)
         local memo = {}
+        choiceCache = choiceCache or {}
         local function solve(low, high)
             if low > high then return 0 end
             if low == high then return 1 end
             local key = stateKey(low, high)
             local cached = memo[key]
             if cached ~= nil then return cached end
-            local choices = policyChoices(profile, low, high)
+            local choices = choiceCache[key]
+            if not choices then
+                choices = policyChoices(profile, low, high)
+                choiceCache[key] = choices
+            end
             local expected = 0
             for _, choice in ipairs(choices) do
                 local guess = choice.guess
@@ -27629,22 +29203,6 @@ task.spawn(function()
         return depth
     end
     local function chooseStrongSecret(profile)
-        local maxRobustDepth = -math.huge
-        local deepest = {}
-        for secret = 1, 100 do
-            local robustDepth =
-                math.min(
-                    canonicalDepth(secret, false),
-                    canonicalDepth(secret, true)
-                )
-            if robustDepth > maxRobustDepth then
-                maxRobustDepth = robustDepth
-                table.clear(deepest)
-                deepest[1] = secret
-            elseif robustDepth == maxRobustDepth then
-                deepest[#deepest + 1] = secret
-            end
-        end
         local recentPenalty = {}
         for i, n in ipairs(profile.recentOwnSecrets) do
             local age = #profile.recentOwnSecrets - i
@@ -27653,12 +29211,26 @@ task.spawn(function()
                 + math.exp(-0.36 * age)
         end
         local policyEvidence = tonumber(profile.guessSamples) or 0
-        local scored = table.create(#deepest)
+        local confidence = math.clamp(policyEvidence / 16, 0, 1)
+        local choiceCache = {}
+        local scored = table.create(100)
         local bestScore = -math.huge
-        for _, secret in ipairs(deepest) do
-            local learnedDifficulty = expectedOpponentSteps(profile, secret)
+        for secret = 1, 100 do
+            local robustDepth =
+                math.min(
+                    canonicalDepth(secret, false),
+                    canonicalDepth(secret, true)
+                )
+            local learnedDifficulty = expectedOpponentSteps(profile, secret, choiceCache)
+            -- Before enough opponent samples exist, favor numbers that are hard
+            -- against both canonical binary-search tie conventions. As evidence
+            -- accumulates, continuously transfer weight to the learned opponent
+            -- policy instead of restricting the candidate set beforehand.
+            local learnedWeight = 0.08 + 0.92 * confidence
+            local robustWeight = 1.00 - 0.92 * confidence
             local score =
-                learnedDifficulty
+                learnedDifficulty * learnedWeight
+                + robustDepth * robustWeight
                 - (recentPenalty[secret] or 0) * 0.55
             scored[#scored + 1] = {
                 secret = secret,
@@ -27672,33 +29244,23 @@ task.spawn(function()
             end
             return a.secret < b.secret
         end)
+        -- Mix only genuinely near-optimal secrets. This preserves unpredictability
+        -- without sacrificing meaningful expected guessing difficulty.
+        local tolerance = 0.035 + (1 - confidence) * 0.055
         local pool = {}
-        if policyEvidence >= 8 then
-            local tolerance = 0.08
-            for _, item in ipairs(scored) do
-                if item.score >= bestScore - tolerance then
-                    pool[#pool + 1] = item
-                else
-                    break
-                end
-            end
-        else
-            for _, item in ipairs(scored) do
+        for _, item in ipairs(scored) do
+            if item.score >= bestScore - tolerance then
                 pool[#pool + 1] = item
+            else
+                break
             end
         end
-        local chosen
-        if policyEvidence >= 8 and #pool > 1 then
-            local temperature =
-                math.clamp(
-                    0.07 / math.sqrt(policyEvidence / 8),
-                    0.015,
-                    0.06
-                )
+        local chosen = scored[1].secret
+        if #pool > 1 then
+            local temperature = math.clamp(0.035 + (1 - confidence) * 0.025, 0.02, 0.06)
             local total = 0
             for _, item in ipairs(pool) do
-                item.weight =
-                    math.exp((item.score - bestScore) / temperature)
+                item.weight = math.exp((item.score - bestScore) / temperature)
                 total += item.weight
             end
             local roll = rng:NextNumber() * math.max(total, 1e-9)
@@ -27710,8 +29272,6 @@ task.spawn(function()
                     break
                 end
             end
-        else
-            chosen = pool[rng:NextInteger(1, #pool)].secret
         end
         profile.recentOwnSecrets[#profile.recentOwnSecrets + 1] = chosen
         while #profile.recentOwnSecrets > 20 do
@@ -28230,10 +29790,10 @@ task.spawn(function()
             if continuation ~= nil then
                 local immediate = nameOVR(name)
                 local value = immediate + continuation
-                if immediate > bestImmediateOVR
+                if value > bestPickValue + 1e-9
                     or (
-                        immediate == bestImmediateOVR
-                        and value > bestPickValue
+                        math.abs(value - bestPickValue) <= 1e-9
+                        and immediate > bestImmediateOVR
                     )
                 then
                     bestIndex = i
@@ -28300,7 +29860,7 @@ task.spawn(function()
             task.delay(0.18, function() actionBusy = false end)
             continue
         end
-        local revealWait = math.max(0.12, (FootballDraft.RevealTime(#candidates) or 0) - (FootballDraft.PickTolerance or 0) + 0.03)
+        local revealWait = math.max(0.12, (FootballDraft.RevealTime(#candidates) or 0) - (FootballDraft.PickTolerance or 0) + 0.008)
         local deadline = tonumber(tryIndex({ "session", "public", "deadline" }))
         local remainingTime = deadline and (deadline - workspace:GetServerTimeNow()) or math.huge
         local elapsedReveal = os.clock() - candidatesSeenAt
@@ -28310,7 +29870,7 @@ task.spawn(function()
         local reroll, pickIndex = chooseOptimalAction(lineup, candidates, rerolls, thinkBudget)
         if reroll and remainingTime > 0.65 then
             actionBusy = true
-            task.wait(randomRange(rng, 0.04, 0.08))
+            task.wait()
             if gameId() == "FootballDraft" and publicPhase() == "Drafting" then
                 fireAction("Reroll")
             end
@@ -28327,7 +29887,7 @@ task.spawn(function()
         end
         if pickIndex then
             actionBusy = true
-            task.wait(randomRange(rng, 0.03, 0.06))
+            task.wait()
             if gameId() == "FootballDraft" and publicPhase() == "Drafting" then
                 fireAction("Pick", pickIndex)
             end
@@ -28375,7 +29935,7 @@ task.spawn(function()
         for i = 1, 10 do p.powerCounts[i] = 0 end
         return p
     end
-    local KNOCKOUT_LEARNING_PATH = "TuffHub_KnockoutLearning_v1.json"
+    local KNOCKOUT_LEARNING_PATH = "DroidHub_KnockoutLearning_v1.json"
     local opponentModel = rawget(_G, "__TSUNAMI_KNOCKOUT_OPPONENT_V7")
         or rawget(_G, "__TSUNAMI_KNOCKOUT_OPPONENT_V6")
     if type(opponentModel) ~= "table" then
@@ -28958,7 +30518,7 @@ task.spawn(function()
         for _, target in ipairs(enemy) do
             local outward = select(1, nearestOutward(inner, target.p))
             local contactRadius = shooter.radius + target.radius
-            for offset = -54, 54, 3 do
+            for offset = -60, 60, 2 do
                 local normal = rotate2(outward, math.rad(offset)).Unit
                 local contact = target.p - normal * contactRadius
                 local delta = contact - shooter.p
@@ -28991,7 +30551,7 @@ task.spawn(function()
             if not seen[key] then
                 seen[key] = true
                 out[#out + 1] = action
-                if #out >= 12 then break end
+                if #out >= 18 then break end
             end
         end
         return out
@@ -29013,7 +30573,7 @@ task.spawn(function()
                 end
                 table.sort(expanded, function(a, b) return a.static > b.static end)
                 states = {}
-                for i = 1, math.min(220, #expanded) do states[i] = expanded[i] end
+                for i = 1, math.min(320, #expanded) do states[i] = expanded[i] end
             end
         end
         return states
@@ -29109,7 +30669,7 @@ task.spawn(function()
         local profile = opponentProfile()
         local scenarios = {}
         scenarios[#scenarios + 1] = { plan = adversarialOpponentPlan(inner, enemy, own), weight = 0.18 }
-        local sampleN = math.clamp(12 + math.floor(profile.rounds * 0.9), 12, 22)
+        local sampleN = math.clamp(16 + math.floor(profile.rounds * 1.0), 16, 28)
         for _ = 1, sampleN do
             local plan = {}
             for _, puck in ipairs(enemy) do
@@ -29228,7 +30788,7 @@ task.spawn(function()
         end
         return (myAlive - enemyAlive) * 260 + mySafety * 18 - enemySafety * 7
     end
-    local function robustPlan(inner, own, enemy)
+    local function robustPlan(inner, own, enemy, serverDeadline)
         local options = {}
         for i, puck in ipairs(own) do
             if not puck.locked then
@@ -29243,13 +30803,12 @@ task.spawn(function()
         local tailWeight = 0.36 - confidence * 0.12
         local worstWeight = 0.12 - confidence * 0.05
         local meanWeight = 1 - tailWeight - worstWeight
-        local bestObjective, bestPlan = -math.huge, plans[1].plan
-        for _, candidate in ipairs(plans) do
+        local function evaluatePlan(plan)
             local values = {}
             local weightedMean = 0
             local totalWeight = 0
             for _, scenario in ipairs(scenarios) do
-                local value = simulate(inner, own, enemy, candidate.plan, scenario.plan)
+                local value = simulate(inner, own, enemy, plan, scenario.plan)
                 values[#values + 1] = value
                 weightedMean += value * scenario.weight
                 totalWeight += scenario.weight
@@ -29261,10 +30820,64 @@ task.spawn(function()
             for i = 1, tailCount do tail += values[i] end
             tail /= tailCount
             local worst = values[1]
-            local objective = weightedMean * meanWeight + tail * tailWeight + worst * worstWeight + candidate.static * 0.025
+            return weightedMean * meanWeight + tail * tailWeight + worst * worstWeight
+        end
+        local bestObjective, bestPlan = -math.huge, plans[1].plan
+        for _, candidate in ipairs(plans) do
+            if serverDeadline
+                and serverDeadline - workspace:GetServerTimeNow() <= 3.55
+                and bestObjective > -math.huge
+            then
+                break
+            end
+            local objective = evaluatePlan(candidate.plan)
             if objective > bestObjective then
                 bestObjective = objective
                 bestPlan = candidate.plan
+            end
+        end
+
+        -- Beam pruning uses a cheap static heuristic, but the final answer should
+        -- be physics-driven. Refine the winning plan around its continuous angle
+        -- and discrete power neighborhood using the exact same robust simulation.
+        local function enoughTime()
+            if not serverDeadline then return true end
+            return serverDeadline - workspace:GetServerTimeNow() > 3.45
+        end
+        if enoughTime() then
+            bestPlan = table.clone(bestPlan)
+            for _ = 1, 2 do
+                local improved = false
+                for _, puck in ipairs(own) do
+                    local base = bestPlan[puck.id]
+                    if base and not puck.locked and enoughTime() then
+                        local trials = {
+                            { angle = base.angle - math.rad(2), power = base.power },
+                            { angle = base.angle - math.rad(1), power = base.power },
+                            { angle = base.angle + math.rad(1), power = base.power },
+                            { angle = base.angle + math.rad(2), power = base.power },
+                            { angle = base.angle, power = math.max(1, base.power - 1) },
+                            { angle = base.angle, power = math.min(10, base.power + 1) },
+                        }
+                        for _, trial in ipairs(trials) do
+                            local trialPlan = table.clone(bestPlan)
+                            local action = table.clone(base)
+                            action.angle = trial.angle
+                            action.power = trial.power
+                            action.dir = Vector2.new(math.sin(trial.angle), math.cos(trial.angle)).Unit
+                            trialPlan[puck.id] = action
+                            local objective = evaluatePlan(trialPlan)
+                            if objective > bestObjective + 1e-8 then
+                                bestObjective = objective
+                                bestPlan = trialPlan
+                                base = action
+                                improved = true
+                            end
+                            if not enoughTime() then break end
+                        end
+                    end
+                end
+                if not improved or not enoughTime() then break end
             end
         end
         return bestPlan
@@ -29322,7 +30935,7 @@ task.spawn(function()
         if aimingKey ~= key then
             resetAiming(true)
             aimingKey = key
-            local selected = robustPlan(inner, own, enemy)
+            local selected = robustPlan(inner, own, enemy, deadline)
             for id, action in pairs(selected) do planned[id] = action end
             launchSnapshot = snapshotLaunch(inner, own, enemy)
         end
@@ -29601,7 +31214,7 @@ task.spawn(function()
         end
         return p
     end
-    local BATTLE_LEARNING_PATH = "TuffHub_BattleshipLearning_v1.json"
+    local BATTLE_LEARNING_PATH = "DroidHub_BattleshipLearning_v1.json"
     local battleModel =
         rawget(_G, "__TSUNAMI_BATTLESHIP_EXACT_V12")
         or rawget(_G, "__TSUNAMI_BATTLESHIP_EXACT_V11")
@@ -30240,6 +31853,7 @@ task.spawn(function()
         profile
     )
         local valid = {}
+        local validWeights = {}
         local occ = table.create(64, 0)
         local sink = table.create(64, 0)
         local targetOcc = table.create(64, 0)
@@ -30320,6 +31934,7 @@ task.spawn(function()
                 )
             validCount += 1
             valid[validCount] = i
+            validWeights[validCount] = weight
             totalWeight += weight
             accumulatePlacement(1, p1, weight)
             accumulatePlacement(2, p2, weight)
@@ -30353,6 +31968,7 @@ task.spawn(function()
         }
         return {
             valid = valid,
+            weights = validWeights,
             count = validCount,
             totalWeight = totalWeight,
             occ = occ,
@@ -30537,13 +32153,7 @@ task.spawn(function()
         for n = 1, summary.count do
             local fleetIndex =
                 summary.valid[n]
-            local weight =
-                fleetPriorWeight(
-                    profile,
-                    fleetAt(1, fleetIndex),
-                    fleetAt(2, fleetIndex),
-                    fleetAt(3, fleetIndex)
-                )
+            local weight = summary.weights[n] or 0
             local present = {}
             for rank = 1, N do
                 local idx =
@@ -31526,7 +33136,7 @@ end)
 -- toggle; Auto Leave On Loss remains an independent terminal fallback.
 -- Neither player nor Hot Potato Handle is teleported by the handoff system.
 do
-    local GLOBAL_KEY = "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2"
+    local GLOBAL_KEY = "__DROIDHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2"
     local previous = rawget(_G, GLOBAL_KEY)
     if type(previous) == "table" and type(previous.Destroy) == "function" then
         pcall(previous.Destroy)
@@ -31735,7 +33345,7 @@ do
 
     local function resolveOpponent()
         -- Never trust a cached opponent before checking the live minigame. The same
-        -- TuffHub execution can play multiple Hot Potato matches in one server, and a
+        -- DroidHub execution can play multiple Hot Potato matches in one server, and a
         -- still-alive player from match 1 must not remain the Q/final-handoff target in
         -- match 2.
         local rep = getReplicator()
@@ -32301,7 +33911,7 @@ do
     end)
 
     local function alwaysGiveBackEnabled()
-        local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+        local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
         return type(utility) == "table"
             and utility.PauseScript ~= true
             and utility.PauseMinigameFeatures ~= true
@@ -32346,7 +33956,7 @@ do
             -- Last-second acquisition is a terminal-risk event. Notify the independent
             -- loss-prevention controller synchronously from the actual Tool reparent,
             -- before Always Give Back or any handoff worker can consume time.
-            local criticalAcquire = rawget(_G, "__TUFFHUB_HOT_POTATO_CRITICAL_ACQUIRE")
+            local criticalAcquire = rawget(_G, "__DROIDHUB_HOT_POTATO_CRITICAL_ACQUIRE")
             if type(criticalAcquire) == "function" then
                 local ok, handled = pcall(criticalAcquire, child)
                 if ok and handled == true then
@@ -32356,7 +33966,7 @@ do
 
             if finalFallbackCutoffReached() then return end
 
-            local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+            local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
             local autoplayFinalReturn = type(utility) == "table"
                 and utility.PauseScript ~= true
                 and utility.PauseMinigameFeatures ~= true
@@ -32516,7 +34126,7 @@ do
         return true
     end
 
-    -- Hot Potato may run repeatedly without re-executing TuffHub. Round/session state
+    -- Hot Potato may run repeatedly without re-executing DroidHub. Round/session state
     -- must therefore be explicitly reset; otherwise an expired fallback cutoff from the
     -- previous game makes finalFallbackCutoffReached() permanently true and causes Q and
     -- automatic handoff to return immediately in the next game.
@@ -32638,7 +34248,7 @@ do
     end
 
     local function manualGiveBackEnabled()
-        local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+        local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
         return type(utility) == "table"
             and utility.PauseScript ~= true
             and utility.PauseMinigameFeatures ~= true
@@ -32655,7 +34265,7 @@ do
         if state.destroyed or processed then return end
         if UserInputServiceHP:GetFocusedTextBox() then return end
         if not manualGiveBackEnabled() then return end
-        local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+        local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
         local keyName = tostring(utility.HotPotatoGiveBackKey or "Q")
         local okKey, configuredKey = pcall(function() return Enum.KeyCode[keyName] end)
         if not okKey or configuredKey == nil or input.KeyCode ~= configuredKey then return end
@@ -32669,14 +34279,14 @@ do
         mobileButton.AnchorPoint = Vector2.new(0.5, 0.5)
         mobileButton.Position = UDim2.new(1, -78, 1, -190)
         mobileButton.Size = UDim2.fromOffset(64, 64)
-        mobileButton.BackgroundColor3 = BLACK
+        mobileButton.BackgroundColor3 = UI.BLACK
         mobileButton.BackgroundTransparency = 0
         mobileButton.BorderSizePixel = 0
         mobileButton.AutoButtonColor = false
         mobileButton.Text = "GIVE\nBACK"
         mobileButton.TextColor3 = Color3.new(1, 1, 1)
         mobileButton.TextWrapped = true
-        mobileButton.FontFace = MENU_FONT_BOLD_FACE
+        mobileButton.FontFace = UI.MENU_FONT_BOLD_FACE
         mobileButton.TextSize = 13
         mobileButton.Visible = false
         mobileButton.ZIndex = 60000
@@ -32687,7 +34297,7 @@ do
         mobileCorner.Parent = mobileButton
 
         local mobileStroke = Instance.new("UIStroke")
-        mobileStroke.Color = LINE_COLOR
+        mobileStroke.Color = UI.LINE_COLOR
         mobileStroke.Thickness = 1
         mobileStroke.Transparency = 0
         mobileStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
@@ -32838,7 +34448,7 @@ if type(FootballDraftConfig) == "table" and type(BrainrotsConfig) == "table" the
         end
     end
 end
-local GLOBAL_KEY = "__TSUNAMI_CLINCH_LOSS_HOP_V28"
+local GLOBAL_KEY = "__TSUNAMI_CLINCH_LOSS_HOP_V30"
 local LEGACY_GLOBAL_KEYS = {
     "__TSUNAMI_CLINCH_LOSS_HOP_V1",
     "__TSUNAMI_CLINCH_LOSS_HOP_V2",
@@ -32867,6 +34477,8 @@ local LEGACY_GLOBAL_KEYS = {
     "__TSUNAMI_CLINCH_LOSS_HOP_V25",
     "__TSUNAMI_CLINCH_LOSS_HOP_V26",
     "__TSUNAMI_CLINCH_LOSS_HOP_V27",
+    "__TSUNAMI_CLINCH_LOSS_HOP_V28",
+    "__TSUNAMI_CLINCH_LOSS_HOP_V29",
     GLOBAL_KEY,
 }
 for _, key in ipairs(LEGACY_GLOBAL_KEYS) do
@@ -32931,6 +34543,7 @@ local SEAT_SCORE_GAMES = {
     Battleship = true,
     Knockout = true,
     HotPotato = true,
+    BatBattle = true,
 }
 local SUPPORTED_GAMES = {
     CandyBomb = true,
@@ -32941,6 +34554,7 @@ local SUPPORTED_GAMES = {
     Knockout = true,
     FootballDraft = true,
     HotPotato = true,
+    BatBattle = true,
 }
 local KICK_GAME_DISPLAY_NAMES = {
     CandyBomb = "Candy Bomb",
@@ -32951,6 +34565,7 @@ local KICK_GAME_DISPLAY_NAMES = {
     Knockout = "Knockout",
     FootballDraft = "Football Draft",
     HotPotato = "Hot Potato",
+    BatBattle = "Bat Battle",
 }
 local ROUND_START_PHASES = {
     CandyBomb = {
@@ -32977,6 +34592,9 @@ local ROUND_START_PHASES = {
         Drafting = true,
     },
     HotPotato = {
+        Playing = true,
+    },
+    BatBattle = {
         Playing = true,
     },
 }
@@ -33074,6 +34692,17 @@ local tracker = {
     hotPotatoArenaLastDistance = nil,
     hotPotatoArenaClinching = false,
     hotPotatoArenaDepartureLatched = false,
+    -- Bat Battle uses the same ArenaModule survival rule as Hot Potato: the
+    -- character is no longer alive once its pivot leaves the arena's 3D radius.
+    batBattleArenaModel = nil,
+    batBattleArenaCenter = nil,
+    batBattleArenaCenterPosition = nil,
+    batBattleArenaRadius = nil,
+    batBattleArenaCharacter = nil,
+    batBattleArenaLastInsideAt = nil,
+    batBattleArenaLastDistance = nil,
+    batBattleArenaClinching = false,
+    batBattleArenaDepartureLatched = false,
     connectFourAwaitingFreshRound = false,
     connectFourRoundArmed = false,
     battleshipAwaitingFreshRound = false,
@@ -33212,7 +34841,7 @@ local function validBestOf(value)
     return nil
 end
 local function readRoundVoteEvidence()
-    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
     if type(utility) == "table" and utility.AutoChooseRounds == true then
         local configured = validBestOf(utility.RoundsToChoose)
         if configured ~= nil then
@@ -33403,7 +35032,7 @@ local function getRequestFunction()
 end
 local function fetchServerPage(requestFn, cursor)
     local url = "https://games.roblox.com/v1/games/"
-        .. tostring(TUFFHUB_HOP_PLACE_ID)
+        .. tostring(DROIDHUB_HOP_PLACE_ID)
         .. "/servers/Public?sortOrder=Desc&limit="
         .. tostring(SERVER_PAGE_LIMIT)
         .. "&excludeFullGames=true"
@@ -33700,7 +35329,7 @@ local function hotPotatoAutoLeaveAllowed(reason)
     then
         return true
     end
-    local handoffState = rawget(_G, "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
+    local handoffState = rawget(_G, "__DROIDHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
     if type(handoffState) ~= "table" or type(handoffState.AutoLeaveAllowed) ~= "function" then
         -- The leave-on-loss safeguard is the last line of defense. If the handoff
         -- controller is unexpectedly unavailable, do not disable the safeguard.
@@ -33710,8 +35339,46 @@ local function hotPotatoAutoLeaveAllowed(reason)
     if not ok then return true end
     return allowed == true
 end
+controller.DisconnectKickMinigameContext = function()
+    local gameId = currentGameId()
+    if gameId and SUPPORTED_GAMES[gameId] == true then
+        return true, gameId
+    end
+    -- Replication can disappear a fraction of a frame before Roblox surfaces a
+    -- connection failure. Preserve only an actual arena context; never use the
+    -- broader negotiation/queue/voting lifecycle as permission to kick.
+    if LocalPlayer:GetAttribute("InArena") == true
+        and tracker.gameId
+        and SUPPORTED_GAMES[tracker.gameId] == true
+    then
+        return true, tracker.gameId
+    end
+    return false, nil
+end
+
+controller.ArmImmediateHopAfterKick = function()
+    if not autoServerHopState or not autoServerHopState.Utility
+        or autoServerHopState.Utility.PauseScript == true
+    then
+        return false
+    end
+    autoServerHopState.RuntimeManualKickRequested = true
+    autoServerHopState.RuntimeManualServerHopRequested = true
+    autoServerHopState.RuntimeServerHopFreezeCFrame = nil
+    autoServerHopState.RuntimeServerHopHardFreeze = true
+    autoServerHopState.RuntimeServerHopPending = true
+    return true
+end
+
+controller.WakeImmediateHopAfterKick = function()
+    if not controller.ArmImmediateHopAfterKick() then return false end
+    local wake = autoServerHopState.RuntimeServerHopWake
+    if type(wake) == "function" then return pcall(wake) end
+    return false
+end
+
 local function performDisconnectAndTeleport(destinationServerId, reason)
-    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
     if type(utility) ~= "table"
         or utility.PauseScript == true
         or utility.PauseMinigameFeatures == true
@@ -33731,6 +35398,14 @@ local function performDisconnectAndTeleport(destinationServerId, reason)
     end
     local disconnectReason = type(requestedReason) == "string"
         and string.match(requestedReason, "^Disconnect:") ~= nil
+    if disconnectReason then
+        local inMinigame = controller.DisconnectKickMinigameContext()
+        if not inMinigame then
+            controller.pendingLossReason = nil
+            controller.kickIssuedAt = nil
+            return false
+        end
+    end
 
     -- Final/HardCutoff Hot Potato departures are possession-authoritative. A
     -- pending reason from an earlier frame is never sufficient by itself. Wait
@@ -33780,6 +35455,12 @@ local function performDisconnectAndTeleport(destinationServerId, reason)
         or (type(kickedGameId) == "string" and kickedGameId ~= "" and kickedGameId)
         or "Unknown"
     local kickLogSeparator = string.rep("\\", 10)
+    if not disconnectReason then
+        local logContext = rawget(_G, "__DROIDHUB_MINIGAME_LOG_CONTEXT")
+        if type(logContext) == "table" and type(logContext.RecordAdaptiveLoss) == "function" then
+            pcall(logContext.RecordAdaptiveLoss, kickedGameId)
+        end
+    end
     if utility.PauseScript ~= true
         and utility.PauseMinigameFeatures ~= true
         and not disconnectReason
@@ -33787,7 +35468,7 @@ local function performDisconnectAndTeleport(destinationServerId, reason)
         and controller.kickLogged ~= true
     then
         controller.kickLogged = true
-        local logContext = rawget(_G, "__TUFFHUB_MINIGAME_LOG_CONTEXT")
+        local logContext = rawget(_G, "__DROIDHUB_MINIGAME_LOG_CONTEXT")
         local printed = false
         if type(logContext) == "table" and type(logContext.PrintEvent) == "function" then
             local ok, result = pcall(logContext.PrintEvent, "KICKED", false, kickedGameId, nil)
@@ -33808,6 +35489,15 @@ local function performDisconnectAndTeleport(destinationServerId, reason)
         return false
     end
 
+    if disconnectReason then
+        -- Let Auto Reconnect distinguish DroidHub's own protective exit from a
+        -- real moderation/manual kick. The marker is intentionally short-lived.
+        rawset(_G, "__DROIDHUB_PROTECTIVE_RECONNECT_UNTIL", os.clock() + 12)
+        markIntentionalDeparture("ProtectiveDisconnect", 12)
+    else
+        markIntentionalDeparture("AutoLeave", 12)
+    end
+    controller.ArmImmediateHopAfterKick()
     local kickAccepted = pcall(function()
         LocalPlayer:Kick(disconnectReason and "Connection Lost" or "Lost Duel")
     end)
@@ -33826,16 +35516,18 @@ local function performDisconnectAndTeleport(destinationServerId, reason)
         end
         teleportAccepted = pcall(function()
             TeleportService:TeleportToPlaceInstance(
-                TUFFHUB_HOP_PLACE_ID,
+                DROIDHUB_HOP_PLACE_ID,
                 destinationServerId,
                 LocalPlayer
             )
         end)
     end
+    -- If the preselected destination could not be started, immediately hand
+    -- recovery to the normal server-hop selector. This is armed even after Kick,
+    -- so a Roblox 267/268 prompt cannot strand the client on an error screen.
+    if not teleportAccepted then controller.WakeImmediateHopAfterKick() end
     local accepted = kickAccepted or teleportAccepted
-    if not accepted then
-        controller.lastDepartureAttemptAt = 0
-    end
+    if not accepted then controller.lastDepartureAttemptAt = 0 end
     return accepted
 end
 executePendingLossIfReady = function()
@@ -33866,7 +35558,7 @@ scheduleUrgentDeparture = function()
     end)
 end
 local function latchClinchingLoss(reason)
-    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
     if type(utility) ~= "table"
         or utility.PauseScript == true
         or utility.PauseMinigameFeatures == true
@@ -33909,6 +35601,7 @@ local LOCAL_DEATH_ROUND_LOSS_GAMES = {
     ConnectFour = true,
     Battleship = true,
     FootballDraft = true,
+    BatBattle = true,
 }
 
 local function activeMinigameForLocalDeath()
@@ -33943,23 +35636,20 @@ local function activeMinigameForLocalDeath()
 end
 controller.DeathContextActive = function()
     local evidence = controller.deathDepartureEvidence
-    if not evidence or os.clock() - evidence.at > 0.90 then return false end
+    if not evidence or os.clock() - evidence.at > 3.0 then return false end
     local character = evidence.character
     if not character then return false end
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    if not humanoid or humanoid.Health > 0 then return false end
 
-    -- CharacterRemoving can detach the dead character before the Kick call executes.
-    -- A brand-new healthy character invalidates the evidence, but the absence of a new
-    -- character must not cancel a death that was already observed at Health <= 0.
+    -- Preserve a confirmed death through Roblox's character teardown. The Humanoid may
+    -- already be gone by the time the queued Kick commits; only a new healthy character
+    -- proves that this evidence is stale.
     local currentCharacter = LocalPlayer.Character
     if currentCharacter and currentCharacter ~= character then
         local currentHumanoid = currentCharacter:FindFirstChildOfClass("Humanoid")
-        if currentHumanoid and currentHumanoid.Health > 0 then
-            return false
-        end
+        if currentHumanoid and currentHumanoid.Health > 0 then return false end
     end
-    return true
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    return humanoid == nil or humanoid.Health <= 0
 end
 
 local function roundLossWouldClinchMatch(gameId)
@@ -34044,7 +35734,7 @@ local function refreshLocalDeathContext(gameId)
 
     local root = character:FindFirstChild("HumanoidRootPart")
     if root and LocalPlayer:GetAttribute("InArena") == true
-        and (gameId == "HotPotato" or gameId == "Knockout") then
+        and (gameId == "HotPotato" or gameId == "Knockout" or gameId == "BatBattle") then
         controller.arenaDeathEvidence = {
             character = character,
             gameId = gameId,
@@ -34372,7 +36062,7 @@ local function triggerHotPotatoArenaBoundaryDeparture(character)
     if controller.destroyed or tracker.hotPotatoArenaDepartureLatched == true then
         return false
     end
-    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
     if type(utility) ~= "table"
         or utility.PauseScript == true
         or utility.PauseMinigameFeatures == true
@@ -34467,7 +36157,7 @@ end
 
 local function triggerHotPotatoFatalFallDeparture(character)
     if controller.destroyed then return false end
-    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
     if type(utility) ~= "table"
         or utility.PauseScript == true
         or utility.PauseMinigameFeatures == true
@@ -34487,9 +36177,362 @@ local function triggerHotPotatoFatalFallDeparture(character)
     return true
 end
 
+-- Bat Battle arena-boundary and fatal-fall protection ------------------------------
+-- ArenaModule uses the same getTotalAlive() radius rule for Bat Battle. Cache the
+-- active arena while safely inside it, then leave before a clinching fall/death can
+-- be committed by the server even if ActiveMinigame starts tearing down.
+local function clearBatBattleArenaCache(clearIdentity)
+    tracker.batBattleArenaLastInsideAt = nil
+    tracker.batBattleArenaLastDistance = nil
+    tracker.batBattleArenaClinching = false
+    tracker.batBattleArenaDepartureLatched = false
+    if clearIdentity then
+        tracker.batBattleArenaModel = nil
+        tracker.batBattleArenaCenter = nil
+        tracker.batBattleArenaCenterPosition = nil
+        tracker.batBattleArenaRadius = nil
+        tracker.batBattleArenaCharacter = nil
+    end
+end
+
+local function refreshBatBattleArenaCache(character)
+    character = character or LocalPlayer.Character
+    if not character then return nil, nil, nil end
+    local gameId = currentGameId() or tracker.gameId
+    if gameId ~= "BatBattle" then return nil, nil, nil end
+
+    local position = characterPivotPosition(character)
+    if not position then return nil, nil, nil end
+
+    local model = tracker.batBattleArenaModel
+    local center = tracker.batBattleArenaCenter
+    local radius = tonumber(tracker.batBattleArenaRadius)
+    if model and center and model.Parent == workspace and center.Parent == model
+        and center:IsA("BasePart") and radius and radius > 0
+    then
+        tracker.batBattleArenaCenterPosition = center.Position
+        tracker.batBattleArenaCharacter = character
+        local distance = (position - center.Position).Magnitude
+        tracker.batBattleArenaLastDistance = distance
+        if distance < radius then
+            tracker.batBattleArenaLastInsideAt = os.clock()
+            if localDeathWouldClinchMatch("BatBattle") then
+                tracker.batBattleArenaClinching = true
+            end
+        end
+        return center.Position, radius, distance
+    end
+
+    -- ArenaModule parents every active arena clone directly to workspace. If we
+    -- are already outside because the script bound during the fall, identify the
+    -- correct duel from the opponent, who is still inside that same arena.
+    local opponent = currentOpponent() or tracker.cachedOpponent
+    local opponentPosition = nil
+    if typeof(opponent) == "Instance" and opponent:IsA("Player") and opponent ~= LocalPlayer then
+        opponentPosition = characterPivotPosition(opponent.Character)
+    end
+
+    local bestModel, bestCenter, bestRadius, bestDistance, bestRatio, bestLocalInside
+    for _, candidate in ipairs(workspace:GetChildren()) do
+        if candidate:IsA("Model") then
+            local candidateCenter, candidateRadius = hotPotatoArenaCandidate(candidate)
+            if candidateCenter and candidateRadius then
+                local distance = (position - candidateCenter.Position).Magnitude
+                local localInside = distance < candidateRadius
+                local opponentDistance = opponentPosition
+                    and (opponentPosition - candidateCenter.Position).Magnitude
+                    or math.huge
+                local opponentInside = opponentDistance < candidateRadius
+                if localInside or opponentInside then
+                    local ratio = localInside
+                        and (distance / candidateRadius)
+                        or (1 + opponentDistance / candidateRadius)
+                    if bestRatio == nil or ratio < bestRatio then
+                        bestModel = candidate
+                        bestCenter = candidateCenter
+                        bestRadius = candidateRadius
+                        bestDistance = distance
+                        bestRatio = ratio
+                        bestLocalInside = localInside
+                    end
+                end
+            end
+        end
+    end
+
+    if bestModel then
+        tracker.batBattleArenaModel = bestModel
+        tracker.batBattleArenaCenter = bestCenter
+        tracker.batBattleArenaCenterPosition = bestCenter.Position
+        tracker.batBattleArenaRadius = bestRadius
+        tracker.batBattleArenaCharacter = character
+        if bestLocalInside then
+            tracker.batBattleArenaLastInsideAt = os.clock()
+        end
+        tracker.batBattleArenaLastDistance = bestDistance
+        if localDeathWouldClinchMatch("BatBattle") then
+            tracker.batBattleArenaClinching = true
+        end
+        return bestCenter.Position, bestRadius, bestDistance
+    end
+
+    -- Once positively identified, keep the immutable center/radius for the outgoing
+    -- fall even if the model starts tearing down in the same frame. The short age
+    -- guard prevents stale data from leaking into a later round.
+    local cachedPosition = tracker.batBattleArenaCenterPosition
+    local cachedRadius = tonumber(tracker.batBattleArenaRadius)
+    local lastInsideAt = tonumber(tracker.batBattleArenaLastInsideAt)
+    if tracker.batBattleArenaCharacter == character
+        and typeof(cachedPosition) == "Vector3"
+        and cachedRadius and cachedRadius > 0
+        and lastInsideAt and os.clock() - lastInsideAt <= 1.25
+    then
+        local distance = (position - cachedPosition).Magnitude
+        tracker.batBattleArenaLastDistance = distance
+        return cachedPosition, cachedRadius, distance
+    end
+    return nil, nil, nil
+end
+
+local function batBattleClinchingContext(character)
+    if not character then return false end
+    if tracker.batBattleArenaCharacter == character
+        and tracker.batBattleArenaClinching == true
+    then
+        return true
+    end
+    local now = os.clock()
+    if tracker.localDeathContextGameId == "BatBattle"
+        and tracker.localDeathContextCharacter == character
+        and tracker.localDeathContextClinching == true
+        and tonumber(tracker.localDeathContextUpdatedAt) ~= nil
+        and now - tonumber(tracker.localDeathContextUpdatedAt) <= LOCAL_DEATH_CONTEXT_MAX_AGE
+    then
+        return true
+    end
+    return (currentGameId() == "BatBattle" or tracker.gameId == "BatBattle")
+        and localDeathWouldClinchMatch("BatBattle")
+end
+
+local function batBattleArenaBoundaryWouldClinch(character)
+    character = character or LocalPlayer.Character
+    if not character then return false end
+    -- ArenaModule clears InArena before returning a player to the lobby. Requiring the
+    -- live arena attribute prevents a normal post-round teleport from looking like an
+    -- out-of-bounds elimination relative to the cached arena center.
+    if LocalPlayer:GetAttribute("InArena") ~= true then return false end
+    if character ~= LocalPlayer.Character
+        and tracker.batBattleArenaCharacter ~= character
+        and tracker.localDeathContextCharacter ~= character
+    then
+        return false
+    end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local root = character:FindFirstChild("HumanoidRootPart")
+    if not humanoid or humanoid.Health <= 0 or not root or not root:IsA("BasePart") then
+        return false
+    end
+
+    local centerPosition, radius, distance = refreshBatBattleArenaCache(character)
+    if typeof(centerPosition) ~= "Vector3" or not radius or not distance then
+        return false
+    end
+    if not batBattleClinchingContext(character) then
+        return false
+    end
+
+    -- InArena is set just before ArenaModule performs its delayed spawn pivot. Do not
+    -- treat that brief pre-teleport position as a fall. Once we have positively seen the
+    -- character inside this arena, the cache is authoritative; otherwise respect the
+    -- game's own TeleportGraceUntil window before using opponent-based recovery.
+    local lastInsideAt = tonumber(tracker.batBattleArenaLastInsideAt)
+    local recentlyInside = lastInsideAt ~= nil and os.clock() - lastInsideAt <= 1.25
+    if not recentlyInside then
+        local graceUntil = tonumber(LocalPlayer:GetAttribute("TeleportGraceUntil"))
+        if graceUntil ~= nil and workspace:GetServerTimeNow() <= graceUntil then
+            return false
+        end
+    end
+
+    -- This is the server's exact elimination boundary. No velocity inference is needed
+    -- once crossed: ArenaModule's next getTotalAlive() pass will exclude the player.
+    if distance >= radius then
+        return true
+    end
+
+    -- Fire slightly before the exact boundary only for a clearly irreversible outward
+    -- fall. The projection compensates for replication/ping and the server's independent
+    -- alive-check cadence without kicking for ordinary movement on the platform.
+    local position = characterPivotPosition(character)
+    if not position then return false end
+    local okVelocity, velocity = pcall(function()
+        return root.AssemblyLinearVelocity
+    end)
+    if not okVelocity or typeof(velocity) ~= "Vector3" then return false end
+    local radial = position - centerPosition
+    local radialMagnitude = radial.Magnitude
+    local outwardSpeed = 0
+    if radialMagnitude > 0.001 then
+        outwardSpeed = radial.Unit:Dot(velocity)
+    end
+    if velocity.Y >= -4 or outwardSpeed <= 2 then
+        return false
+    end
+    -- max(GetExtentsSize()) is intentionally much larger than the arena's ordinary
+    -- playable half-extents. Only predict ahead once the character is already near the
+    -- outer survival shell; this avoids treating normal jumps or drops between the Hot
+    -- Potato map's internal platforms as fatal falls.
+    if distance < radius * 0.85 then
+        return false
+    end
+
+    local pingSeconds = 0.08
+    pcall(function()
+        local item = autoServerHopState.RuntimeStatsService.Network.ServerStatsItem["Data Ping"]
+        local pingMs = item and tonumber(item:GetValue())
+        if pingMs then
+            pingSeconds = math.clamp(pingMs / 1000, 0.015, 2.0)
+        end
+    end)
+    local leadSeconds = math.clamp(0.34 + pingSeconds * 0.65, 0.34, 0.85)
+    local gravity = math.max(0, tonumber(workspace.Gravity) or 196.2)
+    local projected = position
+        + velocity * leadSeconds
+        + Vector3.new(0, -0.5 * gravity * leadSeconds * leadSeconds, 0)
+    local projectedDistance = (projected - centerPosition).Magnitude
+    local nearBoundaryMargin = math.clamp(
+        4 + math.max(0, outwardSpeed) * 0.06,
+        4,
+        14
+    )
+
+    return projectedDistance >= radius
+        or distance >= radius - nearBoundaryMargin
+end
+
+local function triggerBatBattleArenaBoundaryDeparture(character)
+    if controller.destroyed or tracker.batBattleArenaDepartureLatched == true then
+        return false
+    end
+    local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
+    if type(utility) ~= "table"
+        or utility.PauseScript == true
+        or utility.PauseMinigameFeatures == true
+        or utility.LeaveWhenAboutToLose ~= true
+    then
+        return false
+    end
+
+    character = character or LocalPlayer.Character
+    if not batBattleArenaBoundaryWouldClinch(character) then return false end
+
+    tracker.batBattleArenaDepartureLatched = true
+    local reason = "BatBattle:ArenaBoundary"
+    controller.pendingLossReason = reason
+    controller.triggerObservedAt = controller.triggerObservedAt or os.clock()
+    performDisconnectAndTeleport(controller.destinationServerId, reason)
+    scheduleUrgentDeparture()
+    return true
+end
+
+-- Bat Battle fatal-fall protection --------------------------------------------------
+-- Roblox may destroy character parts at FallenPartsDestroyHeight before the local
+-- Humanoid reports Health <= 0. In a clinching Bat Battle round, detect that
+-- irreversible downward crossing shortly before the destroy plane so autoleave can
+-- commit while the character and match context still exist. Earlier series rounds
+-- are never protected by this path.
+local function batBattleFatalFallLeadSeconds()
+    local leadSeconds = 0.22
+    pcall(function()
+        local item = autoServerHopState.RuntimeStatsService.Network.ServerStatsItem["Data Ping"]
+        local pingMs = item and tonumber(item:GetValue())
+        if pingMs then
+            leadSeconds = math.clamp(
+                0.20 + (pingMs / 1000) * 0.75,
+                0.20,
+                0.50
+            )
+        end
+    end)
+    return leadSeconds
+end
+
+local function batBattleFatalFallWouldClinch(character)
+    if not character then return false end
+    if character ~= LocalPlayer.Character
+        and tracker.localDeathContextCharacter ~= character
+    then
+        return false
+    end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local root = character:FindFirstChild("HumanoidRootPart")
+    if not humanoid or humanoid.Health <= 0 or not root or not root:IsA("BasePart") then
+        return false
+    end
+
+    local now = os.clock()
+    local cachedClinching = tracker.localDeathContextGameId == "BatBattle"
+        and tracker.localDeathContextCharacter == character
+        and tracker.localDeathContextClinching == true
+        and tonumber(tracker.localDeathContextUpdatedAt) ~= nil
+        and now - tonumber(tracker.localDeathContextUpdatedAt) <= LOCAL_DEATH_CONTEXT_MAX_AGE
+
+    local liveGame = currentGameId()
+    if liveGame ~= nil and liveGame ~= "BatBattle" then return false end
+    if liveGame ~= "BatBattle" and not cachedClinching then return false end
+    if not cachedClinching and not localDeathWouldClinchMatch("BatBattle") then
+        return false
+    end
+
+    local destroyHeight = tonumber(workspace.FallenPartsDestroyHeight)
+    if destroyHeight == nil or destroyHeight ~= destroyHeight then return false end
+
+    local velocityY = tonumber(root.AssemblyLinearVelocity.Y) or 0
+    if velocityY >= -2 then return false end
+
+    local leadSeconds = batBattleFatalFallLeadSeconds()
+    local gravity = math.max(0, tonumber(workspace.Gravity) or 196.2)
+    local currentY = root.Position.Y
+    local projectedY = currentY
+        + velocityY * leadSeconds
+        - 0.5 * gravity * leadSeconds * leadSeconds
+    local safetyMargin = math.clamp(
+        math.max(48, -velocityY * leadSeconds),
+        48,
+        160
+    )
+
+    return currentY <= destroyHeight + safetyMargin
+        or projectedY <= destroyHeight + 8
+end
+
+local function triggerBatBattleFatalFallDeparture(character)
+    if controller.destroyed then return false end
+    local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
+    if type(utility) ~= "table"
+        or utility.PauseScript == true
+        or utility.PauseMinigameFeatures == true
+        or utility.LeaveWhenAboutToLose ~= true
+    then
+        return false
+    end
+
+    character = character or LocalPlayer.Character
+    if not batBattleFatalFallWouldClinch(character) then return false end
+
+    local reason = "BatBattle:FatalFall"
+    controller.pendingLossReason = reason
+    controller.triggerObservedAt = controller.triggerObservedAt or os.clock()
+    performDisconnectAndTeleport(controller.destinationServerId, reason)
+    scheduleUrgentDeparture()
+    return true
+end
+
 local function triggerImmediateLocalDeathDeparture(character)
     if controller.destroyed then return false end
-    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
     if type(utility) ~= "table"
         or utility.PauseScript == true
         or utility.PauseMinigameFeatures == true
@@ -34588,6 +36631,7 @@ addConnection(LocalPlayer.CharacterAdded:Connect(function(character)
     tracker.localDeathContextClinching = false
     tracker.localDeathContextUpdatedAt = nil
     clearHotPotatoArenaCache(true)
+    clearBatBattleArenaCache(true)
     task.defer(bindImmediateLocalDeath, character)
 end))
 
@@ -34601,6 +36645,8 @@ addConnection(LocalPlayer:GetAttributeChangedSignal("InArena"):Connect(function(
             refreshLocalDeathContext(gameId)
             if gameId == "HotPotato" then
                 refreshHotPotatoArenaCache(LocalPlayer.Character)
+            elseif gameId == "BatBattle" then
+                refreshBatBattleArenaCache(LocalPlayer.Character)
             end
         end
     end
@@ -34616,8 +36662,11 @@ addConnection(LocalPlayer.CharacterRemoving:Connect(function(character)
     else
         -- ArenaModule can eliminate an out-of-bounds player while Health is still > 0.
         -- Re-run the exact arena-boundary check before falling back to destroy-height.
-        if not triggerHotPotatoArenaBoundaryDeparture(character) then
-            triggerHotPotatoFatalFallDeparture(character)
+        if not triggerHotPotatoArenaBoundaryDeparture(character)
+            and not triggerBatBattleArenaBoundaryDeparture(character)
+            and not triggerHotPotatoFatalFallDeparture(character)
+        then
+            triggerBatBattleFatalFallDeparture(character)
         end
     end
 end))
@@ -34630,6 +36679,8 @@ if LocalPlayer.Character then
             refreshLocalDeathContext(gameId)
             if gameId == "HotPotato" then
                 refreshHotPotatoArenaCache(LocalPlayer.Character)
+            elseif gameId == "BatBattle" then
+                refreshBatBattleArenaCache(LocalPlayer.Character)
             end
         end
     end
@@ -34711,7 +36762,7 @@ local function evaluateArenaEntryFailure()
     if controller.destroyed then
         return
     end
-    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
     if type(utility) ~= "table"
         or utility.PauseScript == true
         or utility.PauseMinigameFeatures == true
@@ -34888,7 +36939,7 @@ end
 
 local function forceHotPotatoEmergencyLeave(reason, tool, expiresAt)
     if not hotPotatoTerminalContextActive() then return false end
-    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
     if controller.destroyed
         or type(utility) ~= "table"
         or utility.LeaveWhenAboutToLose ~= true
@@ -34935,7 +36986,7 @@ local function forceHotPotatoEmergencyLeave(reason, tool, expiresAt)
     tracker.hotPotatoHardFailsafeExpiresAt = finalExpiresAt
     tracker.hotPotatoHardFailsafeClinching = true
 
-    local handoffState = rawget(_G, "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
+    local handoffState = rawget(_G, "__DROIDHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
     if type(handoffState) == "table" then
         if type(handoffState.SetFinalFallbackWindow) == "function" then
             pcall(
@@ -34965,7 +37016,7 @@ local function hotPotatoCriticalAcquire(tool)
     if not hotPotatoTerminalContextActive() then
         return false
     end
-    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
     if type(utility) ~= "table"
         or utility.LeaveWhenAboutToLose ~= true
         or utility.PauseScript == true
@@ -35053,7 +37104,7 @@ local function hotPotatoCriticalAcquire(tool)
     local autoplayEnabled = utility.AutoPlayMaster == true
         and type(minigameAutoplayState) == "table"
         and minigameAutoplayState.HotPotato == true
-    local handoffState = rawget(_G, "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
+    local handoffState = rawget(_G, "__DROIDHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
     if autoplayEnabled and type(handoffState) == "table" then
         if type(handoffState.HandoffNow) == "function" then
             pcall(handoffState.HandoffNow, false, nil, nil)
@@ -35144,7 +37195,7 @@ local function hotPotatoCriticalAcquire(tool)
     end
     return false
 end
-rawset(_G, "__TUFFHUB_HOT_POTATO_CRITICAL_ACQUIRE", hotPotatoCriticalAcquire)
+rawset(_G, "__DROIDHUB_HOT_POTATO_CRITICAL_ACQUIRE", hotPotatoCriticalAcquire)
 
 local function isOpponentPlayer(value, opponent)
     if typeof(value) ~= "Instance" or not value:IsA("Player") then
@@ -35167,7 +37218,7 @@ end
 local function resetTracker(gameId)
     local previousGameId = tracker.gameId
     if previousGameId == "HotPotato" or gameId == "HotPotato" then
-        local handoffState = rawget(_G, "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
+        local handoffState = rawget(_G, "__DROIDHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
         if type(handoffState) == "table" and type(handoffState.ResetRound) == "function" then
             pcall(handoffState.ResetRound, gameId == "HotPotato" and currentOpponent() or nil)
         end
@@ -35261,6 +37312,7 @@ local function resetTracker(gameId)
     tracker.hotPotatoHardFailsafeExpiresAt = nil
     tracker.hotPotatoHardFailsafeClinching = false
     clearHotPotatoArenaCache(true)
+    clearBatBattleArenaCache(true)
     tracker.connectFourAwaitingFreshRound = false
     tracker.connectFourRoundArmed = false
     tracker.battleshipAwaitingFreshRound = false
@@ -36908,7 +38960,7 @@ local function processHotPotato(s)
             tracker.hotPotatoTimerChangedAt = now
         end
     end
-    local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+    local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
     local autoLeaveEnabled = type(utility) == "table"
         and utility.LeaveWhenAboutToLose == true
         and utility.PauseScript ~= true
@@ -36945,7 +38997,7 @@ local function processHotPotato(s)
         if timerValue > 1 then
             serverExpiryAt = math.max(serverExpiryAt, now + 0.92)
         end
-        local handoffState = rawget(_G, "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
+        local handoffState = rawget(_G, "__DROIDHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
         if type(handoffState) == "table" and type(handoffState.SetOpponent) == "function" then
             pcall(handoffState.SetOpponent, opponent)
         end
@@ -37095,7 +39147,7 @@ local function processHotPotato(s)
                     RunService.Heartbeat:Wait()
                 end
 
-                local liveHandoffState = rawget(_G, "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
+                local liveHandoffState = rawget(_G, "__DROIDHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
                 while not controller.destroyed
                     and tracker.hotPotatoFinalScheduleId == scheduleId
                     and hotPotatoTool(LocalPlayer.Character) ~= nil
@@ -37122,7 +39174,7 @@ local function processHotPotato(s)
                     end
                     if not scheduledHandoff then
                         RunService.Heartbeat:Wait()
-                        liveHandoffState = rawget(_G, "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
+                        liveHandoffState = rawget(_G, "__DROIDHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
                     end
                 end
 
@@ -37134,7 +39186,7 @@ local function processHotPotato(s)
                 while not controller.destroyed
                     and tracker.hotPotatoFinalScheduleId == scheduleId
                 do
-                    liveHandoffState = rawget(_G, "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
+                    liveHandoffState = rawget(_G, "__DROIDHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
                     if type(liveHandoffState) == "table"
                         and type(liveHandoffState.TransferConfirmedAfter) == "function"
                     then
@@ -37168,7 +39220,7 @@ local function processHotPotato(s)
                 then
                     return
                 end
-                local liveUtility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+                local liveUtility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
                 if type(liveUtility) ~= "table"
                     or liveUtility.LeaveWhenAboutToLose ~= true
                     or liveUtility.PauseScript == true
@@ -37219,7 +39271,7 @@ local function processHotPotato(s)
             tracker.hotPotatoHardFailsafeAt = nil
             tracker.hotPotatoHardFailsafeExpiresAt = nil
             tracker.hotPotatoHardFailsafeClinching = false
-            local handoffState = rawget(_G, "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
+            local handoffState = rawget(_G, "__DROIDHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
             if type(handoffState) == "table" then
                 if type(handoffState.ClearFinalFallbackWindow) == "function" then
                     pcall(handoffState.ClearFinalFallbackWindow)
@@ -37459,7 +39511,7 @@ evaluateState = function()
             tracker.hotPotatoArenaClinching = false
             tracker.hotPotatoArenaDepartureLatched = false
 
-            local handoffState = rawget(_G, "__TUFFHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
+            local handoffState = rawget(_G, "__DROIDHUB_HOT_POTATO_Q_HANDLE_HANDOFF_V2")
             if type(handoffState) == "table" and type(handoffState.ResetRound) == "function" then
                 pcall(handoffState.ResetRound, opponent)
             end
@@ -38121,15 +40173,26 @@ local function consumeQueuedReplicatorSignals()
 end
 do
     local GuiServiceLOSS = game:GetService("GuiService")
+    local StatsLOSS = game:GetService("Stats")
     local disconnectHandledMessageLOSS = nil
+    local disconnectGuardTriggeredLOSS = false
+    local nextNetworkSampleAtLOSS = 0
+    local baselinePingLOSS = nil
+    local warningStartedAtLOSS = nil
+    local missingPingStartedAtLOSS = nil
+    local lowReceiveStartedAtLOSS = nil
+    local severeSamplesLOSS = 0
+
     local function isConnectionLossMessageLOSS(message)
+        if intentionalDepartureActive() then return false end
         if type(message) ~= "string" or message == "" then return false end
         local text = string.lower(message)
         if string.find(text, "kicked", 1, true)
             or string.find(text, "error code: 267", 1, true)
             or string.find(text, "error code: 268", 1, true)
         then
-            return false
+            local untilAt = tonumber(rawget(_G, "__DROIDHUB_PROTECTIVE_RECONNECT_UNTIL"))
+            return untilAt ~= nil and os.clock() <= untilAt
         end
         return string.find(text, "error code: 277", 1, true) ~= nil
             or string.find(text, "error code: 279", 1, true) ~= nil
@@ -38145,57 +40208,252 @@ do
                 and string.find(text, "same account", 1, true) == nil
             )
     end
+
+    local function logDisconnectLOSS()
+        local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
+        if type(utility) ~= "table"
+            or utility.PauseMinigameFeatures == true
+            or utility.PrintDisconnectsToTerminal ~= true
+            or controller.disconnectLogged == true
+        then return end
+        controller.disconnectLogged = true
+        local logContext = rawget(_G, "__DROIDHUB_MINIGAME_LOG_CONTEXT")
+        local gameId = currentGameId() or tracker.gameId
+        local printed = false
+        if type(logContext) == "table" and type(logContext.PrintEvent) == "function" then
+            local ok, result = pcall(logContext.PrintEvent, "DISCONNECT", false, gameId, nil)
+            printed = ok and result == true
+        end
+        if not printed then
+            print("DISCONNECT | Game: " .. tostring(KICK_GAME_DISPLAY_NAMES[gameId] or gameId or "Unknown") .. " | Tokens: 0")
+            print(string.rep("\\", 10))
+        end
+    end
+
+    local function disconnectRiskActiveLOSS()
+        if intentionalDepartureActive() then return false end
+        local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
+        if type(utility) ~= "table"
+            or utility.LeaveWhenAboutToLose ~= true
+            or utility.PauseScript == true
+            or utility.PauseMinigameFeatures == true
+        then return false end
+        local active = controller.DisconnectKickMinigameContext()
+        return active == true
+    end
+
+    local function triggerDisconnectEscapeLOSS(reason)
+        if controller.destroyed or disconnectGuardTriggeredLOSS then return false end
+        local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
+        if type(utility) ~= "table"
+            or utility.LeaveWhenAboutToLose ~= true
+            or utility.PauseScript == true
+            or utility.PauseMinigameFeatures == true
+            or not disconnectRiskActiveLOSS()
+        then return false end
+        disconnectGuardTriggeredLOSS = true
+        logDisconnectLOSS()
+        controller.pendingLossReason = "Disconnect:" .. tostring(reason or "ConnectionRisk")
+        controller.triggerObservedAt = controller.triggerObservedAt or os.clock()
+        performDisconnectAndTeleport(controller.destinationServerId, controller.pendingLossReason)
+        scheduleUrgentDeparture()
+        return true
+    end
+
+    local function parseStatNumberLOSS(value)
+        if value == nil then return nil end
+        local text = tostring(value)
+        local number = string.match(text, "[-+]?%d+%.?%d*")
+        return tonumber(number)
+    end
+
+    local function networkStatLOSS(name)
+        local value = nil
+        pcall(function()
+            local network = StatsLOSS:FindFirstChild("Network")
+            local serverStats = network and network:FindFirstChild("ServerStatsItem")
+            local item = serverStats and serverStats:FindFirstChild(name)
+            if item then value = parseStatNumberLOSS(item:GetValueString()) end
+        end)
+        return value
+    end
+
+    local function pingSecondsLOSS()
+        local direct = nil
+        pcall(function()
+            local value = LocalPlayer:GetNetworkPing()
+            if type(value) == "number" and value >= 0 and value < 60 then direct = value end
+        end)
+        local statMs = networkStatLOSS("Data Ping")
+        local stat = statMs and statMs >= 0 and statMs < 60000 and (statMs / 1000) or nil
+        if direct and stat then return math.max(direct, stat) end
+        return direct or stat
+    end
+
+    local function receiveKbpsLOSS()
+        return networkStatLOSS("Data Receive Kbps")
+            or networkStatLOSS("Data Receive KB/s")
+            or networkStatLOSS("Data Receive")
+    end
+
+    -- Concrete Roblox connection-loss UI remains the strongest post-failure lane.
     addConnection(GuiServiceLOSS.ErrorMessageChanged:Connect(function(message)
         if controller.destroyed or not isConnectionLossMessageLOSS(message) then return end
         if disconnectHandledMessageLOSS == message then return end
         disconnectHandledMessageLOSS = message
-        local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+        local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
         if type(utility) ~= "table" or utility.PauseScript == true then return end
+        triggerDisconnectEscapeLOSS("ConnectionLoss")
+    end))
 
-        if utility.PauseMinigameFeatures ~= true
-            and utility.PrintDisconnectsToTerminal == true
-            and controller.disconnectLogged ~= true
-        then
-            controller.disconnectLogged = true
-            local logContext = rawget(_G, "__TUFFHUB_MINIGAME_LOG_CONTEXT")
-            local gameId = currentGameId() or tracker.gameId
-            local printed = false
-            if type(logContext) == "table" and type(logContext.PrintEvent) == "function" then
-                local ok, result = pcall(logContext.PrintEvent, "DISCONNECT", false, gameId, nil)
-                printed = ok and result == true
+    -- NetworkClient can remove/fail its ClientReplicator before ErrorMessageChanged
+    -- reaches the UI. Treat that as an immediate connection-loss signal.
+    pcall(function()
+        local NetworkClientLOSS = game:GetService("NetworkClient")
+        addConnection(NetworkClientLOSS.ChildRemoved:Connect(function(child)
+            if controller.destroyed or not disconnectRiskActiveLOSS() then return end
+            local name = tostring(child and child.Name or "")
+            local className = ""
+            pcall(function() className = child.ClassName end)
+            if string.find(string.lower(name), "replicator", 1, true)
+                or string.find(string.lower(className), "replicator", 1, true)
+            then
+                triggerDisconnectEscapeLOSS("ReplicatorRemoved")
             end
-            if not printed then
-                print("DISCONNECT | Game: " .. tostring(KICK_GAME_DISPLAY_NAMES[gameId] or gameId or "Unknown") .. " | Tokens: 0")
-                print(string.rep("\\", 10))
-            end
+        end))
+        local okSignal, signal = pcall(function() return NetworkClientLOSS.ConnectionFailed end)
+        if okSignal and typeof(signal) == "RBXScriptSignal" then
+            addConnection(signal:Connect(function()
+                if disconnectRiskActiveLOSS() then
+                    triggerDisconnectEscapeLOSS("ConnectionFailed")
+                end
+            end))
+        end
+    end)
+
+    -- Pre-disconnect watchdog. There is no Roblox API that can predict an
+    -- instantaneous cable/Wi-Fi loss with certainty, so this intentionally uses
+    -- several independent warning lanes and is active only while a wager/minigame
+    -- can cost inventory. Ordinary latency spikes do not satisfy the guard by
+    -- themselves; a severe spike or sustained degraded health is required.
+    addConnection(RunService.Heartbeat:Connect(function()
+        if controller.destroyed or disconnectGuardTriggeredLOSS then return end
+        local now = os.clock()
+        if now < nextNetworkSampleAtLOSS then return end
+        nextNetworkSampleAtLOSS = now + 0.10
+        if not disconnectRiskActiveLOSS() then
+            warningStartedAtLOSS = nil
+            missingPingStartedAtLOSS = nil
+            lowReceiveStartedAtLOSS = nil
+            severeSamplesLOSS = 0
+            return
         end
 
-        -- Leave When About To Lose also acts as a disconnect escape. This is driven by
-        -- Roblox's concrete connection-loss error signal, not by ping-spike guessing.
-        if utility.LeaveWhenAboutToLose == true
-            and utility.PauseMinigameFeatures ~= true
-        then
-            controller.pendingLossReason = "Disconnect:ConnectionLoss"
-            controller.triggerObservedAt = controller.triggerObservedAt or os.clock()
-            performDisconnectAndTeleport(controller.destinationServerId, controller.pendingLossReason)
-            scheduleUrgentDeparture()
+        local ping = pingSecondsLOSS()
+        local receive = receiveKbpsLOSS()
+        if ping then
+            missingPingStartedAtLOSS = nil
+            if baselinePingLOSS == nil then
+                baselinePingLOSS = math.clamp(ping, 0.015, 0.75)
+            elseif ping < math.max(0.60, baselinePingLOSS * 2.0) then
+                baselinePingLOSS = baselinePingLOSS * 0.94 + math.clamp(ping, 0.015, 0.75) * 0.06
+            end
+            local baseline = math.max(0.03, baselinePingLOSS or 0.10)
+            local warningThreshold = math.max(0.90, baseline * 4.5)
+            local severeThreshold = math.max(1.80, baseline * 7.0)
+
+            if ping >= 3.0 then
+                triggerDisconnectEscapeLOSS("CriticalPing")
+                return
+            end
+            if ping >= severeThreshold then
+                severeSamplesLOSS += 1
+            else
+                severeSamplesLOSS = 0
+            end
+            if severeSamplesLOSS >= 2 then
+                triggerDisconnectEscapeLOSS("SeverePing")
+                return
+            end
+
+            if ping >= warningThreshold then
+                warningStartedAtLOSS = warningStartedAtLOSS or now
+            else
+                warningStartedAtLOSS = nil
+            end
+            if receive ~= nil and receive <= 0.05 and ping >= warningThreshold then
+                lowReceiveStartedAtLOSS = lowReceiveStartedAtLOSS or now
+            else
+                lowReceiveStartedAtLOSS = nil
+            end
+            if warningStartedAtLOSS
+                and now - warningStartedAtLOSS >= 0.75
+                and lowReceiveStartedAtLOSS
+                and now - lowReceiveStartedAtLOSS >= 0.35
+            then
+                triggerDisconnectEscapeLOSS("NetworkStall")
+                return
+            end
+        else
+            severeSamplesLOSS = 0
+            warningStartedAtLOSS = nil
+            missingPingStartedAtLOSS = missingPingStartedAtLOSS or now
+            if now - missingPingStartedAtLOSS >= 0.45 then
+                triggerDisconnectEscapeLOSS("PingUnavailable")
+                return
+            end
         end
     end))
 end
 addConnection(TeleportService.TeleportInitFailed:Connect(function(player)
     if player == LocalPlayer and controller.pendingLossReason ~= nil then
+        clearIntentionalDeparture()
         controller.triggered = false
         controller.lastDepartureAttemptAt = 0
+        controller.WakeImmediateHopAfterKick()
     end
 end))
--- One gated Heartbeat is enough for urgent departure and fallback evaluation.
--- Direct replicator listeners still latch terminal states immediately; this
--- avoids four separate per-frame callbacks and full-state reevaluation every frame.
+-- Redundant pre-physics lane for irreversible local loss signals. It intentionally
+-- checks only death and the two physical arena-loss games; the full game-state logic
+-- remains event-driven/Heartbeat-based to keep this path extremely cheap.
+do
+    local okPre, preSignal = pcall(function() return RunService.PreSimulation end)
+    if okPre and preSignal then
+        addConnection(preSignal:Connect(function()
+            if controller.destroyed then return end
+            local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
+            if type(utility) ~= "table"
+                or utility.LeaveWhenAboutToLose ~= true
+                or utility.PauseScript == true
+                or utility.PauseMinigameFeatures == true
+            then return end
+            local character = LocalPlayer.Character
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            if humanoid and humanoid.Health <= 0 then
+                triggerImmediateLocalDeathDeparture(character)
+                return
+            end
+            local gameId = currentGameId() or tracker.gameId
+            if gameId == "HotPotato" then
+                if not triggerHotPotatoArenaBoundaryDeparture(character) then
+                    triggerHotPotatoFatalFallDeparture(character)
+                end
+            elseif gameId == "BatBattle" then
+                if not triggerBatBattleArenaBoundaryDeparture(character) then
+                    triggerBatBattleFatalFallDeparture(character)
+                end
+            end
+        end))
+    end
+end
+
+-- One gated Heartbeat handles urgent departure and fallback evaluation. Direct
+-- replicator listeners still latch terminal game-state losses immediately.
 do
     local nextFallbackEvaluationAt = 0
     addConnection(RunService.Heartbeat:Connect(function()
         if controller.destroyed then return end
-        local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+        local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
         local leaveEnabled = type(utility) == "table"
             and utility.LeaveWhenAboutToLose == true
             and utility.PauseScript ~= true
@@ -38220,11 +40478,20 @@ do
             if humanoid and humanoid.Health <= 0 then
                 triggerImmediateLocalDeathDeparture(character)
             elseif triggerHotPotatoArenaBoundaryDeparture(character) then
-                -- Exact server arena-loss boundary handled synchronously.
-            elseif not triggerHotPotatoFatalFallDeparture(character) then
-                refreshLocalDeathContext(currentGameId())
-                if currentGameId() == "HotPotato" or tracker.gameId == "HotPotato" then
+                -- Exact Hot Potato server arena-loss boundary handled synchronously.
+            elseif triggerBatBattleArenaBoundaryDeparture(character) then
+                -- Exact Bat Battle server arena-loss boundary handled synchronously.
+            elseif triggerHotPotatoFatalFallDeparture(character) then
+                -- Hot Potato destroy-height fallback handled synchronously.
+            elseif triggerBatBattleFatalFallDeparture(character) then
+                -- Bat Battle destroy-height fallback handled synchronously.
+            else
+                local liveGameId = currentGameId()
+                refreshLocalDeathContext(liveGameId)
+                if liveGameId == "HotPotato" or tracker.gameId == "HotPotato" then
                     refreshHotPotatoArenaCache(character)
+                elseif liveGameId == "BatBattle" or tracker.gameId == "BatBattle" then
+                    refreshBatBattleArenaCache(character)
                 end
             end
             local localTool = hotPotatoTool(LocalPlayer.Character)
@@ -38318,7 +40585,7 @@ task.spawn(function()
     local lastActiveGame = nil
     local nextRefreshAt = 0
     while not controller.destroyed and not controller.triggered do
-        local utility = rawget(_G, "__TUFFHUB_UTILITY_FEATURES")
+        local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
         local gameId = currentGameId()
         local enabled = type(utility) == "table"
             and utility.LeaveWhenAboutToLose == true
@@ -38360,8 +40627,8 @@ function controller:Destroy()
     if rawget(_G, GLOBAL_KEY) == self then
         rawset(_G, GLOBAL_KEY, nil)
     end
-    if rawget(_G, "__TUFFHUB_HOT_POTATO_CRITICAL_ACQUIRE") == hotPotatoCriticalAcquire then
-        rawset(_G, "__TUFFHUB_HOT_POTATO_CRITICAL_ACQUIRE", nil)
+    if rawget(_G, "__DROIDHUB_HOT_POTATO_CRITICAL_ACQUIRE") == hotPotatoCriticalAcquire then
+        rawset(_G, "__DROIDHUB_HOT_POTATO_CRITICAL_ACQUIRE", nil)
     end
 end
 end)
