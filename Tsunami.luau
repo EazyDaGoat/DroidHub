@@ -589,14 +589,14 @@ if MINIGAME_MODE then
 		AutoAcceptTradesAcceptTokens = 1,
 		-- Delays dedicated to normal player-to-player trades.
 		AutoAcceptTradesCustomDelays = false,
-		AutoAcceptTradesInitialDelay = 0.65,
-		AutoAcceptTradesDelayAfterTradeMessage = 0.90,
-		AutoAcceptTradesReactionDelay = 0.80,
-		AutoAcceptTradesAddBrainrotDelay = 0.18,
-		AutoAcceptTradesRemoveBrainrotDelay = 0.14,
-		AutoAcceptTradesAddTokenDelay = 0.10,
-		AutoAcceptTradesRemoveTokenDelay = 0.10,
-		AutoAcceptTradesAcceptDelay = 0.45,
+		AutoAcceptTradesInitialDelay = 1.75,
+		AutoAcceptTradesDelayAfterTradeMessage = 1.80,
+		AutoAcceptTradesReactionDelay = 2.10,
+		AutoAcceptTradesAddBrainrotDelay = 0.75,
+		AutoAcceptTradesRemoveBrainrotDelay = 0.65,
+		AutoAcceptTradesAddTokenDelay = 0.50,
+		AutoAcceptTradesRemoveTokenDelay = 0.50,
+		AutoAcceptTradesAcceptDelay = 1.35,
 
 		-- Regular-trade opening offer. Separate from the minigame/wager opening offer.
 		RegularOpeningAutoshowBestBrainrots = false,
@@ -789,14 +789,14 @@ if MINIGAME_MODE then
 		OpeningOfferSpecificSignatures = {},
 		OpeningOfferSpecificSizes = {},
 		OpeningOfferSpecificLevels = {},
-		InitialJoinDelay = 0.85,
-		DelayAfterTradeMessage = 0.80,
-		ReactionDelay = 0.95,
-		AddBrainrotDelay = 0.22,
-		RemoveBrainrotDelay = 0.18,
-		AddTokenDelay = 0.10,
-		RemoveTokenDelay = 0.10,
-		AcceptOfferDelay = 0.45,
+		InitialJoinDelay = 1.80,
+		DelayAfterTradeMessage = 1.60,
+		ReactionDelay = 2.00,
+		AddBrainrotDelay = 0.70,
+		RemoveBrainrotDelay = 0.60,
+		AddTokenDelay = 0.45,
+		RemoveTokenDelay = 0.45,
+		AcceptOfferDelay = 1.25,
 		AutoChooseGame = false,
 		AdaptiveGameSelection = false,
 		GameToChoose = "Popcorn Burst",
@@ -2888,15 +2888,15 @@ if MINIGAME_MODE then
 			utility.AutoCancelNoValueTimeout = 6
 			utility.AutoCancelBrainrotConditionDelay = 0
 			utility.CustomDelays = true
-			-- Deliberately human-paced: fast enough for throughput, slow enough to avoid instant-looking trade mutations.
-			utility.InitialJoinDelay = 0.85
-			utility.DelayAfterTradeMessage = 0.80
-			utility.ReactionDelay = 0.95
-			utility.AddBrainrotDelay = 0.22
-			utility.RemoveBrainrotDelay = 0.18
-			utility.AddTokenDelay = 0.10
-			utility.RemoveTokenDelay = 0.10
-			utility.AcceptOfferDelay = 0.45
+			-- Deliberately slower, human-paced trade timing: visible reaction time and deliberate offer mutations reduce instant-looking automation.
+			utility.InitialJoinDelay = 1.80
+			utility.DelayAfterTradeMessage = 1.60
+			utility.ReactionDelay = 2.00
+			utility.AddBrainrotDelay = 0.70
+			utility.RemoveBrainrotDelay = 0.60
+			utility.AddTokenDelay = 0.45
+			utility.RemoveTokenDelay = 0.45
+			utility.AcceptOfferDelay = 1.25
 			snapshot.ServerHop.Enabled = true
 			snapshot.ServerHop.ServerTimeEnabled = false
 			snapshot.ServerHop.ServerTime = 5
@@ -3805,7 +3805,7 @@ if MINIGAME_MODE then
 			end
 			return ok
 		end
-		local SIMPLE_AUTOFARM_PROFILE_VERSION = 22
+		local SIMPLE_AUTOFARM_PROFILE_VERSION = 23
 		local function migrateSimpleAutofarmProfile(simple)
 			if type(simple) ~= "table" or type(simple.Profile) ~= "table" then return end
 			local version = math.floor(tonumber(simple.Version) or 1)
@@ -3826,7 +3826,7 @@ if MINIGAME_MODE then
 			utility.AutoPlayMaster=true
 			utility.AutoReconnect=true; utility.PrintWinsLossesToTerminal=true; utility.PrintKicksToTerminal=true; utility.PrintDisconnectsToTerminal=true; utility.PrintAutoDeletesToTerminal=true; utility.PrintPurchasedBoothListingsToTerminal=true
 			utility.AutoCancelTradeTimeoutEnabled=true; utility.AutoCancelTradeTimeout=15
-			utility.AutoCancelNoValueTimeoutEnabled=true; utility.AutoCancelNoValueTimeout=6; utility.AutoCancelBrainrotConditionDelay=0; utility.CustomDelays=true; utility.InitialJoinDelay=0.85; utility.DelayAfterTradeMessage=0.80; utility.ReactionDelay=0.95; utility.AddBrainrotDelay=0.22; utility.RemoveBrainrotDelay=0.18; utility.AddTokenDelay=0.10; utility.RemoveTokenDelay=0.10; utility.AcceptOfferDelay=0.45
+			utility.AutoCancelNoValueTimeoutEnabled=true; utility.AutoCancelNoValueTimeout=6; utility.AutoCancelBrainrotConditionDelay=0; utility.CustomDelays=true; utility.InitialJoinDelay=1.80; utility.DelayAfterTradeMessage=1.60; utility.ReactionDelay=2.00; utility.AddBrainrotDelay=0.70; utility.RemoveBrainrotDelay=0.60; utility.AddTokenDelay=0.45; utility.RemoveTokenDelay=0.45; utility.AcceptOfferDelay=1.25
 			utility.AutoOfferMaster=true; utility.AutoOfferTokensEnabled=true; utility.AutoOfferMatchTokensWithTokens=true
 			utility.AutoOfferTokenAddRatio=1; utility.AutoOfferLowestTokensToMatch=1000; utility.AutoOfferMatchTokensWithBrainrots=false; utility.AutoOfferBasedOnTradeChat=false
 			utility.AutoAcceptMaster=true; utility.AutoAcceptMustHaveOne=true; utility.AutoAcceptMustHaveAll=false
@@ -13678,7 +13678,7 @@ if MINIGAME_MODE then
 					-- Auto Booth is intentionally not part of Simple Auto Farm. Keep it off even
 					-- if an older imported profile or a stale UI toggle tries to re-enable it.
 					autoServerHopState.Utility.AutoBooth = false
-					-- Keep the high-throughput farm policy authoritative across imported profiles.
+					-- Keep the Simple Auto Farm policy authoritative across imported profiles, including its slower human-paced trade timings.
 					autoServerHopState.Utility.AutoPlayMaster = true
 					for _, farmGameId in ipairs(simpleFarmGameIds) do
 						minigameAutoplayState[farmGameId] = true
@@ -13698,14 +13698,14 @@ if MINIGAME_MODE then
 					autoServerHopState.Utility.AutoCancelNoValueTimeout = 6
 					autoServerHopState.Utility.AutoCancelBrainrotConditionDelay = 0
 					autoServerHopState.Utility.CustomDelays = true
-					autoServerHopState.Utility.InitialJoinDelay = 0.85
-					autoServerHopState.Utility.DelayAfterTradeMessage = 0.80
-					autoServerHopState.Utility.ReactionDelay = 0.95
-					autoServerHopState.Utility.AddBrainrotDelay = 0.22
-					autoServerHopState.Utility.RemoveBrainrotDelay = 0.18
-					autoServerHopState.Utility.AddTokenDelay = 0.10
-					autoServerHopState.Utility.RemoveTokenDelay = 0.10
-					autoServerHopState.Utility.AcceptOfferDelay = 0.45
+					autoServerHopState.Utility.InitialJoinDelay = 1.80
+					autoServerHopState.Utility.DelayAfterTradeMessage = 1.60
+					autoServerHopState.Utility.ReactionDelay = 2.00
+					autoServerHopState.Utility.AddBrainrotDelay = 0.70
+					autoServerHopState.Utility.RemoveBrainrotDelay = 0.60
+					autoServerHopState.Utility.AddTokenDelay = 0.45
+					autoServerHopState.Utility.RemoveTokenDelay = 0.45
+					autoServerHopState.Utility.AcceptOfferDelay = 1.25
 					autoServerHopState.Utility.AutoCancelNoValueTimeout = 6
 					if autoSitState.EmptyTables then autoSitState.EmptyTables.Enabled = true end
 					if autoSitState.OneOfTwo then autoSitState.OneOfTwo.Enabled = true end
@@ -15230,7 +15230,7 @@ if MINIGAME_MODE then
 		local function annotateFarmValueAS(candidate, player)
 			if not candidate or not player or autoServerHopState.Utility.SimpleAutofarmEnabled ~= true then return end
 			local ownership = ownershipSnapshotAS(player)
-			local highestRank, highestQualifyingRank, progressScore, qualifyingCount = 0, 0, 0
+			local highestRank, highestQualifyingRank, progressScore, qualifyingCount = 0, 0, 0, 0
 			local targetRank = farmRarityRankAS[autoServerHopState.RuntimeSimpleAutofarmTargetRarity] or 1
 			for _, record in ipairs(type(ownership) == "table" and type(ownership.Records) == "table" and ownership.Records or {}) do
 				local rank = farmRarityRankAS[record.Rarity] or 0
@@ -20622,7 +20622,7 @@ if MINIGAME_MODE then
 					local wanted = desired[slot]
 					if currentId ~= nil and not sameId(currentId, wanted) then
 						pcall(SetSlot.InvokeServer, SetSlot, tostring(slot), nil)
-						task.wait(tradeDelay(u, "AutoAcceptTradesRemoveBrainrotDelay", 0.14))
+						task.wait(tradeDelay(u, "AutoAcceptTradesRemoveBrainrotDelay", 0.65))
 					end
 				end
 				for slot = 1, 6 do
@@ -20630,7 +20630,7 @@ if MINIGAME_MODE then
 					local wanted = desired[slot]
 					if wanted ~= nil and not sameId(slotId(slot), wanted) then
 						pcall(SetSlot.InvokeServer, SetSlot, tostring(slot), wanted)
-						task.wait(tradeDelay(u, "AutoAcceptTradesAddBrainrotDelay", 0.18))
+						task.wait(tradeDelay(u, "AutoAcceptTradesAddBrainrotDelay", 0.75))
 					end
 				end
 				if not stillSameTrade() then return false end
@@ -20642,8 +20642,8 @@ if MINIGAME_MODE then
 					pcall(OfferCurrency.InvokeServer, OfferCurrency, tokens)
 					task.wait(
 						tokens > currentTokens
-							and tradeDelay(u, "AutoAcceptTradesAddTokenDelay", 0.10)
-							or tradeDelay(u, "AutoAcceptTradesRemoveTokenDelay", 0.10)
+							and tradeDelay(u, "AutoAcceptTradesAddTokenDelay", 0.50)
+							or tradeDelay(u, "AutoAcceptTradesRemoveTokenDelay", 0.50)
 					)
 				end
 				local verifyUntil = os.clock() + 0.40
@@ -21005,7 +21005,7 @@ if MINIGAME_MODE then
 						local requestOK,configured=tradeRequestRequirements(u,opponent)
 						if configured and requestOK then
 							handledRequests[requestKey]=true
-							local delay=tradeDelay(u,"AutoAcceptTradesInitialDelay",0.65)
+							local delay=tradeDelay(u,"AutoAcceptTradesInitialDelay",1.75)
 							if delay>0 then task.wait(delay) end
 							if u.PauseScript == true
 								or autoServerHopState.RuntimeServerHopPending == true
@@ -21032,14 +21032,14 @@ if MINIGAME_MODE then
 				openingAppliedGuid=nil
 				autoReadyGuid=nil
 				table.clear(opponentItemCache)
-				tradeReactionAt=os.clock()+tradeDelay(u,"AutoAcceptTradesReactionDelay",0.80)
+				tradeReactionAt=os.clock()+tradeDelay(u,"AutoAcceptTradesReactionDelay",2.10)
 			end
 
 			local offerAutomationEnabled=regularOfferAutomationEnabled(u)
 			local tradeMessageDelaySatisfied=true
 			if tostring(u._LastTradeMessageGuid or "")==tostring(guid) then
 				local sentAt=tonumber(u._LastTradeMessageSentAt) or 0
-				tradeMessageDelaySatisfied=os.clock()-sentAt>=tradeDelay(u,"AutoAcceptTradesDelayAfterTradeMessage",0.90)
+				tradeMessageDelaySatisfied=os.clock()-sentAt>=tradeDelay(u,"AutoAcceptTradesDelayAfterTradeMessage",1.80)
 			end
 			if offerAutomationEnabled then
 				if tradeMessageDelaySatisfied and tostring(openingAppliedGuid)~=tostring(guid) then
@@ -21067,7 +21067,7 @@ if MINIGAME_MODE then
 			if u.AutoAcceptTradesAcceptOffers==true then
 				local requirementsOK,configured=acceptRequirements(u)
 				if configured and requirementsOK then
-					local due=(tonumber(try(Negotiation,{"timers","lastUpdate"})) or -1)+3+tradeDelay(u,"AutoAcceptTradesAcceptDelay",0.45)
+					local due=(tonumber(try(Negotiation,{"timers","lastUpdate"})) or -1)+3+tradeDelay(u,"AutoAcceptTradesAcceptDelay",1.35)
 					if not ready and workspace:GetServerTimeNow()>=due then
 						if u.PauseScript == true then task.wait(0.10); continue end
 						local version=tonumber(try(Negotiation,{"timers","version"})) or 0
@@ -21702,7 +21702,7 @@ if MINIGAME_MODE then
                                 and autoServerHopState.Utility.AddTokenDelay
                                 or autoServerHopState.Utility.RemoveTokenDelay
                         ))
-                        or 0.10,
+                        or 0.45,
                     0,
                     5
                 ))
@@ -21741,7 +21741,7 @@ if MINIGAME_MODE then
                         task.wait(math.clamp(
                             (autoServerHopState.Utility.CustomDelays == true
                                 and tonumber(autoServerHopState.Utility.RemoveBrainrotDelay))
-                                or 0.18,
+                                or 0.60,
                             0,
                             5
                         ))
@@ -21758,7 +21758,7 @@ if MINIGAME_MODE then
                         task.wait(math.clamp(
                             (autoServerHopState.Utility.CustomDelays == true
                                 and tonumber(autoServerHopState.Utility.AddBrainrotDelay))
-                                or 0.22,
+                                or 0.70,
                             0,
                             5
                         ))
@@ -22416,7 +22416,7 @@ if MINIGAME_MODE then
                 pendingSignature = desiredSignature
                 reactionDueAt = os.clock() + math.clamp(
                     (autoServerHopState.Utility.CustomDelays == true
-                        and tonumber(autoServerHopState.Utility.ReactionDelay)) or 0.95, 0, 5
+                        and tonumber(autoServerHopState.Utility.ReactionDelay)) or 2.00, 0, 5
                 )
             elseif pendingSignature ~= desiredSignature then
                 pendingSignature = desiredSignature
@@ -22882,7 +22882,7 @@ if MINIGAME_MODE then
 					pendingReadySignatureAAC = readySignature
 					readyDueAtAAC = os.clock() + math.clamp(
 						(autoServerHopState.Utility.CustomDelays == true
-							and tonumber(autoServerHopState.Utility.AcceptOfferDelay)) or 0.45,
+							and tonumber(autoServerHopState.Utility.AcceptOfferDelay)) or 1.25,
 						0,
 						5
 					)
@@ -23462,7 +23462,7 @@ if MINIGAME_MODE then
 								and autoServerHopState.Utility.AddTokenDelay
 								or autoServerHopState.Utility.RemoveTokenDelay
 						))
-						or 0.10,
+						or 0.45,
 					0,
 					5
 				))
@@ -23493,7 +23493,7 @@ if MINIGAME_MODE then
 						task.wait(math.clamp(
 							(autoServerHopState.Utility.CustomDelays == true
 								and tonumber(autoServerHopState.Utility.RemoveBrainrotDelay))
-								or 0.18,
+								or 0.60,
 							0,
 							5
 						))
@@ -23509,7 +23509,7 @@ if MINIGAME_MODE then
 						task.wait(math.clamp(
 							(autoServerHopState.Utility.CustomDelays == true
 								and tonumber(autoServerHopState.Utility.AddBrainrotDelay))
-								or 0.22,
+								or 0.70,
 							0,
 							5
 						))
@@ -23576,7 +23576,7 @@ if MINIGAME_MODE then
 				scheduleStartedAtAO2 = os.clock()
 			end
 			local initialDelay = math.clamp(
-				(state.CustomDelays == true and tonumber(state.InitialJoinDelay)) or 0.85,
+				(state.CustomDelays == true and tonumber(state.InitialJoinDelay)) or 1.80,
 				0,
 				5
 			)
@@ -23587,7 +23587,7 @@ if MINIGAME_MODE then
 				if tostring(state._LastTradeMessageGuid or "") == tostring(guid) then
 					local sentAt = tonumber(state._LastTradeMessageSentAt) or 0
 					local postDelay = math.clamp(
-						(state.CustomDelays == true and tonumber(state.DelayAfterTradeMessage)) or 0.80,
+						(state.CustomDelays == true and tonumber(state.DelayAfterTradeMessage)) or 1.60,
 						0,
 						5
 					)
