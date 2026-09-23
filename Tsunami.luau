@@ -16582,7 +16582,7 @@ end
 	restoreButton.Position = U2(0.5, 0, 0, px(10))
 	local function syncRestoreButtonSize()
 		-- Fixed per-device minimized button size; do not resize with the viewport.
-		local squarePixels = UI.MOBILE_DEVICE_LAYOUT and 84 or 76
+		local squarePixels = UI.MOBILE_DEVICE_LAYOUT and 50 or 76
 		restoreButton.Size = U2O(squarePixels, squarePixels)
 	end
 	syncRestoreButtonSize()
@@ -38930,13 +38930,13 @@ local function fetchServerPage(requestFn, cursor)
     end
     return decoded
 end
-local function autoleaveServerBlacklisted(serverId)
+local function autoleaveServerBlacklisted(serverId, cachedOnly)
     if type(serverId) ~= "string" or serverId == "" then
         return true
     end
     local mergePersistent = autoServerHopState
         and autoServerHopState.MergePersistentBlacklistState
-    if type(mergePersistent) == "function" then mergePersistent() end
+    if not cachedOnly and type(mergePersistent) == "function" then mergePersistent() end
     local state = autoServerHopState
     if type(state) ~= "table" then
         return serverId == game.JobId
@@ -38968,7 +38968,7 @@ local function autoleaveServerBlacklisted(serverId)
     end
     return false
 end
-local function rememberAutoleaveDestination(serverId)
+local function rememberAutoleaveDestination(serverId, deferPersistence)
     if type(serverId) ~= "string" or serverId == "" then return end
     if type(autoServerHopState) ~= "table" then return end
     local blacklist = autoServerHopState.JoinedServerBlacklist
@@ -38992,8 +38992,10 @@ local function rememberAutoleaveDestination(serverId)
     end
     recent[#recent + 1] = serverId
     while #recent > 50 do table.remove(recent, 1) end
-    local persist = autoServerHopState.PersistBlacklistState
-    if type(persist) == "function" then persist() end
+    if not deferPersistence then
+        local persist = autoServerHopState.PersistBlacklistState
+        if type(persist) == "function" then persist() end
+    end
 end
 local function resolveDestinationServer()
     local requestFn = getRequestFunction()
@@ -39276,6 +39278,11 @@ local function performDisconnectAndTeleport(destinationServerId, reason)
     if controller.destroyed then
         return false
     end
+    if controller.departureBusy then return false end
+    -- The first attempt is immediate. Let an accepted teleport transition;
+    -- explicit TeleportInitFailed clears this retry guard immediately.
+    local acceptedAt = controller.departureTeleportAcceptedAt
+    if acceptedAt and os.clock() - acceptedAt < 2.5 then return true end
     local requestedReason = reason or controller.pendingLossReason or "clinching-loss"
     if type(requestedReason) == "string" and string.match(requestedReason, ":LocalDeath$")
         and (not controller.DeathContextActive or not controller.DeathContextActive()) then
@@ -39355,10 +39362,16 @@ local function performDisconnectAndTeleport(destinationServerId, reason)
     else
         markIntentionalDeparture("AutoLeave", 12)
     end
+    controller.departureBusy = true
     controller.ArmImmediateHopAfterKick()
-    local kickAccepted = pcall(function()
-        LocalPlayer:Kick(disconnectReason and "Connection Lost" or "Lost Duel")
-    end)
+    local kickAccepted = controller.departureKickAccepted == true
+    if not kickAccepted then
+        controller.kickIssuedAt = os.clock()
+        kickAccepted = pcall(function()
+            LocalPlayer:Kick(disconnectReason and "Connection Lost" or "Lost Duel")
+        end)
+        controller.departureKickAccepted = kickAccepted
+    end
     -- Reporting must never delay the disconnect.
     task.defer(function()
         local kickedGameName = KICK_GAME_DISPLAY_NAMES[kickedGameId]
@@ -39396,13 +39409,20 @@ local function performDisconnectAndTeleport(destinationServerId, reason)
     if type(destinationServerId) == "string"
         and destinationServerId ~= ""
         and destinationServerId ~= game.JobId
-        and not autoleaveServerBlacklisted(destinationServerId)
+        -- Destination selection already merged the persisted blacklist.
+        -- Recheck live memory here; disk access cannot delay this teleport.
+        and not autoleaveServerBlacklisted(destinationServerId, true)
     then
-        rememberAutoleaveDestination(game.JobId)
-        rememberAutoleaveDestination(destinationServerId)
+        rememberAutoleaveDestination(game.JobId, true)
+        rememberAutoleaveDestination(destinationServerId, true)
+        task.defer(function()
+            local persist = autoServerHopState and autoServerHopState.PersistBlacklistState
+            if type(persist) == "function" then pcall(persist) end
+        end)
         controller.teleportAttemptedAt = os.clock()
         if utility.PauseScript == true or utility.PauseMinigameFeatures == true then
             controller.lastDepartureAttemptAt = 0
+            controller.departureBusy = false
             return kickAccepted
         end
         teleportAccepted = pcall(function()
@@ -39417,6 +39437,8 @@ local function performDisconnectAndTeleport(destinationServerId, reason)
     -- recovery to the normal server-hop selector. This is armed even after Kick,
     -- so a Roblox 267/268 prompt cannot strand the client on an error screen.
     if not teleportAccepted then controller.WakeImmediateHopAfterKick() end
+    if teleportAccepted then controller.departureTeleportAcceptedAt = os.clock() end
+    controller.departureBusy = false
     local accepted = kickAccepted or teleportAccepted
     if not accepted then controller.lastDepartureAttemptAt = 0 end
     return accepted
@@ -42691,14 +42713,16 @@ local function processPopcorn(s)
         myRemaining,
         opponentRemaining
     )
-    local myPoints, opponentPoints
+    local myPoints, opponentPoints = readPopcornBoardPoints(s.seatIndex)
+    if myPoints == nil then
+        myPoints = popcornStateScore(myState)
+    end
+    if opponentPoints == nil then
+        opponentPoints = popcornStateScore(opponentState)
+    end
     if tracker.popcornSeenFromRoundStart then
         myPoints = tracker.popcornMyAccumulatedPoints
         opponentPoints = tracker.popcornOpponentAccumulatedPoints
-    else
-        myPoints, opponentPoints = readPopcornBoardPoints(s.seatIndex)
-        if myPoints == nil then myPoints = popcornStateScore(myState) end
-        if opponentPoints == nil then opponentPoints = popcornStateScore(opponentState) end
     end
     local clinchingRound = popcornRequiredWins ~= nil
         and (
@@ -44473,6 +44497,7 @@ addConnection(TeleportService.TeleportInitFailed:Connect(function(player)
     if player == LocalPlayer and controller.pendingLossReason ~= nil then
         clearIntentionalDeparture()
         controller.triggered = false
+        controller.departureTeleportAcceptedAt = nil
         controller.lastDepartureAttemptAt = 0
         controller.WakeImmediateHopAfterKick()
     end
