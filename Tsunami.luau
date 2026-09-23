@@ -30321,133 +30321,130 @@ local function runKernel(slot, duration, key, stateSeenAt)
     local workerStartedAt = nowServer()
     local setupStartedClock = os.clock()
     clearGeometryCache()
+
+    -- The shipped Popcorn client starts its linear ring tween when the private
+    -- kernel state reaches the client. It does not use ringStartTime to decide
+    -- when the player may click. Keep any replicated timing field for logging
+    -- only; driving the physical send from it can place the click hundreds of
+    -- milliseconds ahead of the ring that is actually rendered on this client.
     local state = privateState()
-    local authoritativeTarget, authoritativeField, authoritativeKind =
+    local replicatedTarget, replicatedField, replicatedKind =
         authoritativeTargetFromState(state, duration)
+    controller.usesAuthoritativeTiming = false
+
+    -- This is the established visual+latency path. It predicts the exact
+    -- 0.65 -> 0 linear tween crossing at the game's 0.35 target and uses the
+    -- latency model only for the timestamp sent to the server. The remote is
+    -- physically fired at the local ring crossing, matching the game client.
+    if not controller.pingSamplesPrimed then
+        for _ = 1, 7 do updatePingSamples() end
+        controller.pingSamplesPrimed = true
+    end
     local compensation, dataRtt, networkRtt, livePingHalf,
         currentDataRtt, currentNetworkRtt, baseCompensation,
-        explicitBias, adaptiveBias
-    controller.usesAuthoritativeTiming = authoritativeTarget ~= nil
-    if authoritativeTarget then
-        -- An explicit replicated target needs no ping adjustment. Avoid Stats
-        -- access, ping reads, sample copies and sorts ahead of this deadline.
-        compensation, baseCompensation, explicitBias, adaptiveBias = 0, 0, 0, 0
-    else
-        -- Preserve the original warm-up for visual timing, but only when used.
-        if not controller.pingSamplesPrimed then
-            for _ = 1, 7 do updatePingSamples() end
-            controller.pingSamplesPrimed = true
-        end
-        compensation, dataRtt, networkRtt, livePingHalf,
-            currentDataRtt, currentNetworkRtt, baseCompensation,
-            explicitBias, adaptiveBias = inboundReplicationEstimate()
-    end
+        explicitBias, adaptiveBias = inboundReplicationEstimate()
+
+    local probeOffset = chooseProbeOffset()
+    local visualTarget = stateSeenAt + duration * TARGET_FRACTION
     local reportedTargetTime
-    local fireTime
-    local source
-    local visualTarget = nil
+    local fireTime = visualTarget
+    local source = "state-arrival-failsafe"
     local sampleCount = 0
-    local probeOffset = 0
     local latestScale = nil
     local crossingHistory = {}
     local kernelBaseCompensation = compensation
     local compensationHistory = { compensation }
-    if authoritativeTarget then
-        reportedTargetTime = authoritativeTarget
-        fireTime = authoritativeTarget
-        source = "server:" .. tostring(authoritativeField)
-        if not controller.authoritativeFieldPrinted[authoritativeField] then
-            controller.authoritativeFieldPrinted[authoritativeField] = true
-        end
-    else
-        probeOffset = chooseProbeOffset()
-        visualTarget = stateSeenAt + duration * TARGET_FRACTION
-        source = "live-ring+latency"
-        local nextPingRefreshAt = 0
-        while kernelStillLive(slot) do
-            local scale, sampledAt = sampleOuterScale()
-            latestScale = scale or latestScale
-            local crossing = visualCrossingFromSample(scale, sampledAt, duration)
-            if crossing then
-                crossingHistory[#crossingHistory + 1] = crossing
-                while #crossingHistory > TRACKING_HISTORY do
-                    table.remove(crossingHistory, 1)
-                end
-                visualTarget = robustMedian(crossingHistory) or crossing
-                sampleCount += 1
+    local nextPingRefreshAt = 0
+
+    while kernelStillLive(slot) do
+        local scale, sampledAt = sampleOuterScale()
+        latestScale = scale or latestScale
+        local crossing = visualCrossingFromSample(scale, sampledAt, duration)
+        if crossing then
+            crossingHistory[#crossingHistory + 1] = crossing
+            while #crossingHistory > TRACKING_HISTORY do
+                table.remove(crossingHistory, 1)
             end
-            local nowClock = os.clock()
-            if nowClock >= nextPingRefreshAt then
-                local freshCompensation
-                freshCompensation, dataRtt, networkRtt, livePingHalf,
-                    currentDataRtt, currentNetworkRtt, baseCompensation,
-                    explicitBias, adaptiveBias = inboundReplicationEstimate()
-                freshCompensation = math.clamp(
-                    freshCompensation,
-                    math.max(0, kernelBaseCompensation - MAX_KERNEL_COMPENSATION_DRIFT),
-                    kernelBaseCompensation + MAX_KERNEL_COMPENSATION_DRIFT
-                )
-                pushSample(
-                    compensationHistory,
-                    freshCompensation,
-                    KERNEL_COMPENSATION_HISTORY
-                )
-                compensation = robustMedian(compensationHistory) or freshCompensation
-                nextPingRefreshAt = nowClock + TRACKING_PING_REFRESH
-            end
-            local failsafeLead = sampleCount >= MIN_GEOMETRY_SAMPLES
-                and 0 or FAILSAFE_EXTRA_EARLY_LEAD
-            -- Score with the server-time estimate for the perfect crossing,
-            -- but do not physically fire the remote early. Waiting until the
-            -- locally rendered ring reaches the target prevents an inbound
-            -- ping spike from causing an early click. The remote still carries
-            -- the compensated server timestamp, so a late rendered frame does
-            -- not change the intended scoring time.
-            reportedTargetTime = visualTarget - compensation - probeOffset - failsafeLead
+            visualTarget = robustMedian(crossingHistory) or crossing
             fireTime = visualTarget
-            local remainingToTarget = fireTime - nowServer()
-            local stableGeometry = false
-            if sampleCount >= MIN_GEOMETRY_SAMPLES and #crossingHistory > 0 then
-                local minCrossing = math.huge
-                local maxCrossing = -math.huge
-                for _, value in ipairs(crossingHistory) do
-                    minCrossing = math.min(minCrossing, value)
-                    maxCrossing = math.max(maxCrossing, value)
-                end
-                stableGeometry = maxCrossing - minCrossing <= GEOMETRY_LOCK_SPREAD
-            end
-            if stableGeometry or sampleCount >= MAX_GEOMETRY_SAMPLES then
-                source = "live-ring+latency"
-                break
-            elseif sampleCount > 0
-                and remainingToTarget <= LIMITED_GEOMETRY_LOCK_WINDOW
-            then
-                source = "limited-ring-failsafe"
-                break
-            elseif sampleCount == 0
-                and remainingToTarget <= ZERO_GEOMETRY_HARD_FALLBACK_WINDOW
-            then
-                source = "state-arrival-failsafe"
-                break
-            end
-            RunService.RenderStepped:Wait()
+            sampleCount += 1
         end
+
+        local nowClock = os.clock()
+        if nowClock >= nextPingRefreshAt then
+            local freshCompensation
+            freshCompensation, dataRtt, networkRtt, livePingHalf,
+                currentDataRtt, currentNetworkRtt, baseCompensation,
+                explicitBias, adaptiveBias = inboundReplicationEstimate()
+            freshCompensation = math.clamp(
+                freshCompensation,
+                math.max(0, kernelBaseCompensation - MAX_KERNEL_COMPENSATION_DRIFT),
+                kernelBaseCompensation + MAX_KERNEL_COMPENSATION_DRIFT
+            )
+            pushSample(
+                compensationHistory,
+                freshCompensation,
+                KERNEL_COMPENSATION_HISTORY
+            )
+            compensation = robustMedian(compensationHistory) or freshCompensation
+            nextPingRefreshAt = nowClock + TRACKING_PING_REFRESH
+        end
+
+        local failsafeLead = sampleCount >= MIN_GEOMETRY_SAMPLES
+            and 0 or FAILSAFE_EXTRA_EARLY_LEAD
+        reportedTargetTime = visualTarget
+            - compensation
+            - probeOffset
+            - failsafeLead
+        fireTime = visualTarget
+
+        local remainingToTarget = fireTime - nowServer()
+        local stableGeometry = false
+        if sampleCount >= MIN_GEOMETRY_SAMPLES and #crossingHistory > 0 then
+            local minCrossing = math.huge
+            local maxCrossing = -math.huge
+            for _, value in ipairs(crossingHistory) do
+                minCrossing = math.min(minCrossing, value)
+                maxCrossing = math.max(maxCrossing, value)
+            end
+            stableGeometry = maxCrossing - minCrossing <= GEOMETRY_LOCK_SPREAD
+        end
+
+        if stableGeometry or sampleCount >= MAX_GEOMETRY_SAMPLES then
+            source = "live-ring+latency"
+            break
+        elseif sampleCount > 0
+            and remainingToTarget <= LIMITED_GEOMETRY_LOCK_WINDOW
+        then
+            source = "limited-ring-failsafe"
+            break
+        elseif sampleCount == 0
+            and remainingToTarget <= ZERO_GEOMETRY_HARD_FALLBACK_WINDOW
+        then
+            source = "state-arrival-failsafe"
+            break
+        end
+        RunService.RenderStepped:Wait()
     end
+
     if not kernelStillLive(slot) then
         controller.scheduled[key] = nil
         return
     end
-    reportedTargetTime = reportedTargetTime or nowServer()
-    fireTime = fireTime or reportedTargetTime
-    local effectiveCompensation = string.sub(tostring(source), 1, 7) == "server:"
-        and 0
-        or (compensation + probeOffset)
+
+    reportedTargetTime = reportedTargetTime
+        or (visualTarget - compensation - probeOffset)
+    fireTime = fireTime or visualTarget or nowServer()
+    local effectiveCompensation = compensation + probeOffset
     local details = {
         source = source,
         duration = duration,
         stateSeenAt = stateSeenAt,
         visualStart = visualTarget and (visualTarget - duration * TARGET_FRACTION) or nil,
         visualTarget = visualTarget,
+        authoritativeTarget = replicatedTarget,
+        authoritativeField = replicatedField,
+        authoritativeKind = replicatedKind,
         inbound = compensation,
         baseCompensation = baseCompensation,
         effectiveCompensation = effectiveCompensation,
@@ -30468,7 +30465,9 @@ local function runKernel(slot, duration, key, stateSeenAt)
     details.workerStartedAt = workerStartedAt
     details.waitStartedAt = nowServer()
     details.setupMs = (os.clock() - setupStartedClock) * 1000
-    local ready, maxResumeGapMs, sleepOvershootMs, heartbeatDtMs, clockDriftMs = preciseWaitUntil(fireTime, slot, key)
+
+    local ready, maxResumeGapMs, sleepOvershootMs, heartbeatDtMs, clockDriftMs =
+        preciseWaitUntil(fireTime, slot, key)
     details.maxResumeGapMs = maxResumeGapMs
     details.sleepOvershootMs = sleepOvershootMs
     details.heartbeatDtMs = heartbeatDtMs
@@ -30709,7 +30708,11 @@ local function logPopcornTiming(result, slot, key, attempt)
         "visual_ms="..number(visualError,true),
         "estimate_ms="..number(difference(a.firedAt,a.targetTime),true),
         "stamp_ms="..number(difference(a.reportedAt,a.targetTime),true),
-        "live_shift_ms="..number(difference(a.liveTargetAtSend,a.targetTime),true),
+        "server_visual_ms="..number(difference(a.authoritativeTarget,a.visualTarget),true),
+        "stamp_visual_ms="..number(difference(a.reportedAt,a.visualTarget),true),
+        "send_visual_ms="..number(difference(a.firedAt,a.visualTarget),true),
+        "server_field="..token(a.authoritativeField),
+        "live_shift_ms="..number(difference(a.liveTargetAtSend,a.authoritativeTarget),true),
         "send_live_ms="..number(difference(a.firedAt,a.liveTargetAtSend),true),
         "stamp_live_ms="..number(difference(a.reportedAt,a.liveTargetAtSend),true),
         "live_field="..token(a.liveFieldAtSend),
@@ -30743,7 +30746,7 @@ local function logPopcornTiming(result, slot, key, attempt)
         local printStartedClock = os.clock()
         if not controller.timingLogHeaderPrinted then
             controller.timingLogHeaderPrinted=true
-            print("[DH POPCORN] Timing build LOG5 | ms: +late/-early. plan=send deadline; visual=visible-ring estimate; estimate=latency-adjusted target; stamp=remote timestamp offset. wait_gap includes intentional waits. live_shift=target change before send; send_live/stamp_live=offset from re-read state target; call=local FireServer call duration (not network transit); result_local=monotonic result-return delay; clock_drift=server-clock elapsed minus local elapsed. seen_late/worker_late/wait_entry=stage arrival relative to target; setup=local preparation duration; previous_log=prior console flush duration. Ping fields are NA when the replicated target bypasses ping sampling. True server error is unknown; result_hints are raw, units unverified.")
+            print("[DH POPCORN] Timing build LOG6 | ms: +late/-early. Physical send is driven only by the client-visible linear ring crossing; replicated ringStartTime is diagnostic-only. plan/send_visual=physical send vs visual target; visual=scale-derived residual; estimate=send vs compensated timestamp target; stamp_visual=reported timestamp vs visual target; server_visual=replicated target vs visual target; live_shift=replicated target movement before send; call=local FireServer call duration (not network transit); result_local=monotonic result-return delay; clock_drift=server-clock elapsed minus local elapsed. wait_gap includes intentional waits. true server scoring error remains unknown; result_hints are raw, units unverified.")
         end
         for _,entry in ipairs(batch) do print(entry) end
         controller.lastTimingPrintMs = (os.clock() - printStartedClock) * 1000
