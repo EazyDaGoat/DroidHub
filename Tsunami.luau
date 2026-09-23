@@ -29075,6 +29075,17 @@ end
 local function publicPhase()
     return tryIndex({ "session", "public", "phase" })
 end
+local function waitForAutoplayController(id)
+    -- Disabled games must not load learning files/configs or construct models.
+    -- If enabled during Popcorn, defer that startup until Popcorn has ended.
+    while not controller.destroyed and screenGui.Parent do
+        if minigameAutoplayEnabled(id) and gameId() ~= "PopcornBurst" then
+            return true
+        end
+        task.wait(0.50)
+    end
+    return false
+end
 local function seatIndex()
     return tonumber(tryIndex({ "session", "private", "seatIndex" }))
 end
@@ -30732,7 +30743,7 @@ local function logPopcornTiming(result, slot, key, attempt)
         local printStartedClock = os.clock()
         if not controller.timingLogHeaderPrinted then
             controller.timingLogHeaderPrinted=true
-            print("[DH POPCORN] Timing build LOG4 | ms: +late/-early. plan=send deadline; visual=visible-ring estimate; estimate=latency-adjusted target; stamp=remote timestamp offset. wait_gap includes intentional waits. live_shift=target change before send; send_live/stamp_live=offset from re-read state target; call=local FireServer call duration (not network transit); result_local=monotonic result-return delay; clock_drift=server-clock elapsed minus local elapsed. seen_late/worker_late/wait_entry=stage arrival relative to target; setup=local preparation duration; previous_log=prior console flush duration. Ping fields are NA when the replicated target bypasses ping sampling. True server error is unknown; result_hints are raw, units unverified.")
+            print("[DH POPCORN] Timing build LOG5 | ms: +late/-early. plan=send deadline; visual=visible-ring estimate; estimate=latency-adjusted target; stamp=remote timestamp offset. wait_gap includes intentional waits. live_shift=target change before send; send_live/stamp_live=offset from re-read state target; call=local FireServer call duration (not network transit); result_local=monotonic result-return delay; clock_drift=server-clock elapsed minus local elapsed. seen_late/worker_late/wait_entry=stage arrival relative to target; setup=local preparation duration; previous_log=prior console flush duration. Ping fields are NA when the replicated target bypasses ping sampling. True server error is unknown; result_hints are raw, units unverified.")
         end
         for _,entry in ipairs(batch) do print(entry) end
         controller.lastTimingPrintMs = (os.clock() - printStartedClock) * 1000
@@ -30885,6 +30896,7 @@ end
 update()
 end)
 task.spawn(function()
+    if not waitForAutoplayController("ConnectFour") then return end
 local function createCFSolver()
 local COLS = 7
 local ROWS = 6
@@ -31804,6 +31816,7 @@ end
 releaseCFSolver()
 end)
 task.spawn(function()
+    if not waitForAutoplayController("CandyBomb") then return end
     local rng = Random.new(
         (LocalPlayer.UserId * 1103515245
             + math.floor(workspace:GetServerTimeNow() * 1000))
@@ -32706,6 +32719,7 @@ task.spawn(function()
     end
 end)
 task.spawn(function()
+    if not waitForAutoplayController("NumberGuess") then return end
     local rng = Random.new(
         (LocalPlayer.UserId * 214013
             + math.floor(workspace:GetServerTimeNow() * 10000))
@@ -33489,6 +33503,7 @@ task.spawn(function()
     saveNumberLearning(true)
 end)
 task.spawn(function()
+    if not waitForAutoplayController("FootballDraft") then return end
     local FootballDraft = require(ReplicatedStorage.Shared.Config.FootballDraft)
     local rng = Random.new((LocalPlayer.UserId * 1664525 + math.floor(workspace:GetServerTimeNow() * 1000)) % 2147483647)
     local seenCandidates = nil
@@ -33915,6 +33930,7 @@ task.spawn(function()
     end
 end)
 task.spawn(function()
+    if not waitForAutoplayController("Knockout") then return end
     local rng = Random.new(
         (LocalPlayer.UserId * 22695477
             + math.floor(workspace:GetServerTimeNow() * 1000))
@@ -34989,6 +35005,7 @@ task.spawn(function()
     end
 end)
 task.spawn(function()
+    if not waitForAutoplayController("Battleship") then return end
     local BattleshipUtils =
         require(ReplicatedStorage.SharedModules.BattleshipUtils)
     local GRID_SIZE = BattleshipUtils.GRID_SIZE
@@ -37908,6 +37925,10 @@ do
     state.holderChangedAt = state.localHolding and (os.clock() - 1.1) or os.clock()
     state.holderConnection = RunServiceHP.Heartbeat:Connect(function()
         if state.destroyed then return end
+        -- Preserve one-time cleanup for a prior holding/shield state, but do
+        -- not scan character tools every frame throughout unrelated minigames.
+        if gameId() ~= "HotPotato" and not state.localHolding
+            and not state.returnShieldActive then return end
         local holding = hotPotatoTool(localPlayerHP and localPlayerHP.Character) ~= nil
         if holding ~= state.localHolding then
             local wasHolding = state.localHolding
@@ -38023,7 +38044,7 @@ do
     end)
 
     state.returnShieldConnection = RunServiceHP.Heartbeat:Connect(function()
-        if state.destroyed then return end
+        if state.destroyed or state.returnShieldActive ~= true then return end
         local character = localPlayerHP and localPlayerHP.Character
         local localTool = hotPotatoTool(character)
         if localTool ~= nil then
