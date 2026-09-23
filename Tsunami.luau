@@ -30188,6 +30188,7 @@ local function preciseWaitUntil(targetTime, slot, key)
     -- server-synchronised timestamp, so if the scheduler resumes slightly
     -- after the crossing we still report the calculated crossing time.
     local previousResume = nowServer()
+    local waitStartServer, waitStartClock = previousResume, os.clock()
     local maxResumeGap = 0
     local maxSleepOvershoot = 0
     local maxHeartbeatDt = 0
@@ -30217,8 +30218,9 @@ local function preciseWaitUntil(targetTime, slot, key)
     then
         return false
     end
+    local clockDriftMs = ((nowServer() - waitStartServer) - (os.clock() - waitStartClock)) * 1000
     return kernelStillLive(slot), maxResumeGap * 1000,
-        maxSleepOvershoot * 1000, maxHeartbeatDt * 1000
+        maxSleepOvershoot * 1000, maxHeartbeatDt * 1000, clockDriftMs
 end
 local function fireAttempt(slot, key, targetTime, details)
     if controller.fired[key]
@@ -30233,6 +30235,17 @@ local function fireAttempt(slot, key, targetTime, details)
         if controller.currentKernelKey ~= key or not kernelStillLive(slot) then
             return false
         end
+        -- Re-read the scoring reference once at send time. This is diagnostic:
+        -- do not move the planned deadline or alter the outgoing timestamp.
+        local liveState = privateState()
+        local liveDuration = tonumber(liveState and liveState.ringDuration) or details.duration
+        if type(liveDuration) == "number" then
+            local liveTarget, liveField = authoritativeTargetFromState(liveState, liveDuration)
+            details.liveTargetAtSend = liveTarget
+            details.liveFieldAtSend = liveField
+            details.liveDurationAtSend = liveDuration
+        end
+        details.firedClock = os.clock()
         firedAt = nowServer()
         local reportedAt = tonumber(targetTime) or firedAt
         if reportedAt > firedAt then
@@ -30244,6 +30257,7 @@ local function fireAttempt(slot, key, targetTime, details)
             "AttemptPop",
             reportedAt
         )
+        details.localCallMs = (os.clock() - details.firedClock) * 1000
         details.reportedAt = reportedAt
         if sent then
             break
@@ -30413,10 +30427,11 @@ local function runKernel(slot, duration, key, stateSeenAt)
         latestTrackedScale = latestScale,
     }
     details.fireTime = fireTime
-    local ready, maxResumeGapMs, sleepOvershootMs, heartbeatDtMs = preciseWaitUntil(fireTime, slot, key)
+    local ready, maxResumeGapMs, sleepOvershootMs, heartbeatDtMs, clockDriftMs = preciseWaitUntil(fireTime, slot, key)
     details.maxResumeGapMs = maxResumeGapMs
     details.sleepOvershootMs = sleepOvershootMs
     details.heartbeatDtMs = heartbeatDtMs
+    details.waitClockDriftMs = clockDriftMs
     if ready then
         fireAttempt(slot, key, reportedTargetTime, details)
     end
@@ -30647,10 +30662,17 @@ local function logPopcornTiming(result, slot, key, attempt)
         "visual_ms="..number(visualError,true),
         "estimate_ms="..number(difference(a.firedAt,a.targetTime),true),
         "stamp_ms="..number(difference(a.reportedAt,a.targetTime),true),
+        "live_shift_ms="..number(difference(a.liveTargetAtSend,a.targetTime),true),
+        "send_live_ms="..number(difference(a.firedAt,a.liveTargetAtSend),true),
+        "stamp_live_ms="..number(difference(a.reportedAt,a.liveTargetAtSend),true),
+        "live_field="..token(a.liveFieldAtSend),
+        "call_ms="..number(a.localCallMs),
+        "clock_drift_ms="..number(a.waitClockDriftMs,true),
         "wait_gap_ms="..number(a.maxResumeGapMs),
         "sleep_late_ms="..number(a.sleepOvershootMs),
         "heartbeat_ms="..number(a.heartbeatDtMs),
         "result_delay_ms="..number(difference(nowServer(),a.firedAt)),
+        "result_local_ms="..number(difference(os.clock(),a.firedClock)),
         "duration_ms="..number(type(a.duration)=="number" and a.duration*1000 or nil),
         "comp_ms="..number(type(a.effectiveCompensation)=="number" and a.effectiveCompensation*1000 or nil),
         "data_ping_ms="..number(type(a.currentDataRtt)=="number" and a.currentDataRtt*1000 or nil),
@@ -30673,7 +30695,7 @@ local function logPopcornTiming(result, slot, key, attempt)
         controller.pendingTimingLogs={}
         if not controller.timingLogHeaderPrinted then
             controller.timingLogHeaderPrinted=true
-            print("[DH POPCORN] Timing build LOG1 | ms: +late/-early. plan=send deadline; visual=visible-ring estimate; estimate=latency-adjusted target; stamp=remote timestamp offset. wait_gap includes intentional waits. True server error is unknown; result_hints are raw, units unverified.")
+            print("[DH POPCORN] Timing build LOG2 | ms: +late/-early. plan=send deadline; visual=visible-ring estimate; estimate=latency-adjusted target; stamp=remote timestamp offset. wait_gap includes intentional waits. live_shift=target change before send; send_live/stamp_live=offset from re-read state target; call=local FireServer call duration (not network transit); result_local=monotonic result-return delay; clock_drift=server-clock elapsed minus local elapsed. True server error is unknown; result_hints are raw, units unverified.")
         end
         for _,entry in ipairs(batch) do print(entry) end
     end)
