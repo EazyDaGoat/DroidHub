@@ -9260,18 +9260,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			featureLabel.TextColor3 = isDangerInfoNote and RGB(255, 74, 74) or UI.MUTED_TEXT_COLOR
 			featureLabel.TextXAlignment = Enum.TextXAlignment.Left
 			featureLabel.TextYAlignment = Enum.TextYAlignment.Center
-			if definition.EligiblePlayersDisplay == true then
-				autoServerHopState.RuntimeEligiblePlayersLabel = featureLabel
-				autoServerHopState.SetEligiblePlayersDisplay = function(lines)
-					if not featureLabel.Parent then return end
-					local value = tostring(lines or "No eligible players.")
-					-- Store the live value on the definition as well so a global settings/UI
-					-- refresh cannot replace the roster with the construction-time placeholder.
-					definition.InfoNoteText = value
-					featureLabel.Text = value
-					task.defer(relayoutRows)
-				end
-			end
 		elseif isActionButton then
 			featureLabel.Visible = false
 			actionButton = New("TextButton")
@@ -14840,17 +14828,6 @@ end)()
 			}
 			return features
 		end)()
-	)
-
-	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
-		tabs.Matchmaking,
-		41,
-		2,
-		2,
-		"Eligible Players",
-		{
-			{InfoNoteText = "No active Server Eligibility criteria.", EligiblePlayersDisplay = true},
-		}
 	)
 
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
@@ -20552,35 +20529,7 @@ if MINIGAME_MODE then
 					list[#list + 1] = player
 				end
 			end
-			local scorer = autoServerHopState.PublicPlayerPriorityScore
-			if type(scorer) == "function" then
-				table.sort(list, function(a, b)
-					local as = scorer(a, autoServerHopState.Utility.AutoAcceptSpecificItems)
-					local bs = scorer(b, autoServerHopState.Utility.AutoAcceptSpecificItems)
-					if as ~= bs then return as > bs end
-					return string.lower(a.Name) < string.lower(b.Name)
-				end)
-			end
 			return list
-		end
-		local function updateEligiblePlayersDisplayCS(players, activeCriteria)
-			local setter = autoServerHopState.SetEligiblePlayersDisplay
-			if type(setter) ~= "function" then return end
-			if activeCriteria ~= true then
-				setter("No active Server Eligibility criteria.")
-				return
-			end
-			if type(players) ~= "table" or #players == 0 then
-				setter("No eligible players in this server.")
-				return
-			end
-			local lines = {}
-			for index, player in ipairs(players) do
-				local display = tostring(player.DisplayName or "")
-				local name = tostring(player.Name or "")
-				lines[#lines + 1] = tostring(index) .. ". " .. (display ~= "" and display ~= name and (display .. " (@" .. name .. ")") or name)
-			end
-			setter(table.concat(lines, "\n"))
 		end
 		local function everyoneQueuedCS(players)
 			if #players == 0 then return false end
@@ -20691,7 +20640,6 @@ if MINIGAME_MODE then
 				or utility.CheckServerHopNoEligibleBooths == true
 				or utility.CheckServerHopNoEligibleTradePlayers == true
 			if not anyCondition then
-				updateEligiblePlayersDisplayCS(nil, false)
 				autoServerHopState.RuntimeCheckServerHopRequested = false
 				autoServerHopState.RuntimeCheckServerStartupResolved = true
 				refreshStartupDecisionCS()
@@ -20717,7 +20665,6 @@ if MINIGAME_MODE then
 				end
 
 				serverPlayers = eligiblePlayersCS(false)
-				updateEligiblePlayersDisplayCS(serverPlayers, true)
 
 				if utility.CheckServerHopNobodyServer == true
 					and #serverPlayers == 0
@@ -20777,19 +20724,17 @@ if MINIGAME_MODE then
 					autoServerHopState.RuntimeCheckServerHopRequested = false
 					continue
 				end
-				local eligibleTradePlayers = {}
+				local hasEligibleTradePlayer = false
 				for _, player in ipairs(PlayersCS:GetPlayers()) do
 					if player ~= LocalPlayerCS then
 						local okPlayer, eligible = pcall(tradeChecker, player)
 						if okPlayer and eligible == true then
-							eligibleTradePlayers[#eligibleTradePlayers + 1] = player
+							hasEligibleTradePlayer = true
+							break
 						end
 					end
 				end
-				if not playerConditionEnabled then
-					updateEligiblePlayersDisplayCS(eligibleTradePlayers, true)
-				end
-				if #eligibleTradePlayers == 0 then
+				if not hasEligibleTradePlayer then
 					shouldHop = true
 				end
 			end
