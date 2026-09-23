@@ -30184,8 +30184,13 @@ local function preciseWaitUntil(targetTime, slot, key)
     -- the remote need to be serviced. AttemptPop already carries a
     -- server-synchronised timestamp, so if the scheduler resumes slightly
     -- after the crossing we still report the calculated crossing time.
+    local previousResume = nowServer()
+    local maxResumeGap = 0
     while controller.currentKernelKey == key and kernelStillLive(slot) do
-        local remaining = targetTime - nowServer()
+        local resumedAt = nowServer()
+        maxResumeGap = math.max(maxResumeGap, resumedAt - previousResume)
+        previousResume = resumedAt
+        local remaining = targetTime - resumedAt
         if remaining <= 0 then
             break
         end
@@ -30202,7 +30207,7 @@ local function preciseWaitUntil(targetTime, slot, key)
     then
         return false
     end
-    return kernelStillLive(slot)
+    return kernelStillLive(slot), maxResumeGap * 1000
 end
 local function fireAttempt(slot, key, targetTime, details)
     if controller.fired[key]
@@ -30396,7 +30401,10 @@ local function runKernel(slot, duration, key, stateSeenAt)
         geometrySamples = sampleCount,
         latestTrackedScale = latestScale,
     }
-    if preciseWaitUntil(fireTime, slot, key) then
+    details.fireTime = fireTime
+    local ready, maxResumeGapMs = preciseWaitUntil(fireTime, slot, key)
+    details.maxResumeGapMs = maxResumeGapMs
+    if ready then
         fireAttempt(slot, key, reportedTargetTime, details)
     end
     controller.scheduled[key] = nil
@@ -30605,6 +30613,22 @@ local function reportAndCalibrate()
         or (slot and controller.attempts[controller.lastAttemptKeyBySlot[slot]])
     controller.currentKernelKey = nil
     controller.currentKernelSlot = nil
+    -- At most 32 scalar-only records, one per result. No prints, files, or
+    -- additional frame connections. maxResumeGapMs includes deliberate waits;
+    -- schedulerErrorMs measures lateness relative to the actual fire deadline.
+    local history = controller.performanceSamples
+    if not history then history = {}; controller.performanceSamples = history end
+    history[#history + 1] = {
+        points = tonumber(result.points),
+        rating = tostring(result.rating),
+        schedulerErrorMs = attempt and attempt.schedulerErrorMs,
+        maxResumeGapMs = attempt and attempt.maxResumeGapMs,
+        geometrySamples = attempt and attempt.geometrySamples,
+        source = attempt and attempt.source,
+        dataRtt = attempt and attempt.currentDataRtt,
+        networkRtt = attempt and attempt.currentNetworkRtt,
+    }
+    if #history > 32 then table.remove(history, 1) end
     learnFromResult(result, attempt)
 end
 local function resetRound()
@@ -38887,7 +38911,11 @@ local function getRequestFunction()
     end
     return nil
 end
+local function popcornTimingCriticalLOSS()
+    return currentGameId() == "PopcornBurst" and currentPhase() ~= "Finished"
+end
 local function fetchServerPage(requestFn, cursor)
+    if popcornTimingCriticalLOSS() then return nil end
     local url = "https://games.roblox.com/v1/games/"
         .. tostring(DROIDHUB_HOP_PLACE_ID)
         .. "/servers/Public?sortOrder=Desc&limit="
@@ -38913,6 +38941,9 @@ local function fetchServerPage(requestFn, cursor)
             end
         end
     end
+    -- An earlier request can return after a round starts. Do not start a
+    -- fallback request or decode its response during the timing-sensitive round.
+    if popcornTimingCriticalLOSS() then return nil end
     if type(body) ~= "string" or body == "" then
         local okHttpGet, httpBody = pcall(function()
             return game:HttpGet(url)
@@ -38924,6 +38955,7 @@ local function fetchServerPage(requestFn, cursor)
     if type(body) ~= "string" or body == "" then
         return nil
     end
+    if popcornTimingCriticalLOSS() then return nil end
     local decodedOk, decoded = pcall(HttpService.JSONDecode, HttpService, body)
     if not decodedOk or type(decoded) ~= "table" then
         return nil
@@ -38998,6 +39030,9 @@ local function rememberAutoleaveDestination(serverId, deferPersistence)
     end
 end
 local function resolveDestinationServer()
+    if popcornTimingCriticalLOSS() then return nil end
+    local merge = autoServerHopState and autoServerHopState.MergePersistentBlacklistState
+    if type(merge) == "function" then merge() end
     local requestFn = getRequestFunction()
     local originJobId = game.JobId
     local candidates = {}
@@ -39018,7 +39053,7 @@ local function resolveDestinationServer()
             if type(serverId) == "string"
                 and serverId ~= ""
                 and serverId ~= originJobId
-                and not autoleaveServerBlacklisted(serverId)
+                and not autoleaveServerBlacklisted(serverId, true)
                 and not seen[serverId]
                 and playing ~= nil
                 and maxPlayers ~= nil
@@ -39069,6 +39104,7 @@ local function resolveDestinationServer()
     return selected and selected.id or nil
 end
 local function refreshDestinationServer(force)
+    if popcornTimingCriticalLOSS() then return controller.destinationServerId end
     if controller.destroyed or controller.triggered then
         return controller.destinationServerId
     end
@@ -42713,16 +42749,14 @@ local function processPopcorn(s)
         myRemaining,
         opponentRemaining
     )
-    local myPoints, opponentPoints = readPopcornBoardPoints(s.seatIndex)
-    if myPoints == nil then
-        myPoints = popcornStateScore(myState)
-    end
-    if opponentPoints == nil then
-        opponentPoints = popcornStateScore(opponentState)
-    end
+    local myPoints, opponentPoints
     if tracker.popcornSeenFromRoundStart then
         myPoints = tracker.popcornMyAccumulatedPoints
         opponentPoints = tracker.popcornOpponentAccumulatedPoints
+    else
+        myPoints, opponentPoints = readPopcornBoardPoints(s.seatIndex)
+        if myPoints == nil then myPoints = popcornStateScore(myState) end
+        if opponentPoints == nil then opponentPoints = popcornStateScore(opponentState) end
     end
     local clinchingRound = popcornRequiredWins ~= nil
         and (
@@ -44680,9 +44714,9 @@ task.spawn(function()
             and utility.LeaveWhenAboutToLose == true
             and utility.PauseScript ~= true
             and utility.PauseMinigameFeatures ~= true
-            and gameId ~= nil
-            and SUPPORTED_GAMES[gameId] == true
-        if enabled then
+            and (gameId == nil or SUPPORTED_GAMES[gameId] == true)
+        if enabled and not popcornTimingCriticalLOSS() then
+            -- Warm the destination in the lobby; preserve it throughout Popcorn.
             local now = os.clock()
             if gameId ~= lastActiveGame or now >= nextRefreshAt then
                 lastActiveGame = gameId
