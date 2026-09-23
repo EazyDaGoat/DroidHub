@@ -30262,7 +30262,13 @@ local function fireAttempt(slot, key, targetTime, details)
         and details.duration > 0
         and string.sub(tostring(details.source), 1, 7) ~= "server:"
     then
-        local expectedScale = TARGET_SCALE
+        -- Compare against the ring size expected at the chosen send deadline.
+        -- Sending before the visual crossing intentionally leaves a larger ring;
+        -- treating that as an error would train the compensation away from target.
+        local visualLead = type(details.visualTarget) == "number"
+            and type(details.fireTime) == "number"
+            and math.max(0, details.visualTarget - details.fireTime) or 0
+        local expectedScale = TARGET_SCALE + OUTER_START_SCALE * visualLead / details.duration
         details.expectedLocalScale = expectedScale
         details.localTimingResidual = (expectedScale - scaleAtFire)
             * details.duration / OUTER_START_SCALE
@@ -30301,11 +30307,20 @@ local function runKernel(slot, duration, key, stateSeenAt)
         visualTarget = stateSeenAt + duration * TARGET_FRACTION
         source = "live-ring+latency"
         local nextPingRefreshAt = 0
+        -- A frozen/stale tween must not push acquisition later on every frame.
+        -- The first valid geometry estimate fixes the acquisition deadline;
+        -- absent geometry, use the existing state-arrival estimate.
+        local acquisitionDeadline = visualTarget - compensation - probeOffset + GEOMETRY_LOCK_SPREAD
+        local firstGeometrySeen = false
         while kernelStillLive(slot) do
             local scale, sampledAt = sampleOuterScale()
             latestScale = scale or latestScale
             local crossing = visualCrossingFromSample(scale, sampledAt, duration)
             if crossing then
+                if not firstGeometrySeen then
+                    acquisitionDeadline = crossing - compensation - probeOffset + GEOMETRY_LOCK_SPREAD
+                    firstGeometrySeen = true
+                end
                 crossingHistory[#crossingHistory + 1] = crossing
                 while #crossingHistory > TRACKING_HISTORY do
                     table.remove(crossingHistory, 1)
@@ -30334,15 +30349,20 @@ local function runKernel(slot, duration, key, stateSeenAt)
             end
             local failsafeLead = sampleCount >= MIN_GEOMETRY_SAMPLES
                 and 0 or FAILSAFE_EXTRA_EARLY_LEAD
-            -- Score with the server-time estimate for the perfect crossing,
-            -- but do not physically fire the remote early. Waiting until the
-            -- locally rendered ring reaches the target prevents an inbound
-            -- ping spike from causing an early click. The remote still carries
-            -- the compensated server timestamp, so a late rendered frame does
-            -- not change the intended scoring time.
+            -- Send at the estimated scoring time rather than waiting again
+            -- for the latency-delayed visual crossing. The remote still reports
+            -- the same calculated timestamp and never a future timestamp.
             reportedTargetTime = visualTarget - compensation - probeOffset - failsafeLead
-            fireTime = visualTarget
-            local remainingToTarget = fireTime - nowServer()
+            fireTime = reportedTargetTime
+            local serverNow = nowServer()
+            local remainingToTarget = fireTime - serverNow
+            if serverNow >= acquisitionDeadline then
+                reportedTargetTime = math.min(reportedTargetTime, acquisitionDeadline)
+                fireTime = reportedTargetTime
+                source = firstGeometrySeen and "geometry-deadline-failsafe"
+                    or "state-arrival-failsafe"
+                break
+            end
             local stableGeometry = false
             if sampleCount >= MIN_GEOMETRY_SAMPLES and #crossingHistory > 0 then
                 local minCrossing = math.huge
@@ -30368,6 +30388,14 @@ local function runKernel(slot, duration, key, stateSeenAt)
                 break
             end
             RunService.RenderStepped:Wait()
+        end
+        -- The sample-count exit must respect the same bound as the time exit.
+        -- Otherwise twelve stale samples could still schedule a late click.
+        if reportedTargetTime and reportedTargetTime > acquisitionDeadline then
+            reportedTargetTime = acquisitionDeadline
+            fireTime = acquisitionDeadline
+            source = firstGeometrySeen and "geometry-deadline-failsafe"
+                or "state-arrival-failsafe"
         end
     end
     if not kernelStillLive(slot) then
