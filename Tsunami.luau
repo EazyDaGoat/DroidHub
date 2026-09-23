@@ -5980,7 +5980,7 @@ if MINIGAME_MODE then
 		end
 	end
 	do
-		for _, key in ipairs({"__TSUNAMI_POPCORN_PERFECT_V14", "__TSUNAMI_POPCORN_PERFECT_V15", "__TSUNAMI_POPCORN_PERFECT_V16", "__TSUNAMI_POPCORN_PERFECT_V17"}) do
+		for _, key in ipairs({"__TSUNAMI_POPCORN_PERFECT_V14", "__TSUNAMI_POPCORN_PERFECT_V15", "__TSUNAMI_POPCORN_PERFECT_V16", "__TSUNAMI_POPCORN_PERFECT_V17", "__TSUNAMI_POPCORN_PERFECT_V18", "__TSUNAMI_POPCORN_PERFECT_V19"}) do
 			local controller = rawget(_G, key)
 			if controller and type(controller.Destroy) == "function" then
 				pcall(function() controller:Destroy() end)
@@ -29681,7 +29681,9 @@ function controller:Destroy()
         pcall(self.BatBattleCleanup)
         self.BatBattleCleanup = nil
     end
-    local popController = rawget(_G, "__TSUNAMI_POPCORN_PERFECT_V17")
+    local popController = rawget(_G, "__TSUNAMI_POPCORN_PERFECT_V19")
+        or rawget(_G, "__TSUNAMI_POPCORN_PERFECT_V18")
+        or rawget(_G, "__TSUNAMI_POPCORN_PERFECT_V17")
         or rawget(_G, "__TSUNAMI_POPCORN_PERFECT_V16")
     if popController and type(popController.Destroy) == "function" then
         pcall(function() popController:Destroy() end)
@@ -29779,6 +29781,7 @@ local controller = {
     disconnectors = {},
     scheduled = {},
     fired = {},
+    sending = {},
     attempts = {},
     resultProcessed = {},
     lastAttemptKeyBySlot = {},
@@ -30099,7 +30102,7 @@ local function kernelStillLive(slot)
 end
 local function normalizeServerTimestamp(value)
     value = tonumber(value)
-    if not value then return nil end
+    if not value or value ~= value or value == math.huge or value == -math.huge then return nil end
     if value > 100000000000 then
         value /= 1000
     end
@@ -30163,8 +30166,15 @@ local function scanTimingTable(tbl, prefix, duration, depth, seen)
     return nil
 end
 local function authoritativeTargetFromState(state, duration)
-    if type(state) ~= "table" then
+    if type(state) ~= "table" or type(duration) ~= "number"
+        or duration ~= duration or duration <= 0 or duration > 10 then
         return nil
+    end
+    -- This exact field is confirmed by the runtime logs. Prefer it over an
+    -- unordered recursive search that could select an unrelated nested time.
+    local startTime = normalizeServerTimestamp(state.ringStartTime)
+    if startTime then
+        return startTime + duration * TARGET_FRACTION, "ringStartTime", "start"
     end
     return scanTimingTable(state, "", duration, 0, {})
 end
@@ -30223,49 +30233,49 @@ local function preciseWaitUntil(targetTime, slot, key)
         maxSleepOvershoot * 1000, maxHeartbeatDt * 1000, clockDriftMs
 end
 local function fireAttempt(slot, key, targetTime, details)
-    if controller.fired[key]
-        or controller.currentKernelKey ~= key
-        or not kernelStillLive(slot)
-    then
+    if controller.fired[key] or controller.sending[key]
+        or controller.currentKernelKey ~= key then
         return false
     end
+    -- Reserve before calling the executor/API so a yielding hook cannot cause
+    -- another worker to submit this same kernel concurrently.
+    controller.sending[key] = true
     local firedAt
     local sent = false
     for _ = 1, 3 do
-        if controller.currentKernelKey ~= key or not kernelStillLive(slot) then
-            return false
-        end
-        -- Re-read the scoring reference once at send time. This is diagnostic:
-        -- do not move the planned deadline or alter the outgoing timestamp.
+        if controller.destroyed or controller.currentKernelKey ~= key
+            or not popcornActive() then break end
         local liveState = privateState()
-        local liveDuration = tonumber(liveState and liveState.ringDuration) or details.duration
-        if type(liveDuration) == "number" then
-            local liveTarget, liveField = authoritativeTargetFromState(liveState, liveDuration)
-            details.liveTargetAtSend = liveTarget
-            details.liveFieldAtSend = liveField
-            details.liveDurationAtSend = liveDuration
+        local liveDuration = tonumber(type(liveState) == "table" and liveState.ringDuration)
+        if type(liveState) ~= "table" or liveState.finished == true
+            or tonumber(liveState.activeKernelSlot) ~= tonumber(slot)
+            or resultBlocksAttempt(liveState, slot)
+            or not liveDuration or liveDuration <= 0 or liveDuration > 10 then
+            break
+        end
+        local liveTarget, liveField = authoritativeTargetFromState(liveState, liveDuration)
+        details.liveTargetAtSend = liveTarget
+        details.liveFieldAtSend = liveField
+        details.liveDurationAtSend = liveDuration
+        if string.sub(tostring(details.source), 1, 7) == "server:"
+            and type(liveTarget) == "number"
+            and math.abs(liveTarget - targetTime) > 0.000001 then
+            -- No live logs currently show this transition, but if it happens
+            -- do not send the superseded target. Existing state/fallback updates
+            -- can re-arm this kernel once the worker releases scheduled[key].
+            details.cancelReason = "replicated-target-changed"
+            break
         end
         details.firedClock = os.clock()
         firedAt = nowServer()
-        local reportedAt = tonumber(targetTime) or firedAt
-        if reportedAt > firedAt then
-            reportedAt = firedAt
-        end
-        sent = pcall(
-            MinigameGameAction.FireServer,
-            MinigameGameAction,
-            "AttemptPop",
-            reportedAt
-        )
+        local reportedAt = math.min(tonumber(targetTime) or firedAt, firedAt)
+        sent = pcall(MinigameGameAction.FireServer, MinigameGameAction, "AttemptPop", reportedAt)
         details.localCallMs = (os.clock() - details.firedClock) * 1000
         details.reportedAt = reportedAt
-        if sent then
-            break
-        end
+        if sent then break end
     end
-    if not sent then
-        return false
-    end
+    controller.sending[key] = nil
+    if not sent then return false end
     controller.fired[key] = true
     local localScale, localScaleAt = sampleOuterScale()
     local scaleAtFire = localScale
@@ -30722,7 +30732,7 @@ local function logPopcornTiming(result, slot, key, attempt)
         local printStartedClock = os.clock()
         if not controller.timingLogHeaderPrinted then
             controller.timingLogHeaderPrinted=true
-            print("[DH POPCORN] Timing build LOG3 | ms: +late/-early. plan=send deadline; visual=visible-ring estimate; estimate=latency-adjusted target; stamp=remote timestamp offset. wait_gap includes intentional waits. live_shift=target change before send; send_live/stamp_live=offset from re-read state target; call=local FireServer call duration (not network transit); result_local=monotonic result-return delay; clock_drift=server-clock elapsed minus local elapsed. seen_late/worker_late/wait_entry=stage arrival relative to target; setup=local preparation duration; previous_log=prior console flush duration. Ping fields are NA when the replicated target bypasses ping sampling. True server error is unknown; result_hints are raw, units unverified.")
+            print("[DH POPCORN] Timing build LOG4 | ms: +late/-early. plan=send deadline; visual=visible-ring estimate; estimate=latency-adjusted target; stamp=remote timestamp offset. wait_gap includes intentional waits. live_shift=target change before send; send_live/stamp_live=offset from re-read state target; call=local FireServer call duration (not network transit); result_local=monotonic result-return delay; clock_drift=server-clock elapsed minus local elapsed. seen_late/worker_late/wait_entry=stage arrival relative to target; setup=local preparation duration; previous_log=prior console flush duration. Ping fields are NA when the replicated target bypasses ping sampling. True server error is unknown; result_hints are raw, units unverified.")
         end
         for _,entry in ipairs(batch) do print(entry) end
         controller.lastTimingPrintMs = (os.clock() - printStartedClock) * 1000
@@ -30863,6 +30873,7 @@ function controller:Destroy()
     table.clear(self.connections)
     table.clear(self.scheduled)
     table.clear(self.fired)
+    table.clear(self.sending)
     table.clear(self.attempts)
     table.clear(self.resultProcessed)
     table.clear(self.lastAttemptKeyBySlot)
