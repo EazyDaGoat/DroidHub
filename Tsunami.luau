@@ -30297,13 +30297,30 @@ local function fireAttempt(slot, key, targetTime, details)
     return true
 end
 local function runKernel(slot, duration, key, stateSeenAt)
+    local workerStartedAt = nowServer()
+    local setupStartedClock = os.clock()
     clearGeometryCache()
     local state = privateState()
     local authoritativeTarget, authoritativeField, authoritativeKind =
         authoritativeTargetFromState(state, duration)
     local compensation, dataRtt, networkRtt, livePingHalf,
         currentDataRtt, currentNetworkRtt, baseCompensation,
-        explicitBias, adaptiveBias = inboundReplicationEstimate()
+        explicitBias, adaptiveBias
+    controller.usesAuthoritativeTiming = authoritativeTarget ~= nil
+    if authoritativeTarget then
+        -- An explicit replicated target needs no ping adjustment. Avoid Stats
+        -- access, ping reads, sample copies and sorts ahead of this deadline.
+        compensation, baseCompensation, explicitBias, adaptiveBias = 0, 0, 0, 0
+    else
+        -- Preserve the original warm-up for visual timing, but only when used.
+        if not controller.pingSamplesPrimed then
+            for _ = 1, 7 do updatePingSamples() end
+            controller.pingSamplesPrimed = true
+        end
+        compensation, dataRtt, networkRtt, livePingHalf,
+            currentDataRtt, currentNetworkRtt, baseCompensation,
+            explicitBias, adaptiveBias = inboundReplicationEstimate()
+    end
     local reportedTargetTime
     local fireTime
     local source
@@ -30427,6 +30444,9 @@ local function runKernel(slot, duration, key, stateSeenAt)
         latestTrackedScale = latestScale,
     }
     details.fireTime = fireTime
+    details.workerStartedAt = workerStartedAt
+    details.waitStartedAt = nowServer()
+    details.setupMs = (os.clock() - setupStartedClock) * 1000
     local ready, maxResumeGapMs, sleepOvershootMs, heartbeatDtMs, clockDriftMs = preciseWaitUntil(fireTime, slot, key)
     details.maxResumeGapMs = maxResumeGapMs
     details.sleepOvershootMs = sleepOvershootMs
@@ -30659,6 +30679,12 @@ local function logPopcornTiming(result, slot, key, attempt)
         "points="..token(result.points), "rating="..token(result.rating),
         "sent="..(attempt and "yes" or "no"),
         "plan_ms="..number(difference(a.firedAt,a.fireTime),true),
+        "seen_late_ms="..number(difference(a.stateSeenAt,a.targetTime),true),
+        "worker_late_ms="..number(difference(a.workerStartedAt,a.targetTime),true),
+        "wait_entry_ms="..number(difference(a.waitStartedAt,a.targetTime),true),
+        "spawn_ms="..number(difference(a.workerStartedAt,a.stateSeenAt)),
+        "setup_ms="..number(a.setupMs),
+        "previous_log_ms="..number(controller.lastTimingPrintMs),
         "visual_ms="..number(visualError,true),
         "estimate_ms="..number(difference(a.firedAt,a.targetTime),true),
         "stamp_ms="..number(difference(a.reportedAt,a.targetTime),true),
@@ -30693,11 +30719,13 @@ local function logPopcornTiming(result, slot, key, attempt)
         controller.timingLogScheduled=false
         local batch=controller.pendingTimingLogs
         controller.pendingTimingLogs={}
+        local printStartedClock = os.clock()
         if not controller.timingLogHeaderPrinted then
             controller.timingLogHeaderPrinted=true
-            print("[DH POPCORN] Timing build LOG2 | ms: +late/-early. plan=send deadline; visual=visible-ring estimate; estimate=latency-adjusted target; stamp=remote timestamp offset. wait_gap includes intentional waits. live_shift=target change before send; send_live/stamp_live=offset from re-read state target; call=local FireServer call duration (not network transit); result_local=monotonic result-return delay; clock_drift=server-clock elapsed minus local elapsed. True server error is unknown; result_hints are raw, units unverified.")
+            print("[DH POPCORN] Timing build LOG3 | ms: +late/-early. plan=send deadline; visual=visible-ring estimate; estimate=latency-adjusted target; stamp=remote timestamp offset. wait_gap includes intentional waits. live_shift=target change before send; send_live/stamp_live=offset from re-read state target; call=local FireServer call duration (not network transit); result_local=monotonic result-return delay; clock_drift=server-clock elapsed minus local elapsed. seen_late/worker_late/wait_entry=stage arrival relative to target; setup=local preparation duration; previous_log=prior console flush duration. Ping fields are NA when the replicated target bypasses ping sampling. True server error is unknown; result_hints are raw, units unverified.")
         end
         for _,entry in ipairs(batch) do print(entry) end
+        controller.lastTimingPrintMs = (os.clock() - printStartedClock) * 1000
     end)
 end
 local function reportAndCalibrate()
@@ -30777,9 +30805,7 @@ local function addDisconnector(fn)
         controller.disconnectors[#controller.disconnectors + 1] = fn
     end
 end
-for _ = 1, 7 do
-    updatePingSamples()
-end
+-- Attach result/state listeners before doing any optional ping warm-up.
 local rawConnection = ActiveMinigame:ListenRaw(function()
     update()
 end)
@@ -30808,7 +30834,7 @@ task.spawn(function()
         if popcornActive() then
             update()
             local now = os.clock()
-            if now >= nextPingAt then
+            if controller.usesAuthoritativeTiming == false and now >= nextPingAt then
                 nextPingAt = now + 0.10
                 updatePingSamples()
             end
