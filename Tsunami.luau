@@ -39337,36 +39337,6 @@ local function performDisconnectAndTeleport(destinationServerId, reason)
             kickedGameId = string.match(triggerReason, "^([^:]+)")
         end
     end
-    local kickedGameName = KICK_GAME_DISPLAY_NAMES[kickedGameId]
-        or (type(kickedGameId) == "string" and kickedGameId ~= "" and kickedGameId)
-        or "Unknown"
-    local kickLogSeparator = string.rep("\\", 10)
-    if not disconnectReason then
-        local logContext = rawget(_G, "__DROIDHUB_MINIGAME_LOG_CONTEXT")
-        if type(logContext) == "table" and type(logContext.RecordAdaptiveLoss) == "function" then
-            pcall(logContext.RecordAdaptiveLoss, kickedGameId)
-        end
-    end
-    if utility.PauseScript ~= true
-        and utility.PauseMinigameFeatures ~= true
-        and not disconnectReason
-        and utility.PrintKicksToTerminal == true
-        and controller.kickLogged ~= true
-    then
-        controller.kickLogged = true
-        local logContext = rawget(_G, "__DROIDHUB_MINIGAME_LOG_CONTEXT")
-        local printed = false
-        if type(logContext) == "table" and type(logContext.PrintEvent) == "function" then
-            local ok, result = pcall(logContext.PrintEvent, "KICKED", false, kickedGameId, nil)
-            printed = ok and result == true
-        end
-        if not printed then
-            local rounds = currentBestOfRounds() or tracker.seriesBestOfRounds or tracker.votedBestOfRounds
-            print("KICKED | Game: " .. tostring(kickedGameName)
-                .. " | Rounds: " .. tostring(rounds or "Unknown") .. " | Tokens: 0")
-            print(kickLogSeparator)
-        end
-    end
     if utility.PauseScript == true or utility.PauseMinigameFeatures == true then
         controller.pendingLossReason = nil
         controller.lastDepartureAttemptAt = 0
@@ -39388,6 +39358,39 @@ local function performDisconnectAndTeleport(destinationServerId, reason)
     controller.ArmImmediateHopAfterKick()
     local kickAccepted = pcall(function()
         LocalPlayer:Kick(disconnectReason and "Connection Lost" or "Lost Duel")
+    end)
+    -- Reporting must never delay the disconnect.
+    task.defer(function()
+        local kickedGameName = KICK_GAME_DISPLAY_NAMES[kickedGameId]
+            or (type(kickedGameId) == "string" and kickedGameId ~= "" and kickedGameId)
+            or "Unknown"
+        local kickLogSeparator = string.rep("\\", 10)
+        if not disconnectReason then
+            local logContext = rawget(_G, "__DROIDHUB_MINIGAME_LOG_CONTEXT")
+            if type(logContext) == "table" and type(logContext.RecordAdaptiveLoss) == "function" then
+                pcall(logContext.RecordAdaptiveLoss, kickedGameId)
+            end
+        end
+        if utility.PauseScript ~= true
+            and utility.PauseMinigameFeatures ~= true
+            and not disconnectReason
+            and utility.PrintKicksToTerminal == true
+            and controller.kickLogged ~= true
+        then
+            controller.kickLogged = true
+            local logContext = rawget(_G, "__DROIDHUB_MINIGAME_LOG_CONTEXT")
+            local printed = false
+            if type(logContext) == "table" and type(logContext.PrintEvent) == "function" then
+                local ok, result = pcall(logContext.PrintEvent, "KICKED", false, kickedGameId, nil)
+                printed = ok and result == true
+            end
+            if not printed then
+                local rounds = currentBestOfRounds() or tracker.seriesBestOfRounds or tracker.votedBestOfRounds
+                print("KICKED | Game: " .. tostring(kickedGameName)
+                    .. " | Rounds: " .. tostring(rounds or "Unknown") .. " | Tokens: 0")
+                print(kickLogSeparator)
+            end
+        end
     end)
     local teleportAccepted = false
     if type(destinationServerId) == "string"
@@ -41728,6 +41731,23 @@ local function popcornExactProgressFinished(state)
         and total > 0
         and current >= total
 end
+-- Both completion flags must be updated from the same snapshot first.
+-- If both are already final on first observation, finish order is unknown.
+local function observePopcornFinishOrder()
+    if tracker.popcornFirstFinisher ~= nil then return end
+    if tracker.popcornMyFinal and tracker.popcornOpponentFinal then
+        tracker.popcornFirstFinisher = "unknown"
+    elseif tracker.popcornOpponentFinal then
+        tracker.popcornFirstFinisher = "opponent"
+    elseif tracker.popcornMyFinal then
+        tracker.popcornFirstFinisher = "local"
+    end
+end
+local function popcornScoreCannotWin(myMaximum, opponentScore)
+    return opponentScore > myMaximum
+        or (opponentScore == myMaximum
+            and tracker.popcornFirstFinisher == "opponent")
+end
 local function initializePopcornRoundTracking(
     s,
     myState,
@@ -41777,6 +41797,7 @@ local function initializePopcornRoundTracking(
         opponentRemaining,
         tracker.popcornOpponentCurrentResultKey
     )
+    tracker.popcornFirstFinisher = nil
     tracker.popcornMyFinal = myState.finished == true
         or popcornExactProgressFinished(myState)
     tracker.popcornOpponentFinal = opponentState.finished == true
@@ -41879,6 +41900,7 @@ local function updatePopcornTerminalFlags(
     then
         tracker.popcornOpponentFinal = true
     end
+    observePopcornFinishOrder()
     tracker.popcornMyLastVisibleRemaining = myRemaining
     tracker.popcornOpponentLastVisibleRemaining = opponentRemaining
 end
@@ -42669,16 +42691,14 @@ local function processPopcorn(s)
         myRemaining,
         opponentRemaining
     )
-    local myPoints, opponentPoints = readPopcornBoardPoints(s.seatIndex)
-    if myPoints == nil then
-        myPoints = popcornStateScore(myState)
-    end
-    if opponentPoints == nil then
-        opponentPoints = popcornStateScore(opponentState)
-    end
+    local myPoints, opponentPoints
     if tracker.popcornSeenFromRoundStart then
         myPoints = tracker.popcornMyAccumulatedPoints
         opponentPoints = tracker.popcornOpponentAccumulatedPoints
+    else
+        myPoints, opponentPoints = readPopcornBoardPoints(s.seatIndex)
+        if myPoints == nil then myPoints = popcornStateScore(myState) end
+        if opponentPoints == nil then opponentPoints = popcornStateScore(opponentState) end
     end
     local clinchingRound = popcornRequiredWins ~= nil
         and (
@@ -42741,7 +42761,7 @@ local function processPopcorn(s)
         then
             local absoluteMaxPossible =
                 localScoreUpperBase + remainingUpperBound * 100
-            if opponentScoreLowerBound > absoluteMaxPossible then
+            if popcornScoreCannotWin(absoluteMaxPossible, opponentScoreLowerBound) then
                 latchClinchingLoss("PopcornBurst:MathematicallyUnwinnable")
                 return
             end
@@ -42765,14 +42785,14 @@ local function processPopcorn(s)
     if clinchingRound and tracker.popcornMyFinal then
         if myPoints ~= nil
             and opponentPoints ~= nil
-            and opponentPoints > myPoints
+            and popcornScoreCannotWin(myPoints, opponentPoints)
         then
             latchClinchingLoss("PopcornBurst:FinalKernelScoreLost")
             return
         end
         if tracker.popcornSeenFromRoundStart
-            and tracker.popcornOpponentAccumulatedPoints
-                > tracker.popcornMyAccumulatedPoints
+            and popcornScoreCannotWin(tracker.popcornMyAccumulatedPoints,
+                tracker.popcornOpponentAccumulatedPoints)
         then
             latchClinchingLoss("PopcornBurst:OpponentPassedFinalScore")
             return
@@ -43569,6 +43589,7 @@ local okRaw, rawListener = pcall(function()
     return ActiveMinigame:ListenRaw(function()
         controller.lastMinigameReplicationAt = os.clock()
         controller.evaluationRequested = true
+        if controller.RequestSignalEvaluation then controller.RequestSignalEvaluation() end
     end)
 end)
 if okRaw then
@@ -43605,6 +43626,7 @@ local okPrivate, privateListener = pcall(function()
         if tracker.gameId == "PopcornBurst"
             and tracker.popcornRoundInitialized
             and tracker.popcornSeenFromRoundStart
+            and not tracker.popcornAwaitingFreshRound
             and cachedClinchRoundReady()
         then
             tracker.popcornPrivatePayload = privateValue
@@ -43630,6 +43652,13 @@ local okPrivate, privateListener = pcall(function()
                     tracker.popcornOpponentFinal = true
                 end
             end
+            if myState ~= nil and myState.finished == true then
+                tracker.popcornMyFinal = true
+            end
+            if opponentState ~= nil and opponentState.finished == true then
+                tracker.popcornOpponentFinal = true
+            end
+            observePopcornFinishOrder()
             local expected = tracker.popcornMyExpectedResults
             if expected ~= nil and expected >= 0 then
                 local remaining = math.max(
@@ -43638,17 +43667,17 @@ local okPrivate, privateListener = pcall(function()
                 )
                 local absoluteMaxPossible =
                     tracker.popcornMyAccumulatedPoints + remaining * 100
-                if tracker.popcornOpponentAccumulatedPoints > absoluteMaxPossible then
+                if popcornScoreCannotWin(absoluteMaxPossible, tracker.popcornOpponentAccumulatedPoints) then
                     latchClinchingLoss("PopcornBurst:PrivateUnwinnableScoreSignal")
                 elseif tracker.popcornMyFinal
-                    and tracker.popcornOpponentAccumulatedPoints
-                        > tracker.popcornMyAccumulatedPoints
+                    and popcornScoreCannotWin(tracker.popcornMyAccumulatedPoints,
+                        tracker.popcornOpponentAccumulatedPoints)
                 then
                     latchClinchingLoss("PopcornBurst:PrivateResultSignal")
                 end
             elseif tracker.popcornMyFinal
-                and tracker.popcornOpponentAccumulatedPoints
-                    > tracker.popcornMyAccumulatedPoints
+                and popcornScoreCannotWin(tracker.popcornMyAccumulatedPoints,
+                    tracker.popcornOpponentAccumulatedPoints)
             then
                 latchClinchingLoss("PopcornBurst:PrivateResultSignal")
             end
@@ -44176,6 +44205,21 @@ local function consumeQueuedReplicatorSignals()
         end
     end
 end
+controller.RequestSignalEvaluation = function()
+    local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
+    if controller.destroyed or controller.signalEvaluationScheduled
+        or type(utility) ~= "table" or utility.LeaveWhenAboutToLose ~= true
+        or utility.PauseScript == true or utility.PauseMinigameFeatures == true
+    then return end
+    controller.signalEvaluationScheduled = true
+    task.defer(function()
+        controller.signalEvaluationScheduled = false
+        if controller.destroyed or not controller.evaluationRequested then return end
+        controller.evaluationRequested = false
+        consumeQueuedReplicatorSignals()
+        evaluateState()
+    end)
+end
 do
     local GuiServiceLOSS = game:GetService("GuiService")
     local StatsLOSS = game:GetService("Stats")
@@ -44600,10 +44644,10 @@ do
         consumeQueuedReplicatorSignals()
         local gameId = currentGameId()
         local activeSupportedGame = gameId and SUPPORTED_GAMES[gameId] == true
-        -- Event listeners request an immediate evaluation. The fallback poll is
-        -- One evaluation per Heartbeat during supported games, 4 Hz otherwise.
+        -- Replication drives loss detection. Popcorn's fallback scans at 20 Hz;
+        -- its private-result listener still checks immediately on every result.
         nextFallbackEvaluationAt = now + (
-            gameId == "HotPotato" and 0
+            gameId == "PopcornBurst" and 0.05
             or (activeSupportedGame and 0 or 0.25)
         )
         evaluateState()
