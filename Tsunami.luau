@@ -29782,6 +29782,9 @@ local controller = {
     attempts = {},
     resultProcessed = {},
     lastAttemptKeyBySlot = {},
+    lastKernelKeyBySlot = {},
+    timingLog = {},
+    pendingTimingLogs = {},
     roundSerial = 0,
     kernelOccurrence = 0,
     currentKernelKey = nil,
@@ -30186,6 +30189,8 @@ local function preciseWaitUntil(targetTime, slot, key)
     -- after the crossing we still report the calculated crossing time.
     local previousResume = nowServer()
     local maxResumeGap = 0
+    local maxSleepOvershoot = 0
+    local maxHeartbeatDt = 0
     while controller.currentKernelKey == key and kernelStillLive(slot) do
         local resumedAt = nowServer()
         maxResumeGap = math.max(maxResumeGap, resumedAt - previousResume)
@@ -30195,9 +30200,14 @@ local function preciseWaitUntil(targetTime, slot, key)
             break
         end
         if remaining > 0.025 then
-            task.wait(math.max(0.001, remaining - 0.012))
+            local requested = math.max(0.001, remaining - 0.012)
+            local elapsed = task.wait(requested)
+            if type(elapsed) == "number" then
+                maxSleepOvershoot = math.max(maxSleepOvershoot, elapsed - requested)
+            end
         else
-            RunService.Heartbeat:Wait()
+            local dt = RunService.Heartbeat:Wait()
+            if type(dt) == "number" then maxHeartbeatDt = math.max(maxHeartbeatDt, dt) end
         end
     end
     if controller.destroyed
@@ -30207,7 +30217,8 @@ local function preciseWaitUntil(targetTime, slot, key)
     then
         return false
     end
-    return kernelStillLive(slot), maxResumeGap * 1000
+    return kernelStillLive(slot), maxResumeGap * 1000,
+        maxSleepOvershoot * 1000, maxHeartbeatDt * 1000
 end
 local function fireAttempt(slot, key, targetTime, details)
     if controller.fired[key]
@@ -30262,13 +30273,7 @@ local function fireAttempt(slot, key, targetTime, details)
         and details.duration > 0
         and string.sub(tostring(details.source), 1, 7) ~= "server:"
     then
-        -- Compare against the ring size expected at the chosen send deadline.
-        -- Sending before the visual crossing intentionally leaves a larger ring;
-        -- treating that as an error would train the compensation away from target.
-        local visualLead = type(details.visualTarget) == "number"
-            and type(details.fireTime) == "number"
-            and math.max(0, details.visualTarget - details.fireTime) or 0
-        local expectedScale = TARGET_SCALE + OUTER_START_SCALE * visualLead / details.duration
+        local expectedScale = TARGET_SCALE
         details.expectedLocalScale = expectedScale
         details.localTimingResidual = (expectedScale - scaleAtFire)
             * details.duration / OUTER_START_SCALE
@@ -30307,20 +30312,11 @@ local function runKernel(slot, duration, key, stateSeenAt)
         visualTarget = stateSeenAt + duration * TARGET_FRACTION
         source = "live-ring+latency"
         local nextPingRefreshAt = 0
-        -- A frozen/stale tween must not push acquisition later on every frame.
-        -- The first valid geometry estimate fixes the acquisition deadline;
-        -- absent geometry, use the existing state-arrival estimate.
-        local acquisitionDeadline = visualTarget - compensation - probeOffset + GEOMETRY_LOCK_SPREAD
-        local firstGeometrySeen = false
         while kernelStillLive(slot) do
             local scale, sampledAt = sampleOuterScale()
             latestScale = scale or latestScale
             local crossing = visualCrossingFromSample(scale, sampledAt, duration)
             if crossing then
-                if not firstGeometrySeen then
-                    acquisitionDeadline = crossing - compensation - probeOffset + GEOMETRY_LOCK_SPREAD
-                    firstGeometrySeen = true
-                end
                 crossingHistory[#crossingHistory + 1] = crossing
                 while #crossingHistory > TRACKING_HISTORY do
                     table.remove(crossingHistory, 1)
@@ -30349,20 +30345,15 @@ local function runKernel(slot, duration, key, stateSeenAt)
             end
             local failsafeLead = sampleCount >= MIN_GEOMETRY_SAMPLES
                 and 0 or FAILSAFE_EXTRA_EARLY_LEAD
-            -- Send at the estimated scoring time rather than waiting again
-            -- for the latency-delayed visual crossing. The remote still reports
-            -- the same calculated timestamp and never a future timestamp.
+            -- Score with the server-time estimate for the perfect crossing,
+            -- but do not physically fire the remote early. Waiting until the
+            -- locally rendered ring reaches the target prevents an inbound
+            -- ping spike from causing an early click. The remote still carries
+            -- the compensated server timestamp, so a late rendered frame does
+            -- not change the intended scoring time.
             reportedTargetTime = visualTarget - compensation - probeOffset - failsafeLead
-            fireTime = reportedTargetTime
-            local serverNow = nowServer()
-            local remainingToTarget = fireTime - serverNow
-            if serverNow >= acquisitionDeadline then
-                reportedTargetTime = math.min(reportedTargetTime, acquisitionDeadline)
-                fireTime = reportedTargetTime
-                source = firstGeometrySeen and "geometry-deadline-failsafe"
-                    or "state-arrival-failsafe"
-                break
-            end
+            fireTime = visualTarget
+            local remainingToTarget = fireTime - nowServer()
             local stableGeometry = false
             if sampleCount >= MIN_GEOMETRY_SAMPLES and #crossingHistory > 0 then
                 local minCrossing = math.huge
@@ -30388,14 +30379,6 @@ local function runKernel(slot, duration, key, stateSeenAt)
                 break
             end
             RunService.RenderStepped:Wait()
-        end
-        -- The sample-count exit must respect the same bound as the time exit.
-        -- Otherwise twelve stale samples could still schedule a late click.
-        if reportedTargetTime and reportedTargetTime > acquisitionDeadline then
-            reportedTargetTime = acquisitionDeadline
-            fireTime = acquisitionDeadline
-            source = firstGeometrySeen and "geometry-deadline-failsafe"
-                or "state-arrival-failsafe"
         end
     end
     if not kernelStillLive(slot) then
@@ -30430,8 +30413,10 @@ local function runKernel(slot, duration, key, stateSeenAt)
         latestTrackedScale = latestScale,
     }
     details.fireTime = fireTime
-    local ready, maxResumeGapMs = preciseWaitUntil(fireTime, slot, key)
+    local ready, maxResumeGapMs, sleepOvershootMs, heartbeatDtMs = preciseWaitUntil(fireTime, slot, key)
     details.maxResumeGapMs = maxResumeGapMs
+    details.sleepOvershootMs = sleepOvershootMs
+    details.heartbeatDtMs = heartbeatDtMs
     if ready then
         fireAttempt(slot, key, reportedTargetTime, details)
     end
@@ -30609,6 +30594,7 @@ local function armCurrentKernel()
         return
     end
     controller.scheduled[key] = true
+    controller.lastKernelKeyBySlot[slot] = key
     local stateSeenAt = nowServer()
     task.spawn(runKernel, slot, duration, key, stateSeenAt)
 end
@@ -30621,6 +30607,77 @@ local function resultIdentity(result, key)
         tostring(result.points),
     }, ":")
 end
+-- One line per result, emitted after the current callback has returned.
+-- Signs: positive=late, negative=early. These are client measurements/estimates,
+-- not the hidden server scoring error. No disk writes or per-frame logger.
+local function logPopcornTiming(result, slot, key, attempt)
+    local function number(value, signed)
+        if type(value) ~= "number" or value ~= value then return "NA" end
+        return string.format(signed and "%+.1f" or "%.1f", value)
+    end
+    local function difference(a,b)
+        if type(a)=="number" and type(b)=="number" then return (a-b)*1000 end
+    end
+    local function token(value)
+        return (string.gsub(tostring(value or "NA"), "%s+", "_"))
+    end
+    local a=attempt or {}
+    local visualError
+    if type(a.localScale)=="number" and type(a.duration)=="number" then
+        visualError=(TARGET_SCALE-a.localScale)*a.duration/OUTER_START_SCALE*1000
+    end
+    local hints={}
+    for name,value in pairs(result) do
+        local lower=string.lower(tostring(name))
+        if (type(value)=="number" or type(value)=="boolean" or type(value)=="string")
+            and (string.find(lower,"tim",1,true) or string.find(lower,"error",1,true)
+                or string.find(lower,"early",1,true) or string.find(lower,"late",1,true)
+                or string.find(lower,"offset",1,true) or string.find(lower,"accuracy",1,true))
+        then
+            hints[#hints+1]=token(name)..":"..string.sub(token(value),1,60)
+            if #hints>=6 then break end
+        end
+    end
+    local line=table.concat({
+        "[DH POPCORN]",
+        "kernel="..token(key), "slot="..token(slot),
+        "points="..token(result.points), "rating="..token(result.rating),
+        "sent="..(attempt and "yes" or "no"),
+        "plan_ms="..number(difference(a.firedAt,a.fireTime),true),
+        "visual_ms="..number(visualError,true),
+        "estimate_ms="..number(difference(a.firedAt,a.targetTime),true),
+        "stamp_ms="..number(difference(a.reportedAt,a.targetTime),true),
+        "wait_gap_ms="..number(a.maxResumeGapMs),
+        "sleep_late_ms="..number(a.sleepOvershootMs),
+        "heartbeat_ms="..number(a.heartbeatDtMs),
+        "result_delay_ms="..number(difference(nowServer(),a.firedAt)),
+        "duration_ms="..number(type(a.duration)=="number" and a.duration*1000 or nil),
+        "comp_ms="..number(type(a.effectiveCompensation)=="number" and a.effectiveCompensation*1000 or nil),
+        "data_ping_ms="..number(type(a.currentDataRtt)=="number" and a.currentDataRtt*1000 or nil),
+        "network_ping_ms="..number(type(a.currentNetworkRtt)=="number" and a.currentNetworkRtt*1000 or nil),
+        "samples="..token(a.geometrySamples), "source="..token(a.source),
+        "true_error_ms=unknown",
+        "result_hints="..(#hints>0 and table.concat(hints,",") or "none"),
+    }," | ")
+    local history=controller.timingLog
+    history[#history+1]=line
+    if #history>64 then table.remove(history,1) end
+    local pending=controller.pendingTimingLogs
+    pending[#pending+1]=line
+    if #pending>64 then table.remove(pending,1) end
+    if controller.timingLogScheduled then return end
+    controller.timingLogScheduled=true
+    task.defer(function()
+        controller.timingLogScheduled=false
+        local batch=controller.pendingTimingLogs
+        controller.pendingTimingLogs={}
+        if not controller.timingLogHeaderPrinted then
+            controller.timingLogHeaderPrinted=true
+            print("[DH POPCORN] Timing build LOG1 | ms: +late/-early. plan=send deadline; visual=visible-ring estimate; estimate=latency-adjusted target; stamp=remote timestamp offset. wait_gap includes intentional waits. True server error is unknown; result_hints are raw, units unverified.")
+        end
+        for _,entry in ipairs(batch) do print(entry) end
+    end)
+end
 local function reportAndCalibrate()
     local state = privateState()
     local result = state and state.lastResult
@@ -30628,19 +30685,22 @@ local function reportAndCalibrate()
         return
     end
     local slot = tonumber(result.cellIndex)
-    local key = controller.currentKernelKey
-    if not key
-        or tonumber(controller.currentKernelSlot) ~= slot
-        or controller.resultProcessed[key] == true
-    then
-        return
+    local key = tonumber(controller.currentKernelSlot) == slot and controller.currentKernelKey
+        or (slot and controller.lastKernelKeyBySlot[slot])
+    if not key and slot and controller.wasActive then
+        -- A kernel can time out before arming; its +0 still needs a log line.
+        key = tostring(controller.roundSerial)..":unarmed:"..tostring(slot)
+        controller.lastKernelKeyBySlot[slot] = key
     end
+    if not key or controller.resultProcessed[key] == true then return end
     controller.resultProcessed[key] = true
     controller.lastResultIdentity = resultIdentity(result, key)
     local attempt = controller.attempts[key]
-        or (slot and controller.attempts[controller.lastAttemptKeyBySlot[slot]])
-    controller.currentKernelKey = nil
-    controller.currentKernelSlot = nil
+    if controller.currentKernelKey == key then
+        controller.currentKernelKey = nil
+        controller.currentKernelSlot = nil
+    end
+    logPopcornTiming(result, slot, key, attempt)
     -- At most 32 scalar-only records, one per result. No prints, files, or
     -- additional frame connections. maxResumeGapMs includes deliberate waits;
     -- schedulerErrorMs measures lateness relative to the actual fire deadline.
@@ -30669,10 +30729,14 @@ local function resetRound()
     table.clear(controller.attempts)
     table.clear(controller.resultProcessed)
     table.clear(controller.lastAttemptKeyBySlot)
+    table.clear(controller.lastKernelKeyBySlot)
     controller.lastResultIdentity = nil
     clearGeometryCache()
 end
 local function update()
+    -- Consume the old result before arming another kernel or clearing the round.
+    -- This also captures the final result when finished changes in the same update.
+    reportAndCalibrate()
     local isActive = popcornActive()
     if isActive and not controller.wasActive then
         controller.wasActive = true
@@ -30684,7 +30748,6 @@ local function update()
     end
     if isActive then
         armCurrentKernel()
-        reportAndCalibrate()
     end
 end
 local function addDisconnector(fn)
