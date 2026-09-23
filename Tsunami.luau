@@ -29769,6 +29769,7 @@ local PROBE_STEP_MIN = 0.0005
 local PROBE_STEP_MAX = 0.0030
 local LOCAL_RESIDUAL_LEARN_FACTOR = 0.45
 local LOCAL_RESIDUAL_MAX_CORRECTION = 0.0020
+local LATE_ARM_CURRENT_TIMESTAMP_THRESHOLD = 0.100
 rawset(_G, "__TSUNAMI_POPCORN_CALIBRATION", nil)
 rawset(_G, "__TSUNAMI_POPCORN_TIMING_MODEL_V6", nil)
 local timingModel = rawget(_G, "__TSUNAMI_POPCORN_TIMING_MODEL_V11")
@@ -29797,8 +29798,6 @@ local controller = {
     resultProcessed = {},
     lastAttemptKeyBySlot = {},
     lastKernelKeyBySlot = {},
-    timingLog = {},
-    pendingTimingLogs = {},
     roundSerial = 0,
     kernelOccurrence = 0,
     currentKernelKey = nil,
@@ -29810,7 +29809,6 @@ local controller = {
     dataPingSamples = {},
     networkPingSamples = {},
     timingModel = timingModel,
-    authoritativeFieldPrinted = {},
     resultBlockedSlot = nil,
     resultBlockedAt = nil,
 }
@@ -30283,7 +30281,25 @@ local function fireAttempt(slot, key, targetTime, details)
         end
         details.firedClock = os.clock()
         firedAt = nowServer()
-        local reportedAt = math.min(tonumber(targetTime) or firedAt, firedAt)
+        local intendedTarget = tonumber(targetTime) or firedAt
+        local lateBy = firedAt - intendedTarget
+        local reportedAt
+        if string.sub(tostring(details.source), 1, 7) == "server:"
+            and lateBy >= LATE_ARM_CURRENT_TIMESTAMP_THRESHOLD
+        then
+            -- Once the authoritative target is already substantially in the past,
+            -- LOG5/LOG7 show that backdating to that perfect target scores 0.
+            -- The shipped client submits workspace:GetServerTimeNow(), so use that
+            -- behavior only as a salvage path for already-lost late-arm kernels.
+            -- Normal/on-time kernels keep the proven authoritative target unchanged.
+            reportedAt = firedAt
+            details.reportedMode = "current-salvage"
+            details.lateSalvageMs = lateBy * 1000
+        else
+            reportedAt = math.min(intendedTarget, firedAt)
+            details.reportedMode = "target"
+            details.lateSalvageMs = 0
+        end
         sent = pcall(MinigameGameAction.FireServer, MinigameGameAction, "AttemptPop", reportedAt)
         details.localCallMs = (os.clock() - details.firedClock) * 1000
         details.reportedAt = reportedAt
@@ -30360,9 +30376,6 @@ local function runKernel(slot, duration, key, stateSeenAt, resultBlockMs, phaseA
         reportedTargetTime = authoritativeTarget
         fireTime = authoritativeTarget
         source = "server:" .. tostring(authoritativeField)
-        if not controller.authoritativeFieldPrinted[authoritativeField] then
-            controller.authoritativeFieldPrinted[authoritativeField] = true
-        end
     else
         probeOffset = chooseProbeOffset()
         visualTarget = stateSeenAt + duration * TARGET_FRACTION
@@ -30638,9 +30651,8 @@ local function armCurrentKernel()
         return
     end
 
-    -- The real client blocks Activated while any lastResult is present. Record
-    -- how long that transient gate lasted so a future log can distinguish it
-    -- from scheduler lateness without doing any frame-by-frame instrumentation.
+    -- The real client blocks Activated while any lastResult is present.
+    -- Preserve that exact gate before scheduling the next kernel.
     if resultBlocksAttempt(state, slot) then
         if controller.resultBlockedSlot ~= slot or type(controller.resultBlockedAt) ~= "number" then
             controller.resultBlockedSlot = slot
@@ -30686,95 +30698,6 @@ local function resultIdentity(result, key)
         tostring(result.points),
     }, ":")
 end
--- One line per result, emitted after the current callback has returned.
--- Signs: positive=late, negative=early. These are client measurements/estimates,
--- not the hidden server scoring error. No disk writes or per-frame logger.
-local function logPopcornTiming(result, slot, key, attempt)
-    local function number(value, signed)
-        if type(value) ~= "number" or value ~= value then return "NA" end
-        return string.format(signed and "%+.1f" or "%.1f", value)
-    end
-    local function difference(a,b)
-        if type(a)=="number" and type(b)=="number" then return (a-b)*1000 end
-    end
-    local function token(value)
-        return (string.gsub(tostring(value or "NA"), "%s+", "_"))
-    end
-    local a=attempt or {}
-    local visualError
-    if type(a.localScale)=="number" and type(a.duration)=="number" then
-        visualError=(TARGET_SCALE-a.localScale)*a.duration/OUTER_START_SCALE*1000
-    end
-    local hints={}
-    for name,value in pairs(result) do
-        local lower=string.lower(tostring(name))
-        if (type(value)=="number" or type(value)=="boolean" or type(value)=="string")
-            and (string.find(lower,"tim",1,true) or string.find(lower,"error",1,true)
-                or string.find(lower,"early",1,true) or string.find(lower,"late",1,true)
-                or string.find(lower,"offset",1,true) or string.find(lower,"accuracy",1,true))
-        then
-            hints[#hints+1]=token(name)..":"..string.sub(token(value),1,60)
-            if #hints>=6 then break end
-        end
-    end
-    local line=table.concat({
-        "[DH POPCORN]",
-        "kernel="..token(key), "slot="..token(slot),
-        "points="..token(result.points), "rating="..token(result.rating),
-        "sent="..(attempt and "yes" or "no"),
-        "plan_ms="..number(difference(a.firedAt,a.fireTime),true),
-        "seen_late_ms="..number(difference(a.stateSeenAt,a.targetTime),true),
-        "worker_late_ms="..number(difference(a.workerStartedAt,a.targetTime),true),
-        "wait_entry_ms="..number(difference(a.waitStartedAt,a.targetTime),true),
-        "spawn_ms="..number(difference(a.workerStartedAt,a.stateSeenAt)),
-        "setup_ms="..number(a.setupMs),
-        "result_gate_ms="..number(a.resultBlockMs),
-        "phase_arm="..token(a.phaseAtArm),
-        "previous_log_ms="..number(controller.lastTimingPrintMs),
-        "visual_ms="..number(visualError,true),
-        "estimate_ms="..number(difference(a.firedAt,a.targetTime),true),
-        "stamp_ms="..number(difference(a.reportedAt,a.targetTime),true),
-        "live_shift_ms="..number(difference(a.liveTargetAtSend,a.targetTime),true),
-        "send_live_ms="..number(difference(a.firedAt,a.liveTargetAtSend),true),
-        "stamp_live_ms="..number(difference(a.reportedAt,a.liveTargetAtSend),true),
-        "live_field="..token(a.liveFieldAtSend),
-        "call_ms="..number(a.localCallMs),
-        "clock_drift_ms="..number(a.waitClockDriftMs,true),
-        "wait_gap_ms="..number(a.maxResumeGapMs),
-        "sleep_late_ms="..number(a.sleepOvershootMs),
-        "heartbeat_ms="..number(a.heartbeatDtMs),
-        "result_delay_ms="..number(difference(nowServer(),a.firedAt)),
-        "result_local_ms="..number(difference(os.clock(),a.firedClock)),
-        "duration_ms="..number(type(a.duration)=="number" and a.duration*1000 or nil),
-        "comp_ms="..number(type(a.effectiveCompensation)=="number" and a.effectiveCompensation*1000 or nil),
-        "data_ping_ms="..number(type(a.currentDataRtt)=="number" and a.currentDataRtt*1000 or nil),
-        "network_ping_ms="..number(type(a.currentNetworkRtt)=="number" and a.currentNetworkRtt*1000 or nil),
-        "post_network_ping_ms="..number(type(a.postNetworkRtt)=="number" and a.postNetworkRtt*1000 or nil),
-        "samples="..token(a.geometrySamples), "source="..token(a.source),
-        "true_error_ms=unknown",
-        "result_hints="..(#hints>0 and table.concat(hints,",") or "none"),
-    }," | ")
-    local history=controller.timingLog
-    history[#history+1]=line
-    if #history>64 then table.remove(history,1) end
-    local pending=controller.pendingTimingLogs
-    pending[#pending+1]=line
-    if #pending>64 then table.remove(pending,1) end
-    if controller.timingLogScheduled then return end
-    controller.timingLogScheduled=true
-    task.defer(function()
-        controller.timingLogScheduled=false
-        local batch=controller.pendingTimingLogs
-        controller.pendingTimingLogs={}
-        local printStartedClock = os.clock()
-        if not controller.timingLogHeaderPrinted then
-            controller.timingLogHeaderPrinted=true
-            print("[DH POPCORN] Timing build LOG7 | ms: +late/-early. Replicated ringStartTime target is restored for physical send and submitted timestamp. Client gating mirrors the shipped Popcorn handler: private kernel state drives arming, any lastResult blocks AttemptPop, and public phase is terminal only at Finished. result_gate=wait for lastResult to clear; phase_arm=public phase observed when armed; post_network_ping is sampled after the result only and never participates in timing. plan=send deadline; visual=diagnostic visible-ring residual; live_shift=target change before send; call=local FireServer call duration; true server scoring error remains unknown; result_hints are raw, units unverified.")
-        end
-        for _,entry in ipairs(batch) do print(entry) end
-        controller.lastTimingPrintMs = (os.clock() - printStartedClock) * 1000
-    end)
-end
 local function reportAndCalibrate()
     local state = privateState()
     local result = state and state.lastResult
@@ -30793,34 +30716,10 @@ local function reportAndCalibrate()
     controller.resultProcessed[key] = true
     controller.lastResultIdentity = resultIdentity(result, key)
     local attempt = controller.attempts[key]
-    if attempt then
-        local okPing, postNetworkRtt = pcall(LocalPlayer.GetNetworkPing, LocalPlayer)
-        postNetworkRtt = okPing and tonumber(postNetworkRtt) or nil
-        if postNetworkRtt and postNetworkRtt > 0 and postNetworkRtt <= 2 then
-            attempt.postNetworkRtt = postNetworkRtt
-        end
-    end
     if controller.currentKernelKey == key then
         controller.currentKernelKey = nil
         controller.currentKernelSlot = nil
     end
-    logPopcornTiming(result, slot, key, attempt)
-    -- At most 32 scalar-only records, one per result. No prints, files, or
-    -- additional frame connections. maxResumeGapMs includes deliberate waits;
-    -- schedulerErrorMs measures lateness relative to the actual fire deadline.
-    local history = controller.performanceSamples
-    if not history then history = {}; controller.performanceSamples = history end
-    history[#history + 1] = {
-        points = tonumber(result.points),
-        rating = tostring(result.rating),
-        schedulerErrorMs = attempt and attempt.schedulerErrorMs,
-        maxResumeGapMs = attempt and attempt.maxResumeGapMs,
-        geometrySamples = attempt and attempt.geometrySamples,
-        source = attempt and attempt.source,
-        dataRtt = attempt and attempt.currentDataRtt,
-        networkRtt = attempt and attempt.currentNetworkRtt,
-    }
-    if #history > 32 then table.remove(history, 1) end
     learnFromResult(result, attempt)
 end
 local function resetRound()
@@ -30840,14 +30739,15 @@ local function resetRound()
     clearGeometryCache()
 end
 local function update()
-    -- Consume the old result before arming another kernel or clearing the round.
-    -- This also captures the final result when finished changes in the same update.
-    reportAndCalibrate()
+    -- The timing-critical operation is always first on active private-state updates.
+    -- Result logging/calibration is non-urgent and must never sit in front of arming.
     local isActive = popcornActive()
     if isActive and not controller.wasActive then
         controller.wasActive = true
         resetRound()
     elseif not isActive and controller.wasActive then
+        -- Preserve the final result before clearing round-local tracking.
+        reportAndCalibrate()
         controller.wasActive = false
         resetRound()
         return
@@ -30855,6 +30755,7 @@ local function update()
     if isActive then
         armCurrentKernel()
     end
+    reportAndCalibrate()
 end
 local function addDisconnector(fn)
     if type(fn) == "function" then
@@ -30881,9 +30782,9 @@ end))
 addDisconnector(ActiveMinigame:Listen({ "session", "public", "phase" }, function()
     update()
 end))
--- Replicator listeners above are the primary trigger. A small adaptive fallback
--- loop replaces permanent RenderStepped/Heartbeat work so mobile clients do not
--- pay a per-frame cost while Popcorn is inactive.
+-- Replicator listeners above are the primary trigger. While Popcorn is active,
+-- one Heartbeat fallback gives every rendered frame an arming opportunity.
+-- Outside Popcorn there is no permanent per-frame callback/work.
 task.spawn(function()
     local nextPingAt = 0
     while not controller.destroyed do
@@ -30894,7 +30795,7 @@ task.spawn(function()
                 nextPingAt = now + 0.10
                 updatePingSamples()
             end
-            task.wait(0.05)
+            RunService.Heartbeat:Wait()
         else
             nextPingAt = 0
             task.wait(0.75)
@@ -41402,6 +41303,16 @@ local function publicWinnerIdentity(value)
     end
     return typeof(value) .. ":" .. tostring(value)
 end
+local function resolvedWinnerIsOpponent(value, opponent, opponentSeat)
+    if isOpponentPlayer(value, opponent) then
+        return true
+    end
+    local numericWinner = tonumber(value)
+    local numericOpponentSeat = tonumber(opponentSeat)
+    return numericWinner ~= nil
+        and numericOpponentSeat ~= nil
+        and numericWinner == numericOpponentSeat
+end
 local function resetTracker(gameId)
     local previousGameId = tracker.gameId
     if previousGameId == "HotPotato" or gameId == "HotPotato" then
@@ -42387,7 +42298,7 @@ local function processCandyBomb(s)
         and s.opponentWins >= s.requiredWins
     then
         local winner = tryIndex({ "session", "public", "winner" })
-        if isOpponentPlayer(winner, s.opponent) then
+        if resolvedWinnerIsOpponent(winner, s.opponent, s.opponentSeat) then
             latchClinchingLoss("CandyBomb:WinnerFallback")
         end
     end
@@ -43530,7 +43441,7 @@ local function processPublicWinnerTransition(s)
     if s.gameId ~= "PopcornBurst"
         and s.gameId ~= "CandyBomb"
         and changed
-        and isOpponentPlayer(winner, s.opponent)
+        and resolvedWinnerIsOpponent(winner, s.opponent, s.opponentSeat)
         and clinchPossibleFromRoundLoss(s.opponentWins, s.requiredWins)
     then
         latchClinchingLoss(s.gameId .. ":PublicWinner")
@@ -43542,7 +43453,7 @@ local function processKnockoutMatchWinnerFallback(s)
         return
     end
     local matchWinner = tryIndex({ "session", "public", "matchWinner" })
-    if isOpponentPlayer(matchWinner, s.opponent) then
+    if resolvedWinnerIsOpponent(matchWinner, s.opponent, s.opponentSeat) then
         latchClinchingLoss("Knockout:MatchWinner")
     end
 end
