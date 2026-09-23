@@ -43589,7 +43589,6 @@ local okRaw, rawListener = pcall(function()
     return ActiveMinigame:ListenRaw(function()
         controller.lastMinigameReplicationAt = os.clock()
         controller.evaluationRequested = true
-        if controller.RequestSignalEvaluation then controller.RequestSignalEvaluation() end
     end)
 end)
 if okRaw then
@@ -44205,21 +44204,6 @@ local function consumeQueuedReplicatorSignals()
         end
     end
 end
-controller.RequestSignalEvaluation = function()
-    local utility = rawget(_G, "__DROIDHUB_UTILITY_FEATURES")
-    if controller.destroyed or controller.signalEvaluationScheduled
-        or type(utility) ~= "table" or utility.LeaveWhenAboutToLose ~= true
-        or utility.PauseScript == true or utility.PauseMinigameFeatures == true
-    then return end
-    controller.signalEvaluationScheduled = true
-    task.defer(function()
-        controller.signalEvaluationScheduled = false
-        if controller.destroyed or not controller.evaluationRequested then return end
-        controller.evaluationRequested = false
-        consumeQueuedReplicatorSignals()
-        evaluateState()
-    end)
-end
 do
     local GuiServiceLOSS = game:GetService("GuiService")
     local StatsLOSS = game:GetService("Stats")
@@ -44644,10 +44628,10 @@ do
         consumeQueuedReplicatorSignals()
         local gameId = currentGameId()
         local activeSupportedGame = gameId and SUPPORTED_GAMES[gameId] == true
-        -- Replication drives loss detection. Popcorn's fallback scans at 20 Hz;
-        -- its private-result listener still checks immediately on every result.
+        -- Event listeners request an immediate evaluation. The fallback poll is
+        -- One evaluation per Heartbeat during supported games, 4 Hz otherwise.
         nextFallbackEvaluationAt = now + (
-            gameId == "PopcornBurst" and 0.05
+            gameId == "HotPotato" and 0
             or (activeSupportedGame and 0 or 0.25)
         )
         evaluateState()
