@@ -160,7 +160,7 @@ UI.DESKTOP_GUI_WIDTH = 800
 UI.DESKTOP_GUI_HEIGHT = 600
 UI.MOBILE_GUI_WIDTH = 500
 UI.MOBILE_GUI_HEIGHT = 300
-UI.FONT_SIZE_SCALE = 0.90
+UI.FONT_SIZE_SCALE = 0.97
 -- GUI layout is selected by device/platform only. Viewport dimensions must never
 -- change the logical sizing: starting Roblox in a small desktop window should
 -- render the exact same desktop UI as fullscreen, and mobile keeps its existing
@@ -186,7 +186,7 @@ end
 -- size. Desktop previously reached these values at the 768px reference height;
 -- mobile previously reached them around the 390x844 reference device.
 UI.DEVICE_PIXEL_SCALE = UI.MOBILE_DEVICE_LAYOUT and 0.90 or 1.00
-UI.DEVICE_TEXT_SCALE = UI.MOBILE_DEVICE_LAYOUT and 1.02 or UI.FONT_SIZE_SCALE
+UI.DEVICE_TEXT_SCALE = UI.MOBILE_DEVICE_LAYOUT and 1.05 or UI.FONT_SIZE_SCALE
 local px = function(value)
 	if value == 0 then return 0 end
 	local scaled = math.floor((value * UI.DEVICE_PIXEL_SCALE) + 0.5)
@@ -280,9 +280,10 @@ UI.SEARCH_BACKGROUND = RGB(18, 19, 23)
 UI.SEARCH_BACKGROUND_TRANSPARENCY = 0
 UI.SEARCH_FOCUSED_TRANSPARENCY = 0
 UI.SEARCH_TEXT_SIZE = 14
+-- Unified text palette: one primary white and one secondary grey.
 UI.MUTED_TEXT_COLOR = RGB(126, 130, 139)
-UI.SEARCH_TEXT_COLOR = RGB(226, 229, 235)
-UI.SEARCH_PLACEHOLDER_COLOR = RGB(119, 123, 132)
+UI.SEARCH_TEXT_COLOR = RGB(234, 236, 241)
+UI.SEARCH_PLACEHOLDER_COLOR = UI.MUTED_TEXT_COLOR
 UI.SEARCH_ICON_SIZE = px(15)
 UI.MENU_TOP_GAP = px(10)
 UI.MENU_ITEM_HEIGHT = px(36)
@@ -292,9 +293,9 @@ UI.MENU_CORNER_RADIUS = px(7)
 UI.MENU_NORMAL_TRANSPARENCY = 1
 UI.MENU_HOVER_TRANSPARENCY = 0.36
 UI.MENU_SELECTED_TRANSPARENCY = 0
-UI.MENU_TEXT_IDLE = RGB(133, 137, 146)
+UI.MENU_TEXT_IDLE = UI.MUTED_TEXT_COLOR
 UI.MENU_TEXT_SELECTED = RGB(234, 236, 241)
-UI.MENU_TEXT_HOVER = RGB(205, 208, 215)
+UI.MENU_TEXT_HOVER = UI.MENU_TEXT_SELECTED
 UI.MENU_ACTIVE_LINE_WIDTH = px(3)
 UI.MENU_ACTIVE_LINE_HEIGHT = px(22)
 UI.MENU_ICON_SIZE = px(20)
@@ -477,6 +478,12 @@ if MINIGAME_MODE then
 		ServerTime = 10,
 		TimeSinceLastGameEnabled = false,
 		TimeSinceLastGame = 3,
+		NoOwnBoothPurchaseEnabled = false,
+		NoOwnBoothPurchase = 10,
+		NoBoothBuyEnabled = false,
+		NoBoothBuy = 10,
+		NoRegularTradeEnabled = false,
+		NoRegularTrade = 10,
 		WinWagerTimeAdded = 3,
 		BoothPurchaseTimeAdded = 1,
 		LeaveIfScriptUserInServer = true,
@@ -486,9 +493,13 @@ if MINIGAME_MODE then
 		RuntimeStartedAt = os.clock(),
 		RuntimeBoothScriptRemoveUntil = {},
 		RuntimeTempBlacklistedUserIds = {},
+		RuntimeTempBlacklistedUserUntilUnix = {},
 		RuntimeAvoidPlayerUntil = {},
+		RuntimeAvoidPlayerUntilUnix = {},
 		RuntimeCanceledTradeCounts = {},
 		RuntimeCanceledTradeLastCountAt = {},
+		RuntimeCanceledTradeLastUnix = {},
+		RuntimePersistentBlacklistSnapshot = {},
 		RuntimeUtilityToggleRows = {},
 		-- Freeze all automation until the initial server stay/hop decision is complete.
 		RuntimeServerHopPending = true,
@@ -519,6 +530,12 @@ if MINIGAME_MODE then
 		RuntimeBoothListingsPending = false,
 		RuntimeBoothLastEvaluationAt = 0,
 		RuntimeBoothMaxSlots = 3,
+		RuntimeBoothRepriceStartedAt = {},
+		RuntimeBoothRepriceItemBySlot = {},
+		RuntimeTradeLog = {},
+		RuntimeLastOwnBoothPurchaseAt = os.clock(),
+		RuntimeLastBoothBuyAt = os.clock(),
+		RuntimeLastRegularTradeActivityAt = os.clock(),
 		RuntimeSettingsResetEpoch = 0,
 		RuntimeSimpleAutofarmTargetRarity = nil,
 		RuntimeSimpleAutofarmTargetTokenMinimum = 0,
@@ -721,6 +738,43 @@ if MINIGAME_MODE then
 			{LookFor = "", Reply = ""},
 		},
 		AutoDeleteWorstInventory = false,
+		-- Global trade-offer protection. These rules apply only to trade offers;
+		-- booth listings use the booth tab's own exclusion controls.
+		GlobalNeverOfferEnabled = false,
+		GlobalNeverOfferRarities = {},
+		GlobalNeverOfferMutations = {},
+		GlobalNeverOfferTraits = {},
+		GlobalNeverOfferSignatures = {},
+		GlobalNeverOfferSizes = {},
+		GlobalNeverOfferLevels = {},
+		GlobalNeverOfferMinimumTraits = 0,
+		GlobalNeverOfferSpecificItems = {
+			{Item = nil, Mutations = {}, Traits = {}},
+		},
+		TradeKeepCopiesEnabled = false,
+		TradeKeepCopiesSpecificItems = {
+			{Item = nil, Mutations = {}, Traits = {}, MinimumCopies = 1},
+		},
+		TradeKeepCopiesRarityRules = {
+			{Item = nil, MinimumCopies = 1},
+		},
+		DeleteKeepCopiesEnabled = false,
+		DeleteKeepCopiesSpecificItems = {
+			{Item = nil, Mutations = {}, Traits = {}, MinimumCopies = 1},
+		},
+		DeleteKeepCopiesRarityRules = {
+			{Item = nil, MinimumCopies = 1},
+		},
+		-- Legacy global Keep Copies keys retained only for config migration.
+		KeepCopiesEnabled = false,
+		KeepCopiesSpecificItems = {
+			{Item = nil, Mutations = {}, Traits = {}, MinimumCopies = 1},
+		},
+		KeepCopiesRarityRules = {
+			{Item = nil, MinimumCopies = 1},
+		},
+		KeepCopiesRarityFloor = nil,
+		KeepCopiesRarityMinimum = 0,
 		DeleteNonBrainrotsFirst = false,
 		DeleteWorstBrainrotsFirst = false,
 		DeleteInventoryThreshold = 95,
@@ -854,6 +908,7 @@ if MINIGAME_MODE then
 		PrintDisconnectsToTerminal = false,
 		PrintAutoDeletesToTerminal = false,
 		PrintPurchasedBoothListingsToTerminal = false,
+		PrintTradesToTerminal = false,
 		AutoReconnect = false,
 		PauseMinigameFeatures = false,
 		MoveDelayConnectFour = 1.2,
@@ -872,6 +927,8 @@ if MINIGAME_MODE then
 		CheckServerHopPlayedEveryoneServer = false,
 		CheckServerHopNobodyMinigamesArea = false,
 		CheckServerHopPlayedEveryoneMinigamesArea = false,
+		CheckServerHopNoEligibleBooths = false,
+		CheckServerHopNoEligibleTradePlayers = false,
 		CheckServerBrainrotRarities = {},
 		CheckServerSpecificItems = {
 			{Item = nil, Mutations = {}, Traits = {}},
@@ -881,8 +938,26 @@ if MINIGAME_MODE then
 		CheckServerSignatures = {},
 		CheckServerSizes = {},
 		CheckServerLevels = {},
+		CheckServerMinimumTraits = 0,
 		CheckServerMustOwnAll = false,
 		CheckServerMustOwnOne = true,
+
+		AutoSendTradesEnabled = false,
+		AutoSendTradeRarities = {},
+		AutoSendTradeMutations = {},
+		AutoSendTradeTraits = {},
+		AutoSendTradeSignatures = {},
+		AutoSendTradeSizes = {},
+		AutoSendTradeLevels = {},
+		AutoSendTradeMinimumTraits = 0,
+		AutoSendTradeSpecificItems = {
+			{Item = nil, Mutations = {}, Traits = {}},
+		},
+		AutoSendTradeMinimumTokens = 0,
+		AutoSendTradeMustOwnAll = false,
+		AutoSendTradeMustOwnOne = true,
+		AutoSendTradeRetrySeconds = 30,
+
 		PauseScript = false,
 		UndoAllSettings = false,
 		GuiMinimized = false,
@@ -915,6 +990,13 @@ if MINIGAME_MODE then
 		AutoBoothMessageAllPossibleCompleted = false,
 		AutoBoothAllPossibleCompletedMessage = "",
 		AutoBoothAllPossibleCompletedMessageDelay = 0,
+		AutoBoothBuyEnabled = false,
+		AutoBoothBuySpecificRules = {
+			{Item = nil, Mutations = {}, Traits = {}, MaxTokens = 1000000, OwnedLimitEnabled = false, OwnedLimit = 1},
+		},
+		AutoBoothBuyRarityRules = {
+			{Item = nil, Mutations = {}, Traits = {}, MaxTokens = 1000000, OwnedLimitEnabled = false, OwnedLimit = 1},
+		},
 		AutoBoothListing1Enabled = false,
 		AutoBoothListing1Rarity = nil,
 		AutoBoothListing1Tokens = 100,
@@ -946,21 +1028,25 @@ if MINIGAME_MODE then
 		autoServerHopState.Utility["AutoAccept" .. rarity .. "Signatures"] = {}
 		autoServerHopState.Utility["AutoAccept" .. rarity .. "Sizes"] = {}
 		autoServerHopState.Utility["AutoAccept" .. rarity .. "Levels"] = {}
+		autoServerHopState.Utility["AutoAccept" .. rarity .. "MinimumTraits"] = 0
 		autoServerHopState.Utility["AutoAcceptTradesRequest" .. rarity .. "Mutations"] = {}
 		autoServerHopState.Utility["AutoAcceptTradesRequest" .. rarity .. "Traits"] = {}
 		autoServerHopState.Utility["AutoAcceptTradesRequest" .. rarity .. "Signatures"] = {}
 		autoServerHopState.Utility["AutoAcceptTradesRequest" .. rarity .. "Sizes"] = {}
 		autoServerHopState.Utility["AutoAcceptTradesRequest" .. rarity .. "Levels"] = {}
+		autoServerHopState.Utility["AutoAcceptTradesRequest" .. rarity .. "MinimumTraits"] = 0
 		autoServerHopState.Utility["AutoSit" .. rarity .. "Mutations"] = {}
 		autoServerHopState.Utility["AutoSit" .. rarity .. "Traits"] = {}
 		autoServerHopState.Utility["AutoSit" .. rarity .. "Signatures"] = {}
 		autoServerHopState.Utility["AutoSit" .. rarity .. "Sizes"] = {}
 		autoServerHopState.Utility["AutoSit" .. rarity .. "Levels"] = {}
+		autoServerHopState.Utility["AutoSit" .. rarity .. "MinimumTraits"] = 0
 		autoServerHopState.Utility["AutoCancel" .. rarity .. "Mutations"] = {}
 		autoServerHopState.Utility["AutoCancel" .. rarity .. "Traits"] = {}
 		autoServerHopState.Utility["AutoCancel" .. rarity .. "Signatures"] = {}
 		autoServerHopState.Utility["AutoCancel" .. rarity .. "Sizes"] = {}
 		autoServerHopState.Utility["AutoCancel" .. rarity .. "Levels"] = {}
+		autoServerHopState.Utility["AutoCancel" .. rarity .. "MinimumTraits"] = 0
 		autoServerHopState.Utility["AutoAcceptTradesAccept" .. rarity .. "Enabled"] = false -- legacy; migrated into shared Accept Offer criteria
 		autoServerHopState.Utility["AutoAcceptTradesAccept" .. rarity .. "Amount"] = 1
 		autoServerHopState.Utility["RegularFallbackSpecific" .. rarity .. "Items"] = {}
@@ -1082,7 +1168,12 @@ if MINIGAME_MODE then
 			autoServerHopState.Utility[prefix .. "BrainrotSignatures"] = {}
 			autoServerHopState.Utility[prefix .. "BrainrotSizes"] = {}
 			autoServerHopState.Utility[prefix .. "BrainrotLevels"] = {}
+			autoServerHopState.Utility[prefix .. "BrainrotMinimumTraits"] = 0
 			autoServerHopState.Utility[prefix .. "MinimumCopies"] = 1
+			autoServerHopState.Utility[prefix .. "DynamicRepricing"] = false
+			autoServerHopState.Utility[prefix .. "MinimumPrice"] = 1
+			autoServerHopState.Utility[prefix .. "PriceChange"] = 1
+			autoServerHopState.Utility[prefix .. "RepriceMinutes"] = 5
 			autoServerHopState.Utility[prefix .. "MessageDelay"] = 0
 		end
 	end
@@ -1282,8 +1373,15 @@ if MINIGAME_MODE then
 			or tostring(id)
 	end
 	local simpleAutofarmRarityOrder, simpleAutofarmInventoryModules = {}, nil
+	local simpleAutofarmSummaryCache = {
+		At = 0,
+		Inventory = nil,
+		Value = nil,
+	}
 	for index, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do simpleAutofarmRarityOrder[rarity] = index end
-	-- Immutable modules are required once; the recurring progression check only scans inventory.
+	-- Immutable modules are required once. The summary is also cached briefly
+	-- because adaptive criteria and Simple Auto Farm may request it in the same
+	-- frame window.
 	autoServerHopState.SimpleAutofarmInventorySummary = function()
 		local counts, total, highest, lowest = {}, 0, nil, nil
 		if not simpleAutofarmInventoryModules then
@@ -1302,7 +1400,17 @@ if MINIGAME_MODE then
 		local okData, playerData = pcall(modules.Replicator.get, "PlayerData")
 		if not okData or not playerData then return total, highest, counts, false, lowest end
 		local okInventory, inventory = pcall(playerData.TryIndex, playerData, {"Inventory"})
-		if not okInventory or type(inventory) ~= "table" then return total, highest, counts, false, lowest end
+		if not okInventory or type(inventory) ~= "table" then
+			return total, highest, counts, false, lowest
+		end
+		local now = os.clock()
+		if simpleAutofarmSummaryCache.Inventory == inventory
+			and type(simpleAutofarmSummaryCache.Value) == "table"
+			and now - (tonumber(simpleAutofarmSummaryCache.At) or 0) < 0.35
+		then
+			local cached = simpleAutofarmSummaryCache.Value
+			return cached.Total, cached.Highest, cached.Counts, true, cached.Lowest
+		end
 		for _, item in pairs(inventory) do
 			if type(item) == "table" then
 				local okType, itemType = pcall(modules.GetItemType, item)
@@ -1326,6 +1434,14 @@ if MINIGAME_MODE then
 				end
 			end
 		end
+		simpleAutofarmSummaryCache.Inventory = inventory
+		simpleAutofarmSummaryCache.At = now
+		simpleAutofarmSummaryCache.Value = {
+			Total = total,
+			Highest = highest,
+			Counts = counts,
+			Lowest = lowest,
+		}
 		return total, highest, counts, true, lowest
 	end
 	autoServerHopState.HasAnyBrainrot = function()
@@ -1378,7 +1494,9 @@ if MINIGAME_MODE then
 					elseif explicit == "Paradox" or explicit == "Meta" then
 						tradeable = true
 					end
-					if tradeable and rarity ~= "Eternal" then
+					local protectionAllowed = type(autoServerHopState.InventoryConsumeAllowed) ~= "function"
+						or autoServerHopState.InventoryConsumeAllowed(id, item, "Offer", nil, inventory)
+					if tradeable and rarity ~= "Eternal" and protectionAllowed then
 						local sid = tostring(id)
 						local display
 						pcall(function()
@@ -1462,6 +1580,11 @@ if MINIGAME_MODE then
 		end
 		return out
 	end
+	autoServerHopState.ItemTraitCount = function(item)
+		local count = 0
+		for _ in pairs(autoServerHopState.ItemTraits(item)) do count += 1 end
+		return count
+	end
 	local specificItemTypeModule
 	autoServerHopState.ItemKind = function(item)
 		if type(item) ~= "table" then return nil end
@@ -1537,7 +1660,7 @@ if MINIGAME_MODE then
 		local cached = autoServerHopState.RuntimeSpecificLevelOptions
 		if type(cached) == "table" then return cached end
 		local options = {}
-		for level = 1, 125 do options[#options + 1] = tostring(level) end
+		for level = 1, 350 do options[#options + 1] = tostring(level) end
 		autoServerHopState.RuntimeSpecificLevelOptions = options
 		return options
 	end
@@ -1733,6 +1856,7 @@ if MINIGAME_MODE then
 		end
 		if capabilities.Mutation and selected(rule.Mutations) then return true end
 		if capabilities.Traits and selected(rule.Traits) then return true end
+		if capabilities.Traits and math.max(0, math.floor(tonumber(rule.MinimumTraitCount) or 0)) > 0 then return true end
 		if capabilities.Signature then
 			if selected(rule.Signatures) or selected(rule.SpecificSignatures) then return true end
 			if rule.Signature ~= nil and rule.Signature ~= "" and rule.Signature ~= "Any" then return true end
@@ -1775,6 +1899,7 @@ if MINIGAME_MODE then
 					Sizes = rule.Sizes or rule.SpecificSizes,
 					Level = rule.Level,
 					Levels = rule.Levels or rule.SpecificLevels,
+					MinimumTraits = rule.MinimumTraitCount,
 				}
 			)
 		elseif kind == "LuckyBlock" then
@@ -1788,6 +1913,7 @@ if MINIGAME_MODE then
 					Sizes = rule.Sizes or rule.SpecificSizes,
 					Level = rule.Level,
 					Levels = rule.Levels or rule.SpecificLevels,
+					MinimumTraits = rule.MinimumTraitCount,
 				}
 			)
 		elseif kind == "Gear" then
@@ -1898,9 +2024,12 @@ if MINIGAME_MODE then
 			return false
 		end
 
-		local function protectedForProgression(item, kind, rarity)
+		local function protectedForProgression(id, item, kind, rarity)
 			if type(item) ~= "table" then return true end
 			if item.locked == true then return true end
+			if id ~= nil and type(autoServerHopState.InventoryConsumeAllowed) == "function"
+				and not autoServerHopState.InventoryConsumeAllowed(id, item, "Delete", nil, inventory)
+			then return true end
 			if utility.NeverDeleteNonBrainrots == true and kind ~= "Brainrot" then return true end
 			if utility.NeverDeleteRaritiesEnabled == true
 				and rarity ~= nil
@@ -1931,13 +2060,13 @@ if MINIGAME_MODE then
 			return false
 		end
 
-		for _, item in pairs(inventory) do
+		for id, item in pairs(inventory) do
 			if type(item) == "table" then
 				local okKind, kind = pcall(GetItemType, item)
 				if not okKind then kind = autoServerHopState.ItemKind(item) end
 				kind = kind and tostring(kind) or nil
 				local rarity = kind == "Brainrot" and effectiveRarity(item) or nil
-				if not protectedForProgression(item, kind, rarity) then
+				if not protectedForProgression(id, item, kind, rarity) then
 					if kind == "Brainrot" and rarityRank[rarity] then
 						result.UnprotectedBrainrotCount += 1
 						local lowest = result.LowestUnprotectedBrainrot
@@ -1973,22 +2102,28 @@ if MINIGAME_MODE then
 		end
 		if kind == "Brainrot" or kind == "LuckyBlock" then
 			local traits = type(rule.Traits) == "table" and rule.Traits or {}
-			if next(traits) ~= nil then
-				local present = {}
-				for _, attributeName in ipairs({"Traits", "BrainrotTraits", "Trait"}) do
-					local value = tool:GetAttribute(attributeName)
-					if type(value) == "string" then
-						for trait in string.gmatch(value, "[^,|;]+") do
-							trait = string.gsub(trait, "^%s*(.-)%s*$", "%1")
-							if trait ~= "" then present[trait] = true end
-						end
+			local present = {}
+			for _, attributeName in ipairs({"Traits", "BrainrotTraits", "Trait"}) do
+				local value = tool:GetAttribute(attributeName)
+				if type(value) == "string" then
+					for trait in string.gmatch(value, "[^,|;]+") do
+						trait = string.gsub(trait, "^%s*(.-)%s*$", "%1")
+						if trait ~= "" then present[trait] = true end
 					end
 				end
+			end
+			if next(traits) ~= nil then
 				local matched = false
 				for trait in pairs(traits) do
 					if present[tostring(trait)] == true then matched = true break end
 				end
 				if not matched then return false end
+			end
+			local minimumTraits = math.max(0, math.floor(tonumber(rule.MinimumTraitCount or rule.MinimumTraits) or 0))
+			if minimumTraits > 0 then
+				local traitCount = 0
+				for _ in pairs(present) do traitCount += 1 end
+				if traitCount < minimumTraits then return false end
 			end
 			local scale = tonumber(tool:GetAttribute("Scale") or tool:GetAttribute("BrainrotScale") or tool:GetAttribute("ItemScale"))
 			local sizeName = scale and autoServerHopState.ItemSizeName(scale) or tool:GetAttribute("Size")
@@ -2082,6 +2217,8 @@ if MINIGAME_MODE then
 					or math.floor(actual + 0.5) < math.floor(expected + 0.5)
 				then return false end
 			end
+			local minimumTraits = math.max(0, math.floor(tonumber(extra.MinimumTraits or extra.MinimumTraitCount) or 0))
+			if minimumTraits > 0 and autoServerHopState.ItemTraitCount(item) < minimumTraits then return false end
 			local raritySet = type(extra.Rarities) == "table" and extra.Rarities
 				or (type(extra.SpecificRarities) == "table" and extra.SpecificRarities or nil)
 			if raritySet and next(raritySet) ~= nil then
@@ -2100,6 +2237,215 @@ if MINIGAME_MODE then
 		end
 		return true
 	end
+	-- One authoritative protection gate is used by every outgoing item selector and
+	-- by Auto Cleanup. This prevents opening offers, fallbacks, regular/minigame
+	-- trades and booth listings from disagreeing about which copies are safe to use.
+	do
+		local rarityRank = {}
+		for index, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do rarityRank[rarity] = index end
+		local function itemNamesForProtection(item)
+			if type(item) ~= "table" then return {} end
+			local sub = type(item.sub) == "table" and item.sub or {}
+			local names = {item.name, sub.name, item.displayName, item.DisplayName, sub.gearType, sub.GearType}
+			local luckyType = sub.luckyBlockType or sub.LuckyBlockType or item.luckyBlockType or item.LuckyBlockType
+			if luckyType ~= nil then
+				luckyType = tostring(luckyType)
+				names[#names + 1] = luckyType == "Default" and "Lucky Block" or (luckyType .. " Lucky Block")
+			end
+			return names
+		end
+		local function itemMatchesProtectionRule(item, rule)
+			if type(item) ~= "table" or type(rule) ~= "table" or rule.Item == nil or tostring(rule.Item) == "" then return false end
+			local nameMatch = false
+			for _, candidate in ipairs(itemNamesForProtection(item)) do
+				if candidate ~= nil and autoServerHopState.SpecificItemNamesEquivalent(candidate, rule.Item) then
+					nameMatch = true
+					break
+				end
+			end
+			return nameMatch and autoServerHopState.ItemMatchesSpecificRule(item, rule)
+		end
+		local protectionReplicator
+		local boothReservedCache, boothReservedCacheAt = {}, 0
+		local function boothReservedProtectionIds()
+			local now = os.clock()
+			if now - boothReservedCacheAt < 0.25 then return boothReservedCache end
+			boothReservedCacheAt = now
+			local listed = {}
+			pcall(function()
+				if protectionReplicator == nil then
+					local client = ReplicatedStorage:FindFirstChild("Client")
+					local modules = client and client:FindFirstChild("Modules")
+					local module = modules and modules:FindFirstChild("ReplicatorClient")
+					if module then protectionReplicator = require(module) end
+				end
+				local booths = protectionReplicator and safeRepGet(protectionReplicator, "TradingBooths") or nil
+				local data = booths and booths.Data
+				if type(data) ~= "table" then return end
+				for _, entry in pairs(data) do
+					if type(entry) == "table" and entry.player == Players.LocalPlayer then
+						for offerId, boothItem in pairs(entry.items or {}) do
+							local id = type(boothItem) == "table" and (boothItem.guid or boothItem.id) or offerId
+							listed[tostring(id or offerId)] = true
+						end
+						break
+					end
+				end
+			end)
+			boothReservedCache = listed
+			return listed
+		end
+		local function normalizedInventory(inventory)
+			return type(inventory) == "table" and inventory or {}
+		end
+		local function reservedMatches(reservedIds, inventory, predicate)
+			local count = 0
+			if type(reservedIds) ~= "table" then return 0 end
+			for reservedId, enabled in pairs(reservedIds) do
+				if enabled == true then
+					local sid = tostring(reservedId)
+					local item = inventory[sid] or (tonumber(sid) and inventory[tonumber(sid)] or nil)
+					if type(item) == "table" and predicate(item) then count += 1 end
+				end
+			end
+			return count
+		end
+		local function copyCountAfterConsume(inventory, reservedIds, candidateId, predicate)
+			local total = 0
+			for _, inventoryItem in pairs(inventory) do
+				if type(inventoryItem) == "table" and predicate(inventoryItem) then total += 1 end
+			end
+			local reserved = reservedMatches(reservedIds, inventory, predicate)
+			local boothReserved = boothReservedProtectionIds()
+			for boothId in pairs(boothReserved) do
+				local alreadyCounted = type(reservedIds) == "table"
+					and (reservedIds[boothId] == true or (tonumber(boothId) and reservedIds[tonumber(boothId)] == true))
+				if not alreadyCounted then
+					local boothItem = inventory[boothId] or (tonumber(boothId) and inventory[tonumber(boothId)] or nil)
+					if type(boothItem) == "table" and predicate(boothItem) then reserved += 1 end
+				end
+			end
+			local candidate = inventory[tostring(candidateId)] or (tonumber(candidateId) and inventory[tonumber(candidateId)] or nil)
+			local candidateKey = tostring(candidateId)
+			local candidateAlreadyReserved = (type(reservedIds) == "table"
+				and (reservedIds[candidateKey] == true or reservedIds[candidateId] == true))
+				or boothReserved[candidateKey] == true
+			local consumes = type(candidate) == "table" and predicate(candidate) and not candidateAlreadyReserved and 1 or 0
+			return total - reserved - consumes
+		end
+		local protectionEconomyMath
+		local function protectionRarity(item)
+			if type(item) ~= "table" then return nil end
+			local sub = type(item.sub) == "table" and item.sub or nil
+			local rarity = autoServerHopState.ItemRarity(item)
+			if type(rarity) ~= "string" or rarityRank[rarity] == nil then
+				if protectionEconomyMath == nil then
+					pcall(function()
+						protectionEconomyMath = require(
+							ReplicatedStorage:WaitForChild("Shared"):WaitForChild("utils"):WaitForChild("EconomyMath")
+						)
+					end)
+				end
+				local name = item.name or (sub and sub.name)
+				if protectionEconomyMath and name ~= nil then
+					pcall(function() rarity = protectionEconomyMath.GetBrainrotRarity(name) end)
+				end
+			end
+			if rarity == "Infinity" then
+				local metaMarked = item.meta == true or item.Meta == true or item.isMeta == true or item.IsMeta == true
+					or (sub and (sub.meta == true or sub.Meta == true or sub.isMeta == true or sub.IsMeta == true))
+				if metaMarked then rarity = "Meta" end
+			end
+			return rarity
+		end
+		local function protectedByGlobalNeverOffer(item)
+			local utility = autoServerHopState.Utility
+			if utility.GlobalNeverOfferEnabled ~= true or type(item) ~= "table" then return false end
+			local rarity = protectionRarity(item)
+			if rarity and type(utility.GlobalNeverOfferRarities) == "table" and utility.GlobalNeverOfferRarities[rarity] == true then return true end
+			local mutation = autoServerHopState.ItemMutation(item)
+			if mutation and type(utility.GlobalNeverOfferMutations) == "table" and utility.GlobalNeverOfferMutations[mutation] == true then return true end
+			if type(utility.GlobalNeverOfferTraits) == "table" then
+				for trait in pairs(autoServerHopState.ItemTraits(item)) do
+					if utility.GlobalNeverOfferTraits[tostring(trait)] == true then return true end
+				end
+			end
+			if type(utility.GlobalNeverOfferSignatures) == "table" and utility.GlobalNeverOfferSignatures[autoServerHopState.ItemSignature(item)] == true then return true end
+			local sizeName = autoServerHopState.ItemSizeName(item)
+			if sizeName and type(utility.GlobalNeverOfferSizes) == "table" and utility.GlobalNeverOfferSizes[sizeName] == true then return true end
+			local level = autoServerHopState.ItemLevel(item)
+			if level ~= nil and type(utility.GlobalNeverOfferLevels) == "table" and utility.GlobalNeverOfferLevels[tostring(math.floor(level + 0.5))] == true then return true end
+			local minimumTraits = math.max(0, math.floor(tonumber(utility.GlobalNeverOfferMinimumTraits) or 0))
+			if minimumTraits > 0 and autoServerHopState.ItemTraitCount(item) >= minimumTraits then return true end
+			for _, rule in ipairs(type(utility.GlobalNeverOfferSpecificItems) == "table" and utility.GlobalNeverOfferSpecificItems or {}) do
+				if itemMatchesProtectionRule(item, rule) then return true end
+			end
+			return false
+		end
+
+		autoServerHopState.InventoryConsumeAllowed = function(itemId, item, purpose, reservedIds, inventory)
+			if type(item) ~= "table" then return false end
+			purpose = tostring(purpose or "Offer")
+			inventory = normalizedInventory(inventory)
+			local utility = autoServerHopState.Utility
+
+			if purpose == "Offer" and protectedByGlobalNeverOffer(item) then
+				return false
+			end
+
+			local enabledKey, specificKey, rarityKey
+			if purpose == "Offer" then
+				enabledKey = "TradeKeepCopiesEnabled"
+				specificKey = "TradeKeepCopiesSpecificItems"
+				rarityKey = "TradeKeepCopiesRarityRules"
+			elseif purpose == "Delete" then
+				enabledKey = "DeleteKeepCopiesEnabled"
+				specificKey = "DeleteKeepCopiesSpecificItems"
+				rarityKey = "DeleteKeepCopiesRarityRules"
+			else
+				return true
+			end
+
+			if utility[enabledKey] ~= true then return true end
+
+			for _, rule in ipairs(type(utility[specificKey]) == "table" and utility[specificKey] or {}) do
+				local minimum = math.clamp(
+					math.floor(tonumber(type(rule) == "table" and rule.MinimumCopies or 0) or 0),
+					0,
+					100
+				)
+				if minimum > 0 and itemMatchesProtectionRule(item, rule) then
+					local remaining = copyCountAfterConsume(inventory, reservedIds, itemId, function(candidate)
+						return itemMatchesProtectionRule(candidate, rule)
+					end)
+					if remaining < minimum then return false end
+				end
+			end
+
+			if autoServerHopState.ItemKind(item) == "Brainrot" then
+				local itemRarity = protectionRarity(item)
+				for _, rule in ipairs(type(utility[rarityKey]) == "table" and utility[rarityKey] or {}) do
+					local ruleRarity = type(rule) == "table" and tostring(rule.Item or "") or ""
+					local minimum = math.clamp(
+						math.floor(tonumber(type(rule) == "table" and rule.MinimumCopies or 0) or 0),
+						0,
+						100
+					)
+					if minimum > 0
+						and itemRarity == ruleRarity
+						and rarityRank[ruleRarity] ~= nil
+					then
+						local remaining = copyCountAfterConsume(inventory, reservedIds, itemId, function(candidate)
+							return autoServerHopState.ItemKind(candidate) == "Brainrot"
+								and protectionRarity(candidate) == ruleRarity
+						end)
+						if remaining < minimum then return false end
+					end
+				end
+			end
+			return true
+		end
+	end
 	autoServerHopState.OwnedTradeableItemMatchesFilters = function(id, mutations, traits, extra)
 		local item = autoServerHopState.OwnedTradeableItemData(id)
 		if type(item) ~= "table" then return false end
@@ -2114,9 +2460,11 @@ if MINIGAME_MODE then
 			typedExtra.SpecificSignatures = extra.SpecificSignatures or extra.Signatures
 			typedExtra.SpecificSizes = extra.SpecificSizes or extra.Sizes
 			typedExtra.SpecificLevels = extra.SpecificLevels or extra.Levels
+			typedExtra.MinimumTraits = extra.MinimumTraits or extra.MinimumTraitCount
 		elseif kind == "LuckyBlock" then
 			typedMutations = mutations
 			typedTraits = traits
+			typedExtra.MinimumTraits = extra.MinimumTraits or extra.MinimumTraitCount
 			-- Lucky Block reward classes are not per-item rarity criteria. Ignore any
 			-- legacy rarity filter that may still exist in an older saved profile.
 			typedExtra.SpecificSizes = extra.SpecificSizes or extra.Sizes
@@ -2371,6 +2719,300 @@ if MINIGAME_MODE then
 		end)
 		return options
 	end
+	;(function()
+		local RuntimeBlacklistPath = "DroidHub_State/runtime_blacklists.json"
+		local LegacyRuntimeBlacklistPath = "DroidHub_Configs/runtime_blacklists.json"
+		local HttpServiceBL = game:GetService("HttpService")
+
+		local function nowUnixBL()
+			return DateTime.now().UnixTimestamp
+		end
+
+		local function ensureMapBL(value)
+			return type(value) == "table" and value or {}
+		end
+
+		local function loadPersistentBL()
+			local decoded
+			local loadedLegacy = false
+
+			local function readSnapshot(path)
+				if type(readfile) ~= "function" then return nil end
+				local okRead, body = pcall(readfile, path)
+				if not okRead or type(body) ~= "string" or body == "" then
+					return nil
+				end
+				local okDecode, value = pcall(
+					HttpServiceBL.JSONDecode,
+					HttpServiceBL,
+					body
+				)
+				return okDecode and type(value) == "table" and value or nil
+			end
+
+			decoded = readSnapshot(RuntimeBlacklistPath)
+			if decoded == nil then
+				decoded = readSnapshot(LegacyRuntimeBlacklistPath)
+				loadedLegacy = decoded ~= nil
+			end
+
+			autoServerHopState.RuntimePersistentBlacklistSnapshot =
+				type(decoded) == "table" and decoded or {}
+
+			-- One-time migration: runtime state should never appear as a user config.
+			if loadedLegacy and type(writefile) == "function" then
+				if type(makefolder) == "function" then
+					pcall(makefolder, "DroidHub_State")
+				end
+				local okEncode, body = pcall(
+					HttpServiceBL.JSONEncode,
+					HttpServiceBL,
+					autoServerHopState.RuntimePersistentBlacklistSnapshot
+				)
+				if okEncode and type(body) == "string" then
+					local okWrite = pcall(writefile, RuntimeBlacklistPath, body)
+					if okWrite and type(delfile) == "function" then
+						pcall(delfile, LegacyRuntimeBlacklistPath)
+					end
+				end
+			end
+		end
+
+		autoServerHopState.MergePersistentBlacklistState = function()
+			local snapshot = ensureMapBL(
+				autoServerHopState.RuntimePersistentBlacklistSnapshot
+			)
+			local nowUnix = nowUnixBL()
+
+			autoServerHopState.JoinedServerBlacklist =
+				ensureMapBL(autoServerHopState.JoinedServerBlacklist)
+			for id, expiresAt in pairs(ensureMapBL(snapshot.ServerBlacklist)) do
+				expiresAt = tonumber(expiresAt)
+				if type(id) == "string" and id ~= "" and expiresAt and expiresAt > nowUnix then
+					local existing = tonumber(autoServerHopState.JoinedServerBlacklist[id]) or 0
+					autoServerHopState.JoinedServerBlacklist[id] = math.max(existing, expiresAt)
+				end
+			end
+			for id, expiresAt in pairs(autoServerHopState.JoinedServerBlacklist) do
+				if type(id) ~= "string"
+					or tonumber(expiresAt) == nil
+					or tonumber(expiresAt) <= nowUnix
+				then
+					autoServerHopState.JoinedServerBlacklist[id] = nil
+				end
+			end
+
+			autoServerHopState.CanceledTradeCounts =
+				ensureMapBL(autoServerHopState.CanceledTradeCounts)
+			for userId, count in pairs(ensureMapBL(snapshot.CanceledTradeCounts)) do
+				local normalized = math.max(0, math.floor(tonumber(count) or 0))
+				if normalized > 0 then
+					local key = tostring(userId)
+					autoServerHopState.CanceledTradeCounts[key] = math.max(
+						math.max(
+							0,
+							math.floor(
+								tonumber(autoServerHopState.CanceledTradeCounts[key]) or 0
+							)
+						),
+						normalized
+					)
+				end
+			end
+
+			autoServerHopState.RuntimeCanceledTradeLastUnix =
+				ensureMapBL(autoServerHopState.RuntimeCanceledTradeLastUnix)
+			for userId, unixAt in pairs(ensureMapBL(snapshot.CanceledTradeLastUnix)) do
+				unixAt = tonumber(unixAt)
+				if unixAt and unixAt > 0 then
+					local key = tostring(userId)
+					autoServerHopState.RuntimeCanceledTradeLastUnix[key] = math.max(
+						tonumber(autoServerHopState.RuntimeCanceledTradeLastUnix[key]) or 0,
+						unixAt
+					)
+				end
+			end
+
+			autoServerHopState.RuntimeTempBlacklistedUserUntilUnix =
+				ensureMapBL(autoServerHopState.RuntimeTempBlacklistedUserUntilUnix)
+			autoServerHopState.RuntimeTempBlacklistedUserIds =
+				ensureMapBL(autoServerHopState.RuntimeTempBlacklistedUserIds)
+			for userId, expiresAt in pairs(ensureMapBL(snapshot.TempBlacklistedUntilUnix)) do
+				expiresAt = tonumber(expiresAt)
+				local key = tostring(userId)
+				if expiresAt and expiresAt > nowUnix then
+					autoServerHopState.RuntimeTempBlacklistedUserUntilUnix[key] = expiresAt
+					autoServerHopState.RuntimeTempBlacklistedUserIds[key] =
+						os.clock() + math.max(0, expiresAt - nowUnix)
+				end
+			end
+			for userId, expiresAt in pairs(
+				autoServerHopState.RuntimeTempBlacklistedUserUntilUnix
+			) do
+				if tonumber(expiresAt) == nil or tonumber(expiresAt) <= nowUnix then
+					autoServerHopState.RuntimeTempBlacklistedUserUntilUnix[userId] = nil
+					autoServerHopState.RuntimeTempBlacklistedUserIds[userId] = nil
+				end
+			end
+
+			autoServerHopState.RuntimeAvoidPlayerUntilUnix =
+				ensureMapBL(autoServerHopState.RuntimeAvoidPlayerUntilUnix)
+			autoServerHopState.RuntimeAvoidPlayerUntil =
+				ensureMapBL(autoServerHopState.RuntimeAvoidPlayerUntil)
+			for userId, expiresAt in pairs(ensureMapBL(snapshot.AvoidPlayerUntilUnix)) do
+				expiresAt = tonumber(expiresAt)
+				local key = tostring(userId)
+				if expiresAt and expiresAt > nowUnix then
+					autoServerHopState.RuntimeAvoidPlayerUntilUnix[key] = expiresAt
+					autoServerHopState.RuntimeAvoidPlayerUntil[key] =
+						os.clock() + math.max(0, expiresAt - nowUnix)
+				end
+			end
+			for userId, expiresAt in pairs(autoServerHopState.RuntimeAvoidPlayerUntilUnix) do
+				if tonumber(expiresAt) == nil or tonumber(expiresAt) <= nowUnix then
+					autoServerHopState.RuntimeAvoidPlayerUntilUnix[userId] = nil
+					autoServerHopState.RuntimeAvoidPlayerUntil[userId] = nil
+				end
+			end
+
+			local utility = autoServerHopState.Utility
+			utility.PermanentBlacklistedUserIds =
+				ensureMapBL(utility.PermanentBlacklistedUserIds)
+			for userId, enabled in pairs(
+				ensureMapBL(snapshot.PermanentBlacklistedUserIds)
+			) do
+				if enabled == true then
+					utility.PermanentBlacklistedUserIds[tostring(userId)] = true
+				end
+			end
+
+			autoServerHopState.RuntimeCanceledTradeCounts = {}
+			for userId, count in pairs(autoServerHopState.CanceledTradeCounts) do
+				local normalized = math.max(0, math.floor(tonumber(count) or 0))
+				if normalized > 0 then
+					autoServerHopState.RuntimeCanceledTradeCounts[tostring(userId)] =
+						normalized
+				end
+			end
+		end
+
+		autoServerHopState.PersistBlacklistState = function()
+			local nowUnix = nowUnixBL()
+			autoServerHopState.JoinedServerBlacklist =
+				ensureMapBL(autoServerHopState.JoinedServerBlacklist)
+
+			local serverBlacklist = {}
+			for id, expiresAt in pairs(autoServerHopState.JoinedServerBlacklist) do
+				expiresAt = tonumber(expiresAt)
+				if type(id) == "string" and id ~= "" and expiresAt and expiresAt > nowUnix then
+					serverBlacklist[id] = expiresAt
+				else
+					autoServerHopState.JoinedServerBlacklist[id] = nil
+				end
+			end
+
+			local canceledCounts = {}
+			for userId, count in pairs(
+				ensureMapBL(autoServerHopState.CanceledTradeCounts)
+			) do
+				local normalized = math.max(0, math.floor(tonumber(count) or 0))
+				if normalized > 0 then
+					canceledCounts[tostring(userId)] = normalized
+				end
+			end
+
+			local lastCancelUnix = {}
+			for userId, unixAt in pairs(
+				ensureMapBL(autoServerHopState.RuntimeCanceledTradeLastUnix)
+			) do
+				unixAt = tonumber(unixAt)
+				if unixAt and unixAt > 0 then
+					lastCancelUnix[tostring(userId)] = unixAt
+				end
+			end
+
+			local tempUntil = {}
+			for userId, expiresAt in pairs(
+				ensureMapBL(autoServerHopState.RuntimeTempBlacklistedUserUntilUnix)
+			) do
+				expiresAt = tonumber(expiresAt)
+				if expiresAt and expiresAt > nowUnix then
+					tempUntil[tostring(userId)] = expiresAt
+				end
+			end
+
+			local avoidUntil = {}
+			for userId, expiresAt in pairs(
+				ensureMapBL(autoServerHopState.RuntimeAvoidPlayerUntilUnix)
+			) do
+				expiresAt = tonumber(expiresAt)
+				if expiresAt and expiresAt > nowUnix then
+					avoidUntil[tostring(userId)] = expiresAt
+				end
+			end
+
+			local permanent = {}
+			for userId, enabled in pairs(
+				ensureMapBL(
+					autoServerHopState.Utility
+						and autoServerHopState.Utility.PermanentBlacklistedUserIds
+				)
+			) do
+				if enabled == true then permanent[tostring(userId)] = true end
+			end
+
+			local snapshot = {
+				Version = 1,
+				ServerBlacklist = serverBlacklist,
+				CanceledTradeCounts = canceledCounts,
+				CanceledTradeLastUnix = lastCancelUnix,
+				TempBlacklistedUntilUnix = tempUntil,
+				AvoidPlayerUntilUnix = avoidUntil,
+				PermanentBlacklistedUserIds = permanent,
+			}
+			autoServerHopState.RuntimePersistentBlacklistSnapshot = snapshot
+
+			if type(writefile) ~= "function" then return false end
+			if type(makefolder) == "function" then
+				pcall(makefolder, "DroidHub_State")
+			end
+			local okEncode, body = pcall(
+				HttpServiceBL.JSONEncode,
+				HttpServiceBL,
+				snapshot
+			)
+			if not okEncode or type(body) ~= "string" then return false end
+			local okWrite = pcall(writefile, RuntimeBlacklistPath, body)
+			if okWrite and type(delfile) == "function" then
+				pcall(delfile, LegacyRuntimeBlacklistPath)
+			end
+			return okWrite
+		end
+
+		autoServerHopState.ClearPersistentBlacklistState = function()
+			autoServerHopState.JoinedServerBlacklist = {}
+			autoServerHopState.CanceledTradeCounts = {}
+			autoServerHopState.RuntimeCanceledTradeCounts = {}
+			autoServerHopState.RuntimeCanceledTradeLastCountAt = {}
+			autoServerHopState.RuntimeCanceledTradeLastUnix = {}
+			autoServerHopState.RuntimeTempBlacklistedUserIds = {}
+			autoServerHopState.RuntimeTempBlacklistedUserUntilUnix = {}
+			autoServerHopState.RuntimeAvoidPlayerUntil = {}
+			autoServerHopState.RuntimeAvoidPlayerUntilUnix = {}
+			if autoServerHopState.Utility then
+				autoServerHopState.Utility.PermanentBlacklistedUserIds = {}
+			end
+			autoServerHopState.RuntimePersistentBlacklistSnapshot = {}
+			if type(delfile) == "function" then
+				pcall(delfile, LegacyRuntimeBlacklistPath)
+			end
+			return autoServerHopState.PersistBlacklistState()
+		end
+
+		loadPersistentBL()
+		autoServerHopState.MergePersistentBlacklistState()
+	end)()
+
 	autoServerHopState.RecordCanceledTrade = function(userId)
 		userId = tonumber(userId)
 		local localPlayer = Players.LocalPlayer
@@ -2388,6 +3030,7 @@ if MINIGAME_MODE then
 		end
 		local key = tostring(userId)
 		local now = os.clock()
+		local nowUnix = DateTime.now().UnixTimestamp
 		autoServerHopState.RuntimeCanceledTradeLastCountAt =
 			autoServerHopState.RuntimeCanceledTradeLastCountAt or {}
 		local lastCountedAt =
@@ -2396,6 +3039,11 @@ if MINIGAME_MODE then
 			return false
 		end
 		autoServerHopState.RuntimeCanceledTradeLastCountAt[key] = now
+		autoServerHopState.RuntimeCanceledTradeLastUnix =
+			type(autoServerHopState.RuntimeCanceledTradeLastUnix) == "table"
+				and autoServerHopState.RuntimeCanceledTradeLastUnix
+				or {}
+		autoServerHopState.RuntimeCanceledTradeLastUnix[key] = nowUnix
 		autoServerHopState.CanceledTradeCounts =
 			type(autoServerHopState.CanceledTradeCounts) == "table"
 				and autoServerHopState.CanceledTradeCounts
@@ -2415,9 +3063,20 @@ if MINIGAME_MODE then
 				10
 			)
 			if count >= threshold then
-				autoServerHopState.RuntimeTempBlacklistedUserIds = autoServerHopState.RuntimeTempBlacklistedUserIds or {}
-				local seconds = math.clamp(tonumber(utility.AvoidSamePlayerSeconds) or 30, 1, 60)
+				autoServerHopState.RuntimeTempBlacklistedUserIds =
+					autoServerHopState.RuntimeTempBlacklistedUserIds or {}
+				autoServerHopState.RuntimeTempBlacklistedUserUntilUnix =
+					type(autoServerHopState.RuntimeTempBlacklistedUserUntilUnix) == "table"
+						and autoServerHopState.RuntimeTempBlacklistedUserUntilUnix
+						or {}
+				local seconds = math.clamp(
+					tonumber(utility.AvoidSamePlayerSeconds) or 30,
+					1,
+					60
+				)
 				autoServerHopState.RuntimeTempBlacklistedUserIds[key] = now + seconds
+				autoServerHopState.RuntimeTempBlacklistedUserUntilUnix[key] =
+					nowUnix + seconds
 			end
 		end
 		if utility.PermanentBlacklistPlayersAfterCanceledTrade == true then
@@ -2434,6 +3093,8 @@ if MINIGAME_MODE then
 				utility.PermanentBlacklistedUserIds[key] = true
 			end
 		end
+		local persist = autoServerHopState.PersistBlacklistState
+		if type(persist) == "function" then persist() end
 		return true
 	end
 	autoServerHopState.ResetCanceledTradeStreak = function(userId)
@@ -2456,44 +3117,117 @@ if MINIGAME_MODE then
 		if type(autoServerHopState.RuntimeCanceledTradeLastCountAt) == "table" then
 			autoServerHopState.RuntimeCanceledTradeLastCountAt[key] = nil
 		end
+		if type(autoServerHopState.RuntimeCanceledTradeLastUnix) == "table"
+			and autoServerHopState.RuntimeCanceledTradeLastUnix[key] ~= nil
+		then
+			autoServerHopState.RuntimeCanceledTradeLastUnix[key] = nil
+			changed = true
+		end
 		if type(autoServerHopState.RuntimeTempBlacklistedUserIds) == "table"
 			and autoServerHopState.RuntimeTempBlacklistedUserIds[key] ~= nil
 		then
 			autoServerHopState.RuntimeTempBlacklistedUserIds[key] = nil
 			changed = true
 		end
+		if type(autoServerHopState.RuntimeTempBlacklistedUserUntilUnix) == "table"
+			and autoServerHopState.RuntimeTempBlacklistedUserUntilUnix[key] ~= nil
+		then
+			autoServerHopState.RuntimeTempBlacklistedUserUntilUnix[key] = nil
+			changed = true
+		end
+		if changed then
+			local persist = autoServerHopState.PersistBlacklistState
+			if type(persist) == "function" then persist() end
+		end
 		return changed
 	end
 	autoServerHopState.IsTempBlacklistedUser = function(userId)
-		if autoServerHopState.Utility.TempBlacklistPlayersAfterCanceledTrade ~= true then return false end
+		if autoServerHopState.Utility.TempBlacklistPlayersAfterCanceledTrade ~= true then
+			return false
+		end
 		userId = tonumber(userId)
 		if not userId or userId <= 0 then return false end
 		local key = tostring(userId)
 		local threshold = math.clamp(
-			math.floor(tonumber(autoServerHopState.Utility.TempBlacklistAfterCanceledTrades) or 1),
+			math.floor(
+				tonumber(
+					autoServerHopState.Utility.TempBlacklistAfterCanceledTrades
+				) or 1
+			),
 			1,
 			10
 		)
 		local streak = type(autoServerHopState.CanceledTradeCounts) == "table"
-			and math.max(0, math.floor(tonumber(autoServerHopState.CanceledTradeCounts[key]) or 0))
+			and math.max(
+				0,
+				math.floor(
+					tonumber(autoServerHopState.CanceledTradeCounts[key]) or 0
+				)
+			)
 			or 0
 		if streak < threshold then
-			if type(autoServerHopState.RuntimeTempBlacklistedUserIds) == "table" then
+			local changed = false
+			if type(autoServerHopState.RuntimeTempBlacklistedUserIds) == "table"
+				and autoServerHopState.RuntimeTempBlacklistedUserIds[key] ~= nil
+			then
 				autoServerHopState.RuntimeTempBlacklistedUserIds[key] = nil
+				changed = true
+			end
+			if type(autoServerHopState.RuntimeTempBlacklistedUserUntilUnix) == "table"
+				and autoServerHopState.RuntimeTempBlacklistedUserUntilUnix[key] ~= nil
+			then
+				autoServerHopState.RuntimeTempBlacklistedUserUntilUnix[key] = nil
+				changed = true
+			end
+			if changed then
+				local persist = autoServerHopState.PersistBlacklistState
+				if type(persist) == "function" then persist() end
 			end
 			return false
 		end
-		local lastCancel = type(autoServerHopState.RuntimeCanceledTradeLastCountAt) == "table"
-			and tonumber(autoServerHopState.RuntimeCanceledTradeLastCountAt[key]) or nil
-		local seconds = math.clamp(tonumber(autoServerHopState.Utility.AvoidSamePlayerSeconds) or 30, 1, 60)
-		local untilAt = lastCancel and (lastCancel + seconds)
-		if untilAt and os.clock() < untilAt then
-			autoServerHopState.RuntimeTempBlacklistedUserIds = autoServerHopState.RuntimeTempBlacklistedUserIds or {}
-			autoServerHopState.RuntimeTempBlacklistedUserIds[key] = untilAt
+
+		local seconds = math.clamp(
+			tonumber(autoServerHopState.Utility.AvoidSamePlayerSeconds) or 30,
+			1,
+			60
+		)
+		local nowUnix = DateTime.now().UnixTimestamp
+		autoServerHopState.RuntimeTempBlacklistedUserUntilUnix =
+			type(autoServerHopState.RuntimeTempBlacklistedUserUntilUnix) == "table"
+				and autoServerHopState.RuntimeTempBlacklistedUserUntilUnix
+				or {}
+		local untilUnix = tonumber(
+			autoServerHopState.RuntimeTempBlacklistedUserUntilUnix[key]
+		)
+		if not untilUnix then
+			local lastUnix = type(autoServerHopState.RuntimeCanceledTradeLastUnix) == "table"
+				and tonumber(autoServerHopState.RuntimeCanceledTradeLastUnix[key])
+				or nil
+			if lastUnix then
+				untilUnix = lastUnix + seconds
+				autoServerHopState.RuntimeTempBlacklistedUserUntilUnix[key] = untilUnix
+			end
+		end
+		if untilUnix and nowUnix < untilUnix then
+			autoServerHopState.RuntimeTempBlacklistedUserIds =
+				autoServerHopState.RuntimeTempBlacklistedUserIds or {}
+			autoServerHopState.RuntimeTempBlacklistedUserIds[key] =
+				os.clock() + math.max(0, untilUnix - nowUnix)
 			return true
 		end
+
+		local changed =
+			autoServerHopState.RuntimeTempBlacklistedUserUntilUnix[key] ~= nil
+		autoServerHopState.RuntimeTempBlacklistedUserUntilUnix[key] = nil
 		if type(autoServerHopState.RuntimeTempBlacklistedUserIds) == "table" then
+			if autoServerHopState.RuntimeTempBlacklistedUserIds[key] ~= nil then
+				changed = true
+			end
 			autoServerHopState.RuntimeTempBlacklistedUserIds[key] = nil
+		end
+		if changed then
+			local persist = autoServerHopState.PersistBlacklistState
+			if type(persist) == "function" then persist() end
 		end
 		return false
 	end
@@ -2509,19 +3243,53 @@ if MINIGAME_MODE then
 		autoServerHopState.RuntimeAvoidPlayerUntil =
 			type(autoServerHopState.RuntimeAvoidPlayerUntil) == "table"
 				and autoServerHopState.RuntimeAvoidPlayerUntil or {}
-		autoServerHopState.RuntimeAvoidPlayerUntil[tostring(userId)] = os.clock() + seconds
+		autoServerHopState.RuntimeAvoidPlayerUntilUnix =
+			type(autoServerHopState.RuntimeAvoidPlayerUntilUnix) == "table"
+				and autoServerHopState.RuntimeAvoidPlayerUntilUnix or {}
+		local key = tostring(userId)
+		autoServerHopState.RuntimeAvoidPlayerUntil[key] = os.clock() + seconds
+		autoServerHopState.RuntimeAvoidPlayerUntilUnix[key] =
+			DateTime.now().UnixTimestamp + seconds
+		local persist = autoServerHopState.PersistBlacklistState
+		if type(persist) == "function" then persist() end
 		return true
 	end
 	autoServerHopState.IsRecentlyAvoidedPlayer = function(userId)
 		userId = tonumber(userId)
 		if not userId or userId <= 0 then return false end
-		local recent = autoServerHopState.RuntimeAvoidPlayerUntil
-		if type(recent) ~= "table" then return false end
 		local key = tostring(userId)
-		local untilAt = tonumber(recent[key])
-		if not untilAt then return false end
-		if os.clock() < untilAt then return true end
-		recent[key] = nil
+		local nowUnix = DateTime.now().UnixTimestamp
+		local persistent = autoServerHopState.RuntimeAvoidPlayerUntilUnix
+		local untilUnix = type(persistent) == "table"
+			and tonumber(persistent[key])
+			or nil
+		if untilUnix and nowUnix < untilUnix then
+			autoServerHopState.RuntimeAvoidPlayerUntil =
+				type(autoServerHopState.RuntimeAvoidPlayerUntil) == "table"
+					and autoServerHopState.RuntimeAvoidPlayerUntil
+					or {}
+			autoServerHopState.RuntimeAvoidPlayerUntil[key] =
+				os.clock() + math.max(0, untilUnix - nowUnix)
+			return true
+		end
+
+		local recent = autoServerHopState.RuntimeAvoidPlayerUntil
+		local untilAt = type(recent) == "table" and tonumber(recent[key]) or nil
+		if untilAt and os.clock() < untilAt then return true end
+
+		local changed = false
+		if type(recent) == "table" and recent[key] ~= nil then
+			recent[key] = nil
+			changed = true
+		end
+		if type(persistent) == "table" and persistent[key] ~= nil then
+			persistent[key] = nil
+			changed = true
+		end
+		if changed then
+			local persist = autoServerHopState.PersistBlacklistState
+			if type(persist) == "function" then persist() end
+		end
 		return false
 	end
 	;(function()
@@ -2705,6 +3473,26 @@ if MINIGAME_MODE then
 			"AutoTradeCustomRepliesEnabled",
 			"AutoTradeCustomReplies",
 			"AutoDeleteWorstInventory",
+			"GlobalNeverOfferEnabled",
+			"GlobalNeverOfferRarities",
+			"GlobalNeverOfferMutations",
+			"GlobalNeverOfferTraits",
+			"GlobalNeverOfferSignatures",
+			"GlobalNeverOfferSizes",
+			"GlobalNeverOfferLevels",
+			"GlobalNeverOfferMinimumTraits",
+			"GlobalNeverOfferSpecificItems",
+			"TradeKeepCopiesEnabled",
+			"TradeKeepCopiesSpecificItems",
+			"TradeKeepCopiesRarityRules",
+			"DeleteKeepCopiesEnabled",
+			"DeleteKeepCopiesSpecificItems",
+			"DeleteKeepCopiesRarityRules",
+			"KeepCopiesEnabled",
+			"KeepCopiesSpecificItems",
+			"KeepCopiesRarityRules",
+			"KeepCopiesRarityFloor",
+			"KeepCopiesRarityMinimum",
 			"DeleteNonBrainrotsFirst",
 			"DeleteWorstBrainrotsFirst",
 			"DeleteInventoryThreshold",
@@ -2830,6 +3618,7 @@ if MINIGAME_MODE then
 			"PrintDisconnectsToTerminal",
 			"PrintAutoDeletesToTerminal",
 			"PrintPurchasedBoothListingsToTerminal",
+			"PrintTradesToTerminal",
 			"AutoReconnect",
 			"PauseMinigameFeatures",
 			"MoveDelayConnectFour",
@@ -2848,6 +3637,8 @@ if MINIGAME_MODE then
 			"CheckServerHopPlayedEveryoneServer",
 			"CheckServerHopNobodyMinigamesArea",
 			"CheckServerHopPlayedEveryoneMinigamesArea",
+			"CheckServerHopNoEligibleBooths",
+			"CheckServerHopNoEligibleTradePlayers",
 			"CheckServerBrainrotRarities",
 			"CheckServerSpecificItems",
 			"CheckServerMutations",
@@ -2855,8 +3646,22 @@ if MINIGAME_MODE then
 			"CheckServerSignatures",
 			"CheckServerSizes",
 			"CheckServerLevels",
+			"CheckServerMinimumTraits",
 			"CheckServerMustOwnAll",
 			"CheckServerMustOwnOne",
+			"AutoSendTradesEnabled",
+			"AutoSendTradeRarities",
+			"AutoSendTradeMutations",
+			"AutoSendTradeTraits",
+			"AutoSendTradeSignatures",
+			"AutoSendTradeSizes",
+			"AutoSendTradeLevels",
+			"AutoSendTradeMinimumTraits",
+			"AutoSendTradeSpecificItems",
+			"AutoSendTradeMinimumTokens",
+			"AutoSendTradeMustOwnAll",
+			"AutoSendTradeMustOwnOne",
+			"AutoSendTradeRetrySeconds",
 			"PauseScript",
 			"GuiMinimized",
 			"GuiStartMinimized",
@@ -2888,6 +3693,9 @@ if MINIGAME_MODE then
 			"AutoBoothMessageAllPossibleCompleted",
 			"AutoBoothAllPossibleCompletedMessage",
 			"AutoBoothAllPossibleCompletedMessageDelay",
+			"AutoBoothBuyEnabled",
+			"AutoBoothBuySpecificRules",
+			"AutoBoothBuyRarityRules",
 			"AutoBoothListing1Enabled",
 			"AutoBoothListing1Rarity",
 			"AutoBoothListing1Tokens",
@@ -2919,21 +3727,25 @@ if MINIGAME_MODE then
 			utilityKeys[#utilityKeys + 1] = "AutoAccept" .. rarity .. "Signatures"
 			utilityKeys[#utilityKeys + 1] = "AutoAccept" .. rarity .. "Sizes"
 			utilityKeys[#utilityKeys + 1] = "AutoAccept" .. rarity .. "Levels"
+			utilityKeys[#utilityKeys + 1] = "AutoAccept" .. rarity .. "MinimumTraits"
 			utilityKeys[#utilityKeys + 1] = "AutoAcceptTradesRequest" .. rarity .. "Mutations"
 			utilityKeys[#utilityKeys + 1] = "AutoAcceptTradesRequest" .. rarity .. "Traits"
 			utilityKeys[#utilityKeys + 1] = "AutoAcceptTradesRequest" .. rarity .. "Signatures"
 			utilityKeys[#utilityKeys + 1] = "AutoAcceptTradesRequest" .. rarity .. "Sizes"
 			utilityKeys[#utilityKeys + 1] = "AutoAcceptTradesRequest" .. rarity .. "Levels"
+			utilityKeys[#utilityKeys + 1] = "AutoAcceptTradesRequest" .. rarity .. "MinimumTraits"
 			utilityKeys[#utilityKeys + 1] = "AutoSit" .. rarity .. "Mutations"
 			utilityKeys[#utilityKeys + 1] = "AutoSit" .. rarity .. "Traits"
 			utilityKeys[#utilityKeys + 1] = "AutoSit" .. rarity .. "Signatures"
 			utilityKeys[#utilityKeys + 1] = "AutoSit" .. rarity .. "Sizes"
 			utilityKeys[#utilityKeys + 1] = "AutoSit" .. rarity .. "Levels"
+			utilityKeys[#utilityKeys + 1] = "AutoSit" .. rarity .. "MinimumTraits"
 			utilityKeys[#utilityKeys + 1] = "AutoCancel" .. rarity .. "Mutations"
 			utilityKeys[#utilityKeys + 1] = "AutoCancel" .. rarity .. "Traits"
 			utilityKeys[#utilityKeys + 1] = "AutoCancel" .. rarity .. "Signatures"
 			utilityKeys[#utilityKeys + 1] = "AutoCancel" .. rarity .. "Sizes"
 			utilityKeys[#utilityKeys + 1] = "AutoCancel" .. rarity .. "Levels"
+			utilityKeys[#utilityKeys + 1] = "AutoCancel" .. rarity .. "MinimumTraits"
 			utilityKeys[#utilityKeys + 1] = "AutoAcceptTradesAccept" .. rarity .. "Enabled" -- legacy migration source
 			utilityKeys[#utilityKeys + 1] = "AutoAcceptTradesAccept" .. rarity .. "Amount"
 			utilityKeys[#utilityKeys + 1] = "RegularFallbackSpecific" .. rarity .. "Items"
@@ -2966,7 +3778,12 @@ if MINIGAME_MODE then
 			utilityKeys[#utilityKeys + 1] = prefix .. "BrainrotSignatures"
 			utilityKeys[#utilityKeys + 1] = prefix .. "BrainrotSizes"
 			utilityKeys[#utilityKeys + 1] = prefix .. "BrainrotLevels"
+			utilityKeys[#utilityKeys + 1] = prefix .. "BrainrotMinimumTraits"
 			utilityKeys[#utilityKeys + 1] = prefix .. "MinimumCopies"
+			utilityKeys[#utilityKeys + 1] = prefix .. "DynamicRepricing"
+			utilityKeys[#utilityKeys + 1] = prefix .. "MinimumPrice"
+			utilityKeys[#utilityKeys + 1] = prefix .. "PriceChange"
+			utilityKeys[#utilityKeys + 1] = prefix .. "RepriceMinutes"
 			utilityKeys[#utilityKeys + 1] = prefix .. "MessageDelay"
 		end
 		local function snapshotSettings()
@@ -2975,7 +3792,7 @@ if MINIGAME_MODE then
 				utility[key] = copyJsonSafe(autoServerHopState.Utility[key])
 			end
 			local snapshot = {
-				Version = 5,
+				Version = 9,
 				MinigameAutoplay = copyJsonSafe(minigameAutoplayState),
 				AutoOffer = copyJsonSafe(autoOfferState),
 				RegularAutoOffer = copyJsonSafe(regularAutoOfferState),
@@ -2991,6 +3808,18 @@ if MINIGAME_MODE then
 						autoServerHopState.TimeSinceLastGameEnabled == true,
 					TimeSinceLastGame =
 						tonumber(autoServerHopState.TimeSinceLastGame) or 3,
+					NoOwnBoothPurchaseEnabled =
+						autoServerHopState.NoOwnBoothPurchaseEnabled == true,
+					NoOwnBoothPurchase =
+						tonumber(autoServerHopState.NoOwnBoothPurchase) or 10,
+					NoBoothBuyEnabled =
+						autoServerHopState.NoBoothBuyEnabled == true,
+					NoBoothBuy =
+						tonumber(autoServerHopState.NoBoothBuy) or 10,
+					NoRegularTradeEnabled =
+						autoServerHopState.NoRegularTradeEnabled == true,
+					NoRegularTrade =
+						tonumber(autoServerHopState.NoRegularTrade) or 10,
 					WinWagerTimeAdded =
 						tonumber(autoServerHopState.WinWagerTimeAdded) or 3,
 					BoothPurchaseTimeAdded =
@@ -3155,6 +3984,9 @@ if MINIGAME_MODE then
 			snapshot.ServerHop.ServerTime = 5
 			snapshot.ServerHop.TimeSinceLastGameEnabled = true
 			snapshot.ServerHop.TimeSinceLastGame = 1
+			snapshot.ServerHop.NoOwnBoothPurchaseEnabled = false
+			snapshot.ServerHop.NoBoothBuyEnabled = false
+			snapshot.ServerHop.NoRegularTradeEnabled = false
 			snapshot.ServerHop.WinWagerTimeAdded = 0
 			snapshot.ServerHop.BoothPurchaseTimeAdded = 1
 			snapshot.ServerHop.LeaveIfScriptUserInServer = true
@@ -3163,6 +3995,9 @@ if MINIGAME_MODE then
 			utility.CheckServerHopPlayedEveryoneServer = false
 			utility.CheckServerHopNobodyMinigamesArea = true
 			utility.CheckServerHopPlayedEveryoneMinigamesArea = true
+			utility.CheckServerHopNoEligibleBooths = false
+			utility.CheckServerHopNoEligibleTradePlayers = false
+			utility.AutoSendTradesEnabled = false
 			utility.CheckServerBrainrotRarities = {}
 			utility.CheckServerSpecificItems = {}
 			utility.CheckServerMutations = {}
@@ -3265,6 +4100,7 @@ if MINIGAME_MODE then
 			utility.PrintDisconnectsToTerminal = true
 			utility.PrintAutoDeletesToTerminal = true
 			utility.PrintPurchasedBoothListingsToTerminal = true
+			utility.PrintTradesToTerminal = true
 			utility.PauseMinigameFeatures = false
 			-- One-second move pacing is fast but avoids visibly instant board/draft actions.
 			utility.MoveDelayConnectFour = 1.0
@@ -3327,6 +4163,39 @@ if MINIGAME_MODE then
 				if type(serverHop.TimeSinceLastGame) == "number" then
 					autoServerHopState.TimeSinceLastGame =
 						serverHop.TimeSinceLastGame
+				end
+				if type(serverHop.NoOwnBoothPurchaseEnabled) == "boolean" then
+					autoServerHopState.NoOwnBoothPurchaseEnabled =
+						serverHop.NoOwnBoothPurchaseEnabled
+				end
+				if type(serverHop.NoOwnBoothPurchase) == "number" then
+					autoServerHopState.NoOwnBoothPurchase = math.clamp(
+						math.floor(serverHop.NoOwnBoothPurchase),
+						1,
+						60
+					)
+				end
+				if type(serverHop.NoBoothBuyEnabled) == "boolean" then
+					autoServerHopState.NoBoothBuyEnabled =
+						serverHop.NoBoothBuyEnabled
+				end
+				if type(serverHop.NoBoothBuy) == "number" then
+					autoServerHopState.NoBoothBuy = math.clamp(
+						math.floor(serverHop.NoBoothBuy),
+						1,
+						60
+					)
+				end
+				if type(serverHop.NoRegularTradeEnabled) == "boolean" then
+					autoServerHopState.NoRegularTradeEnabled =
+						serverHop.NoRegularTradeEnabled
+				end
+				if type(serverHop.NoRegularTrade) == "number" then
+					autoServerHopState.NoRegularTrade = math.clamp(
+						math.floor(serverHop.NoRegularTrade),
+						1,
+						60
+					)
 				end
 				if type(serverHop.WinWagerTimeAdded) == "number" then
 					autoServerHopState.WinWagerTimeAdded = serverHop.WinWagerTimeAdded
@@ -3581,6 +4450,11 @@ if MINIGAME_MODE then
 			autoServerHopState.RuntimeCanceledTradeCounts =
 				copyJsonSafe(autoServerHopState.CanceledTradeCounts) or {}
 			autoServerHopState.RuntimeCanceledTradeLastCountAt = {}
+			local mergePersistentBlacklists =
+				autoServerHopState.MergePersistentBlacklistState
+			if type(mergePersistentBlacklists) == "function" then
+				mergePersistentBlacklists()
+			end
 			autoServerHopState.RuntimeUtilityToggleRows = {}
 			autoServerHopState.RuntimeServerHopPending = true
 			autoServerHopState.RuntimeServerHopHardFreeze = false
@@ -3597,6 +4471,8 @@ if MINIGAME_MODE then
 			autoServerHopState.RuntimeManualServerHopRequested = false
 			autoServerHopState.RuntimeManualKickRequested = false
 			autoServerHopState.RuntimeQueuedMinigameUserIds = {}
+			autoServerHopState.RuntimeBoothRepriceStartedAt = {}
+			autoServerHopState.RuntimeBoothRepriceItemBySlot = {}
 			if autoServerHopState.Utility.EquipBestBrainrot == true
 				and autoServerHopState.Utility.EquipBestMountableBrainrot == true
 			then
@@ -3692,6 +4568,141 @@ if MINIGAME_MODE then
 					1,
 					60
 				)
+				autoServerHopState.Utility.GlobalNeverOfferMinimumTraits = math.clamp(
+					math.floor(tonumber(autoServerHopState.Utility.GlobalNeverOfferMinimumTraits) or 0),
+					0,
+					5
+				)
+				do
+					local utility = autoServerHopState.Utility
+					local configVersion = tonumber(saved.Version) or 1
+
+					local function normalizeSpecificCopyRules(source)
+						local normalized = {}
+						if type(source) == "table" then
+							for _, rule in ipairs(source) do
+								if type(rule) == "table"
+									and rule.Item ~= nil
+									and tostring(rule.Item) ~= ""
+								then
+									local copy = copyJsonSafe(rule) or {}
+									copy.MinimumCopies = math.clamp(
+										math.floor(tonumber(copy.MinimumCopies) or 1),
+										1,
+										100
+									)
+									copy.Mutations = type(copy.Mutations) == "table" and copy.Mutations or {}
+									copy.Traits = type(copy.Traits) == "table" and copy.Traits or {}
+									normalized[#normalized + 1] = copy
+								end
+							end
+						end
+						normalized[#normalized + 1] = {
+							Item = nil,
+							Mutations = {},
+							Traits = {},
+							MinimumCopies = 1,
+						}
+						return normalized
+					end
+
+					local function normalizeRarityCopyRules(source)
+						local normalized, seen = {}, {}
+						if type(source) == "table" then
+							for _, rule in ipairs(source) do
+								if type(rule) == "table" then
+									local rarity = tostring(rule.Item or "")
+									if rarity ~= ""
+										and table.find(BRAINROT_RARITY_OPTIONS, rarity) ~= nil
+										and not seen[rarity]
+									then
+										seen[rarity] = true
+										normalized[#normalized + 1] = {
+											Item = rarity,
+											MinimumCopies = math.clamp(
+												math.floor(tonumber(rule.MinimumCopies) or 1),
+												1,
+												100
+											),
+										}
+									end
+								end
+							end
+						end
+						normalized[#normalized + 1] = {Item = nil, MinimumCopies = 1}
+						return normalized
+					end
+
+					if configVersion < 7 then
+						local hasRarityRule = false
+						for _, rule in ipairs(type(utility.KeepCopiesRarityRules) == "table"
+							and utility.KeepCopiesRarityRules or {})
+						do
+							if type(rule) == "table"
+								and table.find(BRAINROT_RARITY_OPTIONS, tostring(rule.Item or "")) ~= nil
+							then
+								hasRarityRule = true
+								break
+							end
+						end
+						if not hasRarityRule then
+							local legacyRarity = tostring(utility.KeepCopiesRarityFloor or "")
+							local legacyCopies = math.clamp(
+								math.floor(tonumber(utility.KeepCopiesRarityMinimum) or 0),
+								0,
+								100
+							)
+							if legacyCopies > 0
+								and table.find(BRAINROT_RARITY_OPTIONS, legacyRarity) ~= nil
+							then
+								utility.KeepCopiesRarityRules = {
+									{Item = legacyRarity, MinimumCopies = legacyCopies},
+									{Item = nil, MinimumCopies = 1},
+								}
+							end
+						end
+					end
+
+					if configVersion < 8 then
+						utility.TradeKeepCopiesEnabled = utility.KeepCopiesEnabled == true
+						utility.DeleteKeepCopiesEnabled = utility.KeepCopiesEnabled == true
+						utility.TradeKeepCopiesSpecificItems =
+							normalizeSpecificCopyRules(utility.KeepCopiesSpecificItems)
+						utility.DeleteKeepCopiesSpecificItems =
+							normalizeSpecificCopyRules(utility.KeepCopiesSpecificItems)
+						utility.TradeKeepCopiesRarityRules =
+							normalizeRarityCopyRules(utility.KeepCopiesRarityRules)
+						utility.DeleteKeepCopiesRarityRules =
+							normalizeRarityCopyRules(utility.KeepCopiesRarityRules)
+					end
+
+					utility.TradeKeepCopiesSpecificItems =
+						normalizeSpecificCopyRules(utility.TradeKeepCopiesSpecificItems)
+					utility.DeleteKeepCopiesSpecificItems =
+						normalizeSpecificCopyRules(utility.DeleteKeepCopiesSpecificItems)
+					utility.TradeKeepCopiesRarityRules =
+						normalizeRarityCopyRules(utility.TradeKeepCopiesRarityRules)
+					utility.DeleteKeepCopiesRarityRules =
+						normalizeRarityCopyRules(utility.DeleteKeepCopiesRarityRules)
+
+					utility.KeepCopiesEnabled = false
+					utility.KeepCopiesRarityFloor = nil
+					utility.KeepCopiesRarityMinimum = 0
+				end
+				autoServerHopState.Utility.CheckServerMinimumTraits = math.clamp(math.floor(tonumber(autoServerHopState.Utility.CheckServerMinimumTraits) or 0), 0, 5)
+				for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+					for _, prefix in ipairs({"AutoAccept", "AutoAcceptTradesRequest", "AutoSit", "AutoCancel"}) do
+						local key = prefix .. rarity .. "MinimumTraits"
+						autoServerHopState.Utility[key] = math.clamp(math.floor(tonumber(autoServerHopState.Utility[key]) or 0), 0, 5)
+					end
+				end
+				for index = 1, 14 do
+					local prefix = "AutoBoothListing" .. tostring(index)
+					autoServerHopState.Utility[prefix .. "BrainrotMinimumTraits"] = math.clamp(math.floor(tonumber(autoServerHopState.Utility[prefix .. "BrainrotMinimumTraits"]) or 0), 0, 5)
+					autoServerHopState.Utility[prefix .. "MinimumPrice"] = math.clamp(math.floor(tonumber(autoServerHopState.Utility[prefix .. "MinimumPrice"]) or 1), 1, 1000000)
+					autoServerHopState.Utility[prefix .. "PriceChange"] = math.clamp(math.floor(tonumber(autoServerHopState.Utility[prefix .. "PriceChange"]) or 1), 1, 1000000)
+					autoServerHopState.Utility[prefix .. "RepriceMinutes"] = math.clamp(math.floor(tonumber(autoServerHopState.Utility[prefix .. "RepriceMinutes"]) or 5), 1, 60)
+				end
 				for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 					local tokenKey = "RegularFallbackTokens" .. rarity
 					autoServerHopState.Utility[tokenKey] = math.clamp(
@@ -4105,6 +5116,12 @@ if MINIGAME_MODE then
 			autoServerHopState.ServerTime = tonumber(defaultServerHop.ServerTime) or 10
 			autoServerHopState.TimeSinceLastGameEnabled = defaultServerHop.TimeSinceLastGameEnabled == true
 			autoServerHopState.TimeSinceLastGame = tonumber(defaultServerHop.TimeSinceLastGame) or 3
+			autoServerHopState.NoOwnBoothPurchaseEnabled = defaultServerHop.NoOwnBoothPurchaseEnabled == true
+			autoServerHopState.NoOwnBoothPurchase = tonumber(defaultServerHop.NoOwnBoothPurchase) or 10
+			autoServerHopState.NoBoothBuyEnabled = defaultServerHop.NoBoothBuyEnabled == true
+			autoServerHopState.NoBoothBuy = tonumber(defaultServerHop.NoBoothBuy) or 10
+			autoServerHopState.NoRegularTradeEnabled = defaultServerHop.NoRegularTradeEnabled == true
+			autoServerHopState.NoRegularTrade = tonumber(defaultServerHop.NoRegularTrade) or 10
 			autoServerHopState.WinWagerTimeAdded = tonumber(defaultServerHop.WinWagerTimeAdded) or 3
 			autoServerHopState.BoothPurchaseTimeAdded = tonumber(defaultServerHop.BoothPurchaseTimeAdded) or 1
 			autoServerHopState.LeaveIfScriptUserInServer = defaultServerHop.LeaveIfScriptUserInServer == true
@@ -4122,6 +5139,11 @@ if MINIGAME_MODE then
 			-- and Simple Autofarm must never silently unpause or pause the script.
 			autoServerHopState.Utility.PauseScript = globalPause
 			autoServerHopState.RuntimeCanceledTradeCounts = copyJsonSafe(canceledCounts) or {}
+			local mergePersistentBlacklists =
+				autoServerHopState.MergePersistentBlacklistState
+			if type(mergePersistentBlacklists) == "function" then
+				mergePersistentBlacklists()
+			end
 			if type(toggleRegistry) == "table" and next(toggleRegistry) ~= nil then
 				autoServerHopState.RuntimeUtilityToggleRows = toggleRegistry
 			end
@@ -4146,7 +5168,7 @@ if MINIGAME_MODE then
 			profile.MinigameAutoplay=autoplay
 			for _,id in ipairs({"ConnectFour","FootballDraft","CandyBomb","Battleship","NumberGuess","Knockout","PopcornBurst","HotPotato","BatBattle"}) do autoplay[id]=true end
 			utility.AutoPlayMaster=true
-			utility.AutoReconnect=true; utility.PrintWinsLossesToTerminal=true; utility.PrintKicksToTerminal=true; utility.PrintDisconnectsToTerminal=true; utility.PrintAutoDeletesToTerminal=true; utility.PrintPurchasedBoothListingsToTerminal=true
+			utility.AutoReconnect=true; utility.PrintWinsLossesToTerminal=true; utility.PrintKicksToTerminal=true; utility.PrintDisconnectsToTerminal=true; utility.PrintAutoDeletesToTerminal=true; utility.PrintPurchasedBoothListingsToTerminal=true; utility.PrintTradesToTerminal=true
 			utility.AutoCancelTradeTimeoutEnabled=true; utility.AutoCancelTradeTimeout=15
 			utility.AutoCancelNoValueTimeoutEnabled=true; utility.AutoCancelNoValueTimeout=6; utility.AutoCancelBrainrotConditionDelay=0; utility.CustomDelays=true; utility.InitialJoinDelay=1.80; utility.DelayAfterTradeMessage=1.60; utility.ReactionDelay=2.00; utility.AddBrainrotDelay=0.70; utility.RemoveBrainrotDelay=0.60; utility.AddTokenDelay=0.45; utility.RemoveTokenDelay=0.45; utility.AcceptOfferDelay=1.25
 			utility.AutoOfferMaster=true; utility.AutoOfferTokensEnabled=true; utility.AutoOfferMatchTokensWithTokens=true
@@ -4366,6 +5388,12 @@ if MINIGAME_MODE then
 			autoServerHopState.ServerTime = tonumber(defaultServerHop.ServerTime) or 10
 			autoServerHopState.TimeSinceLastGameEnabled = defaultServerHop.TimeSinceLastGameEnabled == true
 			autoServerHopState.TimeSinceLastGame = tonumber(defaultServerHop.TimeSinceLastGame) or 3
+			autoServerHopState.NoOwnBoothPurchaseEnabled = defaultServerHop.NoOwnBoothPurchaseEnabled == true
+			autoServerHopState.NoOwnBoothPurchase = tonumber(defaultServerHop.NoOwnBoothPurchase) or 10
+			autoServerHopState.NoBoothBuyEnabled = defaultServerHop.NoBoothBuyEnabled == true
+			autoServerHopState.NoBoothBuy = tonumber(defaultServerHop.NoBoothBuy) or 10
+			autoServerHopState.NoRegularTradeEnabled = defaultServerHop.NoRegularTradeEnabled == true
+			autoServerHopState.NoRegularTrade = tonumber(defaultServerHop.NoRegularTrade) or 10
 			autoServerHopState.WinWagerTimeAdded = tonumber(defaultServerHop.WinWagerTimeAdded) or 3
 			autoServerHopState.BoothPurchaseTimeAdded = tonumber(defaultServerHop.BoothPurchaseTimeAdded) or 1
 			autoServerHopState.LeaveIfScriptUserInServer = defaultServerHop.LeaveIfScriptUserInServer == true
@@ -4388,6 +5416,11 @@ if MINIGAME_MODE then
 			local defaultUtility = defaultServerHop.Utility or {}
 			for _, key in ipairs(utilityKeys) do
 				autoServerHopState.Utility[key] = copyJsonSafe(defaultUtility[key])
+			end
+			local clearPersistentBlacklists =
+				autoServerHopState.ClearPersistentBlacklistState
+			if type(clearPersistentBlacklists) == "function" then
+				clearPersistentBlacklists()
 			end
 			autoServerHopState.Utility.UndoAllSettings = false
 			autoServerHopState.Utility.AutoChatEditing = false
@@ -4449,6 +5482,9 @@ if MINIGAME_MODE then
 			autoServerHopState.Enabled = false
 			autoServerHopState.ServerTimeEnabled = false
 			autoServerHopState.TimeSinceLastGameEnabled = false
+			autoServerHopState.NoOwnBoothPurchaseEnabled = false
+			autoServerHopState.NoBoothBuyEnabled = false
+			autoServerHopState.NoRegularTradeEnabled = false
 			autoServerHopState.LeaveIfScriptUserInServer = false
 			autoServerHopState.Utility.SimpleAutofarmEnabled = false
 			autoServerHopState.Utility.UndoAllSettings = false
@@ -4547,6 +5583,8 @@ if MINIGAME_MODE then
 			or utility.CheckServerHopPlayedEveryoneServer == true
 			or utility.CheckServerHopNobodyMinigamesArea == true
 			or utility.CheckServerHopPlayedEveryoneMinigamesArea == true
+			or utility.CheckServerHopNoEligibleBooths == true
+			or utility.CheckServerHopNoEligibleTradePlayers == true
 		if not checkEnabled then autoServerHopState.RuntimeCheckServerStartupResolved = true end
 		if autoServerHopState.LeaveIfScriptUserInServer ~= true then
 			autoServerHopState.RuntimePresenceStartupResolved = true
@@ -4656,7 +5694,6 @@ if MINIGAME_MODE then
 		autoServerHopState.RuntimeActiveSessionBypass = false
 	end)
 	autoServerHopState.RequestManualHop = function(requireActiveMinigame)
-		if autoServerHopState.Utility.PauseScript == true then return false end
 		if requireActiveMinigame == true then
 			local activeFound = false
 			pcall(function()
@@ -5177,9 +6214,35 @@ outerBorder.LineJoinMode = Enum.LineJoinMode.Round
 outerBorder.Parent = outerBorderOverlay
 local panelOpen = window.Visible
 local guiDestroyed = false
+local function closeTransientGuiControls()
+	local closeDropdown = autoServerHopState.CloseActivePanelDropdown
+	if type(closeDropdown) == "function" then
+		pcall(closeDropdown)
+	end
+	local closeSettingsChoice = autoServerHopState.CloseSettingsChoicePopup
+	if type(closeSettingsChoice) == "function" then
+		pcall(closeSettingsChoice)
+	end
+	local focused = UserInputService:GetFocusedTextBox()
+	if focused and focused:IsDescendantOf(screenGui) then
+		pcall(focused.ReleaseFocus, focused, false)
+	end
+	-- Fallback cleanup for a popup created during the same frame that the GUI
+	-- closes, before its normal close callback has finished registering.
+	for _, child in ipairs(screenGui:GetChildren()) do
+		if child.Name == "DropdownOverlay"
+			or child.Name == "DroidHubChoiceOverlay"
+		then
+			pcall(child.Destroy, child)
+		end
+	end
+end
 local function setPanelOpen(open)
 	if guiDestroyed then
 		return
+	end
+	if not open then
+		closeTransientGuiControls()
 	end
 	panelOpen = open
 	window.Visible = open
@@ -5583,22 +6646,22 @@ searchBox.TextTruncate = Enum.TextTruncate.None
 searchBox.ClearTextOnFocus = false
 searchBox.Text = ""
 searchBox.PlaceholderText = ""
-searchBox.TextColor3 = UI.SEARCH_TEXT_COLOR
-searchBox.PlaceholderColor3 = UI.SEARCH_PLACEHOLDER_COLOR
+searchBox.TextColor3 = UI.MENU_TEXT_SELECTED
+searchBox.PlaceholderColor3 = UI.MUTED_TEXT_COLOR
 searchBox.FontFace = UI.MENU_FONT_FACE
 setResponsiveTextSize(searchBox, UI.SEARCH_TEXT_SIZE)
-searchBox.TextXAlignment = Enum.TextXAlignment.Center
+searchBox.TextXAlignment = Enum.TextXAlignment.Left
 searchBox.TextYAlignment = Enum.TextYAlignment.Center
 searchBox.ZIndex = 45003
 searchBox.Parent = searchHolder
 local searchTextPadding = New("UIPadding")
 searchTextPadding.PaddingLeft = UDim.new(
 	0,
-	0
+	px(10)
 )
 searchTextPadding.PaddingRight = UDim.new(
 	0,
-	0
+	px(10)
 )
 searchTextPadding.Parent = searchBox
 local centeredSearchPlaceholder = New("TextLabel")
@@ -5608,7 +6671,7 @@ centeredSearchPlaceholder.Size = U2S(1, 1)
 centeredSearchPlaceholder.BackgroundTransparency = 1
 centeredSearchPlaceholder.BorderSizePixel = 0
 centeredSearchPlaceholder.Text = "Search"
-centeredSearchPlaceholder.TextColor3 = UI.SEARCH_PLACEHOLDER_COLOR
+centeredSearchPlaceholder.TextColor3 = UI.MUTED_TEXT_COLOR
 centeredSearchPlaceholder.FontFace = UI.MENU_FONT_FACE
 setResponsiveTextSize(centeredSearchPlaceholder, UI.SEARCH_TEXT_SIZE)
 centeredSearchPlaceholder.TextXAlignment = Enum.TextXAlignment.Center
@@ -5619,11 +6682,7 @@ local function syncSearchPlaceholder()
 	centeredSearchPlaceholder.Visible =
 		searchBox.Text == ""
 		and not searchBox:IsFocused()
-	searchBox.TextXAlignment =
-		searchBox:IsFocused()
-		and searchBox.TextBounds.X > math.max(1, searchBox.AbsoluteSize.X - px(2))
-		and Enum.TextXAlignment.Right
-		or Enum.TextXAlignment.Center
+	searchBox.TextXAlignment = Enum.TextXAlignment.Left
 end
 searchBox:GetPropertyChangedSignal(
 	"Text"
@@ -6089,7 +7148,10 @@ autoServerHopState.FitVisibleUiText = function(object)
 	then
 		return
 	end
-	local availableWidth = math.max(1, width - px(4))
+	local availableWidth = math.max(
+		1,
+		math.floor((width - px(4)) * 0.96)
+	)
 	local availableHeight = math.max(1, height - px(2))
 	local minimumSize = isPhonePanelLayout() and 7 or 8
 	local function fits(size)
@@ -6712,7 +7774,7 @@ autoServerHopState.RefreshSidebarMinimumWidth = function(skipSync)
 				UI.MENU_FONT,
 				V2(10000, math.max(label.TextSize + px(8), 32))
 			).X
-			widestText = math.max(widestText, measured)
+			widestText = math.max(widestText, measured * 1.04)
 		end
 	end
 	if widestText <= 0 then return end
@@ -6982,7 +8044,7 @@ tabs.AutoAcceptTrades.Label.Text = formatPanelTitle("Regular Trades", "sidebar")
 tabs.Cancel = createSidebarItem("Cancel", 6, "C")
 tabs.Cancel.Label.Text = formatPanelTitle("Trade Rules", "sidebar")
 tabs.Fallbacks = createSidebarItem("Fallbacks", 7, "F")
-tabs.Fallbacks.Label.Text = formatPanelTitle("Trade Fallbacks", "sidebar")
+tabs.Fallbacks.Label.Text = formatPanelTitle("Backup Offers", "sidebar")
 tabs.Messages = createSidebarItem("Messages", 8, "M")
 tabs.Messages.Label.Text = formatPanelTitle("Auto Messages", "sidebar")
 tabs.Inventory = createSidebarItem("Inventory", 9, "I")
@@ -7089,6 +8151,7 @@ autoServerHopState.RuntimePanelChevronAsset=getEmbeddedIconAsset("Chevron")
 -- prevents compile failures without changing dropdown behavior.
 autoServerHopState.RuntimeActivePanelDropdown = nil
 autoServerHopState.RuntimeDropdownWindowBaseHeight = nil
+autoServerHopState.RuntimeDropdownBottomReserve = 0
 -- Some settings/state are represented in more than one panel. Refreshing only
 -- the panel that received an input can leave a second panel with stale child
 -- visibility or stale shared controls. Defer one full UI-state sync after user
@@ -7105,6 +8168,16 @@ autoServerHopState.RestoreDropdownWindowHeight = function()
 		window.Size = U2O(window.Size.X.Offset, baseHeight)
 	end
 	autoServerHopState.RuntimeDropdownWindowBaseHeight = nil
+end
+autoServerHopState.RestoreDropdownBottomReserve = function()
+	if (tonumber(autoServerHopState.RuntimeDropdownBottomReserve) or 0) <= 0 then
+		return
+	end
+	autoServerHopState.RuntimeDropdownBottomReserve = 0
+	local sync = rawget(_G, "__DROIDHUB_SYNC_RIGHT_PANEL_GEOMETRY")
+	if type(sync) == "function" then
+		task.defer(sync, true)
+	end
 end
 autoServerHopState.PointInsideGui = function(gui, point)
 	if not gui or not gui.Parent or not gui.Visible then return false end
@@ -7131,6 +8204,7 @@ autoServerHopState.CloseActivePanelDropdown = function()
 		end
 		autoServerHopState.RuntimeActivePanelDropdown = nil
 		autoServerHopState.RestoreDropdownWindowHeight()
+		autoServerHopState.RestoreDropdownBottomReserve()
 		if type(onClose) == "function" then task.defer(onClose) end
 	end
 end
@@ -7298,7 +8372,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 	local featureRowGap = px(4)
 	local featureTopPadding = px(10)
 	local featureBottomPadding = px(10)
-	local amountControlsHeight = px(42)
+	local amountControlsHeight = px(isPhonePanelLayout() and 40 or 36)
 	local secondaryControlHeight = px(34)
 	local toggleWidth = px(34)
 	local toggleHeight = px(18)
@@ -7444,13 +8518,17 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		local panelWidth = panelData and tonumber(panelData.LayoutWidth) or panel.AbsoluteSize.X
 		if not panelWidth or panelWidth <= 1 then return end
 		local available = math.max(px(80), panelWidth - px(62))
+		local measureWidth = math.max(1, available - px(8))
 		local measured = TextService:GetTextSize(
 			headerTitle.Text,
 			headerTitle.TextSize,
 			UI.MENU_FONT,
-			Vector2.new(available, 10000)
+			Vector2.new(measureWidth, 10000)
 		)
-		local desired = math.max(UI.PANEL_HEADER_HEIGHT, math.ceil(measured.Y) + px(20))
+		local desired = math.max(
+			UI.PANEL_HEADER_HEIGHT,
+			math.ceil(measured.Y) + px(22)
+		)
 		if desired == currentHeaderHeight then return end
 		currentHeaderHeight = desired
 		header.Size = U2(1, 0, 0, currentHeaderHeight)
@@ -7572,7 +8650,58 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					local currentTop = rowData.Row.Position.Y.Offset
 					local currentBottom = currentTop + rowData.Row.Size.Y.Offset
 					local nextTop = nextRow.Row.Position.Y.Offset
-					local dividerCenter = ((currentBottom + nextTop) * 0.5) - currentTop
+
+					local function visibleTopInset(data)
+						if not data then return 0 end
+						local track = data.ToggleTrack
+						if track and track.Visible then
+							return math.max(
+								0,
+								track.Position.Y.Offset
+									- (track.Size.Y.Offset * track.AnchorPoint.Y)
+							)
+						end
+						-- Slider labels begin at the row's actual top edge.
+						if data.IsSliderVisualRow == true then return 0 end
+						return 0
+					end
+					local function visibleBottomInset(data)
+						if not data then return 0 end
+						local track = data.ToggleTrack
+						if track and track.Visible then
+							local visibleBottom =
+								track.Position.Y.Offset
+								+ (
+									track.Size.Y.Offset
+									* (1 - track.AnchorPoint.Y)
+								)
+							return math.max(
+								0,
+								data.Row.Size.Y.Offset - visibleBottom
+							)
+						end
+						-- Full-width slider knobs nearly reach the row bottom, leaving
+						-- only the tiny safety inset used by the shared slider layout.
+						if data.IsSliderVisualRow == true then return px(1) end
+						return 0
+					end
+
+					local currentVisualBottom =
+						currentBottom - visibleBottomInset(rowData)
+					local nextVisualTop =
+						nextTop + visibleTopInset(nextRow)
+					local dividerAbsolute = roundPixel(
+						(currentVisualBottom + nextVisualTop) * 0.5
+					)
+					local dividerCenter = dividerAbsolute - currentTop
+
+					-- Adjacent criteria-manager groups have a heading below a full-width
+					-- action button. Keep the small established optical correction there.
+					if rowData.IsSpecificCriteriaManager == true
+						and nextRow.IsSpecificCriteriaManager == true
+					then
+						dividerCenter += px(4)
+					end
 					rowData.Divider.Position = U2(0.5, 0, 0, dividerCenter)
 				end
 			end
@@ -7650,19 +8779,43 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 	end
 	local function ensureDropdownRoomBelow(button, desiredHeight)
 		if not button or not button.Parent or not button:IsDescendantOf(rightContent) then return end
-		desiredHeight = math.max(px(25), tonumber(desiredHeight) or px(180))
+		desiredHeight = math.max(px(100), tonumber(desiredHeight) or px(180))
+		local desiredRoom = desiredHeight + px(18)
 		local buttonBottom = button.AbsolutePosition.Y + button.AbsoluteSize.Y
 		local windowBottom = window.AbsolutePosition.Y + window.AbsoluteSize.Y
 		local roomBelow = math.max(0, windowBottom - buttonBottom)
-		if roomBelow >= desiredHeight then return end
-		-- Keep the device-fixed Window size. Make room by scrolling the content
-		-- upward instead of enlarging the GUI based on viewport height.
-		local maxCanvasY = math.max(0, rightContent.AbsoluteCanvasSize.Y - rightContent.AbsoluteSize.Y)
-		local needed = desiredHeight - roomBelow
-		rightContent.CanvasPosition = V2(
-			rightContent.CanvasPosition.X,
-			math.clamp(rightContent.CanvasPosition.Y + needed, 0, maxCanvasY)
+		local needed = math.max(0, desiredRoom - roomBelow)
+		if needed <= 0 then return end
+
+		autoServerHopState.RuntimeDropdownBottomReserve = math.max(
+			tonumber(autoServerHopState.RuntimeDropdownBottomReserve) or 0,
+			needed
 		)
+
+		local sync = rawget(_G, "__DROIDHUB_SYNC_RIGHT_PANEL_GEOMETRY")
+		if type(sync) == "function" then
+			pcall(sync, true)
+		end
+
+		task.defer(function()
+			if not button.Parent or not button:IsDescendantOf(rightContent) then return end
+			local refreshedBottom = button.AbsolutePosition.Y + button.AbsoluteSize.Y
+			local refreshedWindowBottom = window.AbsolutePosition.Y + window.AbsoluteSize.Y
+			local refreshedRoom = math.max(0, refreshedWindowBottom - refreshedBottom)
+			local scrollNeeded = math.max(0, desiredRoom - refreshedRoom)
+			local maxCanvasY = math.max(
+				0,
+				rightContent.AbsoluteCanvasSize.Y - rightContent.AbsoluteWindowSize.Y
+			)
+			rightContent.CanvasPosition = V2(
+				rightContent.CanvasPosition.X,
+				math.clamp(
+					rightContent.CanvasPosition.Y + scrollNeeded,
+					0,
+					maxCanvasY
+				)
+			)
+		end)
 	end
 	rawset(_G, "__DROIDHUB_ENSURE_DROPDOWN_ROOM_BELOW", ensureDropdownRoomBelow)
 	local function attachDropdownOutsideClose(popup, button, overlay)
@@ -7759,6 +8912,10 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		search.Parent = popup
 		ensureCorner(search, px(5))
 		rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(search)
+		local searchPadding = New("UIPadding")
+		searchPadding.PaddingLeft = UDim.new(0, px(10))
+		searchPadding.PaddingRight = UDim.new(0, px(10))
+		searchPadding.Parent = search
 		local optionRows = {}
 		local function selectedLabels()
 			local names = {}
@@ -7939,6 +9096,10 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		if isServerHopChild then
 			childIndentLevel = math.max(childIndentLevel, 1)
 		end
+		-- DroidHub uses one clean left edge for every feature row. Parent/child
+		-- relationships are communicated by visibility and separators, not indentation
+		-- or changing text weight.
+		childIndentLevel = 0
 		local isUtilityChild = (
 			isUtilityToggle
 			or isUtilityText
@@ -8029,7 +9190,13 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 		local defaultFeatureBaseHeight =
 			(isAutoCancelFilterOnly or compactUtilitySlider or compactUtilityText)
 				and 0
-				or featureRowHeight
+				or (
+					isSpecificCriteriaManager
+						and definition
+						and definition.SpecificCriteriaSimple == true
+						and px(24)
+					or featureRowHeight
+				)
 		local childTextIndent = 0
 		local dynamicBaseHeight
 		local featureLabel = New("TextLabel")
@@ -8093,6 +9260,18 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			featureLabel.TextColor3 = isDangerInfoNote and RGB(255, 74, 74) or UI.MUTED_TEXT_COLOR
 			featureLabel.TextXAlignment = Enum.TextXAlignment.Left
 			featureLabel.TextYAlignment = Enum.TextYAlignment.Center
+			if definition.EligiblePlayersDisplay == true then
+				autoServerHopState.RuntimeEligiblePlayersLabel = featureLabel
+				autoServerHopState.SetEligiblePlayersDisplay = function(lines)
+					if not featureLabel.Parent then return end
+					local value = tostring(lines or "No eligible players.")
+					-- Store the live value on the definition as well so a global settings/UI
+					-- refresh cannot replace the roster with the construction-time placeholder.
+					definition.InfoNoteText = value
+					featureLabel.Text = value
+					task.defer(relayoutRows)
+				end
+			end
 		elseif isActionButton then
 			featureLabel.Visible = false
 			actionButton = New("TextButton")
@@ -8115,11 +9294,6 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			ensureCorner(actionButton, px(6))
 			rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(actionButton)
 			actionButton.MouseButton1Click:Connect(function()
-				if (definition.Action == "ManualServerHop" or definition.Action == "ManualKickMinigame")
-					and autoServerHopState.Utility.PauseScript == true
-				then
-					return
-				end
 				if definition.Action == "ResetSimpleAutofarm" then
 					local reset = rawget(_G, "__DROIDHUB_RESET_SIMPLE_AUTOFARM")
 					if type(reset) == "function" then pcall(reset) end
@@ -8166,28 +9340,44 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					) + 0.5
 				)
 			)
+			-- Primary feature labels normally render with a SemiBold FontFace,
+			-- which can be a few pixels wider than TextService's enum BuilderSans
+			-- measurement. Reserve enough width so a final word never gets clipped.
+			local measureWidth = math.max(1, width - px(10))
 			local currentText = featureLabel.Text
 			local currentTextSize = featureLabel.TextSize
-			if wrappedMeasureWidth == width
+			local liveTextBoundsHeight = math.ceil(
+				tonumber(featureLabel.TextBounds.Y) or 0
+			)
+			if wrappedMeasureWidth == measureWidth
 				and wrappedMeasureText == currentText
 				and wrappedMeasureTextSize == currentTextSize
 			then
-				return wrappedMeasureHeight
+				return math.max(
+					wrappedMeasureHeight,
+					liveTextBoundsHeight > px(16)
+						and (liveTextBoundsHeight + px(2))
+						or px(16)
+				)
 			end
-			wrappedMeasureWidth = width
+			wrappedMeasureWidth = measureWidth
 			wrappedMeasureText = currentText
 			wrappedMeasureTextSize = currentTextSize
-			-- Preserve the original compact 32px row exactly whenever the text
-			-- fits on one line. Extra height is added only after a real wrap.
+			-- Preserve the compact row whenever the text safely fits on one line.
 			local oneLineWidth = TextService:GetTextSize(
 				currentText,
 				currentTextSize,
 				UI.MENU_FONT,
 				Vector2.new(10000, currentTextSize + px(8))
 			).X
-			if oneLineWidth <= width then
+			if oneLineWidth <= measureWidth then
 				wrappedMeasureHeight = px(16)
-				return wrappedMeasureHeight
+				return math.max(
+					wrappedMeasureHeight,
+					liveTextBoundsHeight > px(16)
+						and (liveTextBoundsHeight + px(2))
+						or px(16)
+				)
 			end
 			wrappedMeasureHeight = math.max(
 				px(16),
@@ -8196,9 +9386,12 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 						currentText,
 						currentTextSize,
 						UI.MENU_FONT,
-						Vector2.new(width, 10000)
+						Vector2.new(measureWidth, 10000)
 					).Y
-				)
+				) + px(2),
+				liveTextBoundsHeight > px(16)
+					and (liveTextBoundsHeight + px(2))
+					or px(16)
 			)
 			return wrappedMeasureHeight
 		end
@@ -8209,6 +9402,12 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			return defaultFeatureBaseHeight
 				+ math.max(0, wrappedFeatureLabelHeight() - px(16))
 		end
+		featureLabel:GetPropertyChangedSignal("TextBounds"):Connect(function()
+			if not featureRow.Parent or not featureRow.Visible then return end
+			if featureLabel.TextBounds.Y > featureLabel.AbsoluteSize.Y + 1 then
+				task.defer(relayoutRows)
+			end
+		end)
 		local toggleTrack = New("TextButton")
 		toggleTrack.Name = "ToggleTrack"
 		toggleTrack.AnchorPoint = V2(1, 0.5)
@@ -8230,6 +9429,11 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			and not isUtilityDropdown
 			and not isUtilityMultiDropdown
 			and not isSpecificCriteriaManager
+			and not (
+				isAutoCancelRarity
+				and definition
+				and definition.AutoCancelDirectSlider == true
+			)
 			and not (definition and definition.AutoSitCriteriaOnly == true)
 		ensureCorner(toggleTrack, toggleHeight * 0.5)
 		rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(toggleTrack)
@@ -8260,6 +9464,11 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			featureEnabled = stateEntry and stateEntry[definition.ServerHopKey] == true or false
 		elseif isAutoOfferSourceManager then
 			featureEnabled = stateEntry and stateEntry.Enabled == true or false
+		elseif isAutoCancelRarity
+			and definition
+			and definition.AutoCancelDirectSlider == true
+		then
+			featureEnabled = true
 		elseif isAutoCancelRarity then
 			featureEnabled = stateEntry and type(stateEntry.Targets) == "table"
 				and stateEntry.Targets[definition.AutoCancelRarityKey] == true or false
@@ -8340,9 +9549,12 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 								customAddLabel.Text,
 								customAddLabel.TextSize,
 								UI.MENU_FONT,
-								Vector2.new(math.max(1, addLabelWidth), 10000)
+								Vector2.new(
+									math.max(1, addLabelWidth - px(6)),
+									10000
+								)
 							).Y
-						)
+						) + px(2)
 					)
 					local addRowHeight = math.max(
 						featureRowHeight,
@@ -8748,11 +9960,11 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 								stateEntry.Amounts[rarity] = math.min(v, maxAllowed)
 								return stateEntry.Amounts[rarity]
 							end)
-							y += amountControlsHeight + px(2)
+							y += amountControlsHeight + featureRowGap
 						end
 					end
 					makeSlider("Token Amount", y, stateEntry.Tokens, 0, 1000000, function(v) stateEntry.Tokens = v return v end)
-					y += amountControlsHeight + px(2)
+					y += amountControlsHeight + featureRowGap
 					makeToggleRow("Offer All Tokens", y, function() return stateEntry.OfferAllTokens == true end, function(v) stateEntry.OfferAllTokens = v end)
 					y += featureRowHeight
 				end
@@ -8896,7 +10108,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					for _,rarity in ipairs(OUTGOING_BRAINROT_RARITY_OPTIONS) do
 						if entry.Targets[rarity]==true then
 							makeOfferSlider(rarity.." Amount",entry.Amounts[rarity] or 1,1,6,y,function(v) local maximum=math.max(1,6-specificCount()-rarityUnits(rarity)) entry.Amounts[rarity]=math.min(v,maximum) return entry.Amounts[rarity] end)
-							y+=amountControlsHeight+px(3)
+							y+=amountControlsHeight+featureRowGap
 						end
 					end
 					-- Trade-chat specific offers also select exact owned inventory instances.
@@ -8909,7 +10121,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 						openManagedMultiDropdown(specificButton,specificOptions,entry.SpecificItems,autoServerHopState.OwnedTradeableItemOptionLabel,"Select",nil,function() return rarityUnits(nil)+specificCount()<6 end,rebuildTradeChatOffers)
 					end)
 					y+=featureRowHeight
-					makeOfferSlider("Token Amount",entry.TokenAmount,0,1000000,y,function(v) entry.TokenAmount=v refreshClearStyle() return v end) y+=amountControlsHeight+px(3)
+					makeOfferSlider("Token Amount",entry.TokenAmount,0,1000000,y,function(v) entry.TokenAmount=v refreshClearStyle() return v end) y+=amountControlsHeight+featureRowGap
 					checkboxRow("Offer All Tokens",y,function() return entry.OfferAllTokens==true end,function(v) entry.OfferAllTokens=v end) y+=featureRowHeight
 					clearButton=buttonBase("Clear Custom Offer",y)
 					refreshClearStyle()
@@ -9040,6 +10252,10 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				search.Parent = popup
 				ensureCorner(search, px(5))
 				rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(search)
+				local searchPadding = New("UIPadding")
+				searchPadding.PaddingLeft = UDim.new(0, px(10))
+				searchPadding.PaddingRight = UDim.new(0, px(10))
+				searchPadding.Parent = search
 				local optionRows = {}
 				local function addOption(option, label)
 					local row = New("TextButton")
@@ -9120,50 +10336,182 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(b)
 					return b
 				end
-				local function makeNumericField(labelText, currentValue, yPos, onCommit)
+				local function makeNumericField(labelText, currentValue, yPos, onCommit, placeholderText, sliderMin, sliderMax)
+					local sliderMode = sliderMin ~= nil and sliderMax ~= nil
 					local row = New("Frame")
 					row.Position = U2O(0, yPos)
-					row.Size = U2(1, 0, 0, px(26))
+					row.Size = U2(1, 0, 0, sliderMode and amountControlsHeight or px(25))
 					row.BackgroundTransparency = 1
 					row.ZIndex = 45015
 					row.Parent = secondaryContainer
 					local label = New("TextLabel")
-					label.Size = U2(1, -amountValueWidth - componentLabelGap, 1, 0)
+					label.Size = sliderMode
+						and U2(1, -amountValueWidth - componentLabelGap, 0, px(15))
+						or U2(1, -amountValueWidth - componentLabelGap, 1, 0)
 					label.BackgroundTransparency = 1
 					label.Text = capitalizeUiWords(labelText)
 					label.TextColor3 = UI.MENU_TEXT_SELECTED
 					label.FontFace = UI.MENU_FONT_REGULAR_FACE
+					setResponsiveTextSize(label, sliderMode and 14 or 13)
+					label.TextXAlignment = Enum.TextXAlignment.Left
+					label.ZIndex = 45016
+					label.Parent = row
+					if sliderMode then
+						local box = New("TextBox")
+						box.AnchorPoint = V2(1, 0)
+						box.Position = U2(1, 0, 0, 0)
+						box.Size = U2O(amountValueWidth, px(20))
+						box.BackgroundColor3 = UI.FEATURE_OFF_COLOR
+						box.BorderSizePixel = 0
+						box.ClearTextOnFocus = false
+						box.ClipsDescendants = true
+						box.TextWrapped = false
+						box.TextTruncate = Enum.TextTruncate.None
+						box.TextColor3 = UI.MENU_TEXT_SELECTED
+						box.FontFace = UI.MENU_FONT_REGULAR_FACE
+						setResponsiveTextSize(box, 14)
+						box.ZIndex = 45016
+						box.Parent = row
+						ensureCorner(box, px(5))
+						rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(box)
+						local track = New("Frame")
+						track.Position = U2O(0, px(27))
+						track.Size = U2(1, 0, 0, px(5))
+						track.BackgroundColor3 = UI.FEATURE_OFF_COLOR
+						track.BorderSizePixel = 0
+						track.Active = false
+						track.ZIndex = 45016
+						track.Parent = row
+						ensureCorner(track, px(3))
+						rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(track)
+						local fill = New("Frame")
+						fill.BackgroundColor3 = UI.PINK
+						fill.BorderSizePixel = 0
+						fill.ZIndex = 45017
+						fill.Parent = track
+						ensureCorner(fill, px(3))
+						local knob = New("Frame")
+						knob.AnchorPoint = V2(0.5, 0.5)
+						knob.Size = U2O(
+							px(isPhonePanelLayout() and 21 or 11),
+							px(isPhonePanelLayout() and 21 or 11)
+						)
+						knob.BackgroundColor3 = UI.MENU_TEXT_SELECTED
+						knob.BorderSizePixel = 0
+						knob.Active = true
+						knob.ZIndex = 45018
+						knob.Parent = track
+						ensureCorner(knob, px(6))
+						local function setSliderValue(value)
+							value = math.clamp(
+								math.floor(tonumber(value) or sliderMin),
+								sliderMin,
+								sliderMax
+							)
+							box.Text = tostring(value)
+							local alpha = sliderMax == sliderMin
+								and 0
+								or ((value - sliderMin) / (sliderMax - sliderMin))
+							fill.Size = U2S(alpha, 1)
+							knob.Position = U2(alpha, 0, 0.5, 0)
+							onCommit(value)
+						end
+						setSliderValue(currentValue)
+						box.FocusLost:Connect(function()
+							setSliderValue(box.Text)
+						end)
+						knob.InputBegan:Connect(function(input)
+							if input.UserInputType == Enum.UserInputType.MouseButton1
+								or input.UserInputType == Enum.UserInputType.Touch
+							then
+								beginSliderDrag(input, function(pointX)
+									local width = math.max(1, track.AbsoluteSize.X)
+									local alpha = math.clamp(
+										(pointX - track.AbsolutePosition.X) / width,
+										0,
+										1
+									)
+									setSliderValue(
+										sliderMin
+											+ math.floor(
+												alpha * (sliderMax - sliderMin) + 0.5
+											)
+									)
+								end)
+							end
+						end)
+					else
+						local box = New("TextBox")
+						box.AnchorPoint = V2(1, 0.5)
+						box.Position = U2(1, 0, 0.5, 0)
+						box.Size = U2O(amountValueWidth, px(25))
+						box.BackgroundColor3 = UI.FEATURE_OFF_COLOR
+						box.BorderSizePixel = 0
+						box.ClearTextOnFocus = false
+						box.Text = currentValue ~= nil and tostring(currentValue) or ""
+						box.PlaceholderText = tostring(placeholderText or "Any")
+						box.PlaceholderColor3 = UI.MUTED_TEXT_COLOR
+						box.TextColor3 = UI.MENU_TEXT_SELECTED
+						box.FontFace = UI.MENU_FONT_REGULAR_FACE
+						setResponsiveTextSize(box, 13)
+						box.Parent = row
+						ensureCorner(box, px(5))
+						rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(box)
+						box.FocusLost:Connect(function()
+							local value = tonumber(box.Text)
+							if value ~= nil then
+								value = math.max(0, value)
+							else
+								box.Text = ""
+							end
+							onCommit(value)
+						end)
+					end
+					return row
+				end
+				local function makeCheckboxRow(labelText, enabled, yPos, onCommit)
+					local row = New("Frame")
+					row.Position = U2O(0, yPos)
+					row.Size = U2(1, 0, 0, px(25))
+					row.BackgroundTransparency = 1
+					row.ZIndex = 45015
+					row.Parent = secondaryContainer
+					local label = New("TextLabel")
+					label.Size = U2(1, -(toggleWidth + componentLabelGap), 1, 0)
+					label.BackgroundTransparency = 1
+					label.Text = capitalizeUiWords(labelText)
+					label.TextColor3 = enabled and UI.MENU_TEXT_SELECTED or UI.MUTED_TEXT_COLOR
+					label.FontFace = UI.MENU_FONT_REGULAR_FACE
 					setResponsiveTextSize(label, 13)
 					label.TextXAlignment = Enum.TextXAlignment.Left
 					label.Parent = row
-					local box = New("TextBox")
-					box.AnchorPoint = V2(1, 0.5)
-					box.Position = U2(1, 0, 0.5, 0)
-					box.Size = U2O(amountValueWidth, px(22))
-					box.BackgroundColor3 = UI.FEATURE_OFF_COLOR
-					box.BorderSizePixel = 0
-					box.ClearTextOnFocus = false
-					box.Text = currentValue ~= nil and tostring(currentValue) or ""
-					box.PlaceholderText = "Any"
-					box.PlaceholderColor3 = UI.MUTED_TEXT_COLOR
-					box.TextColor3 = UI.MENU_TEXT_SELECTED
-					box.FontFace = UI.MENU_FONT_REGULAR_FACE
-					setResponsiveTextSize(box, 13)
-					box.Parent = row
-					ensureCorner(box, px(5))
-					rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(box)
-					box.FocusLost:Connect(function()
-						local value = tonumber(box.Text)
-						if value ~= nil then
-							value = math.max(0, value)
-						else
-							box.Text = ""
-						end
-						onCommit(value)
+					local track = New("TextButton")
+					track.AnchorPoint = V2(1, 0.5)
+					track.Position = U2(1, 0, 0.5, 0)
+					track.Size = U2O(toggleWidth, toggleHeight)
+					track.BackgroundColor3 = enabled and UI.PINK or UI.FEATURE_OFF_COLOR
+					track.BorderSizePixel = 0
+					track.AutoButtonColor = false
+					track.Text = ""
+					track.ZIndex = 45016
+					track.Parent = row
+					ensureCorner(track, toggleHeight * 0.5)
+					rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(track)
+					local knob = New("Frame")
+					knob.Size = U2O(toggleHeight - knobInset * 2, toggleHeight - knobInset * 2)
+					knob.Position = enabled and U2(0, toggleWidth - toggleHeight + knobInset, 0, knobInset) or U2O(knobInset, knobInset)
+					knob.BackgroundColor3 = UI.MENU_TEXT_SELECTED
+					knob.BorderSizePixel = 0
+					knob.ZIndex = 45017
+					knob.Parent = track
+					ensureCorner(knob, (toggleHeight - knobInset * 2) * 0.5)
+					track.MouseButton1Click:Connect(function()
+						onCommit(not enabled)
+						task.defer(rebuildSpecificCriteria)
 					end)
 					return row
 				end
-				local y = px(5)
+				local y = px(4)
 				local allItems
 				if definition and type(definition.SpecificCriteriaOptionsProvider) == "function" then
 					local ok, provided = pcall(definition.SpecificCriteriaOptionsProvider)
@@ -9179,6 +10527,32 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 					entry.Rarities = type(entry.Rarities) == "table" and entry.Rarities or {}
 					entry.GearAttributes = type(entry.GearAttributes) == "table" and entry.GearAttributes or {}
 					entry.Amount = math.clamp(math.floor(tonumber(entry.Amount) or 1), 1, tonumber(definition.SpecificCriteriaMaxAmount) or 6)
+					if definition.SpecificCriteriaWithMaxTokens == true then
+						entry.MaxTokens = math.clamp(
+							math.floor(tonumber(entry.MaxTokens) or 1000000),
+							1,
+							1000000
+						)
+					end
+					if definition.SpecificCriteriaWithOwnedLimit == true then
+						entry.OwnedLimitEnabled = entry.OwnedLimitEnabled == true
+						entry.OwnedLimit = math.clamp(
+							math.floor(tonumber(entry.OwnedLimit) or 1),
+							1,
+							100
+						)
+					end
+					if definition.SpecificCriteriaSimple == true then
+						-- Simple selectors (notably Keep Copies) are intentionally name-only.
+						-- Clear hidden legacy filters so the UI and runtime can never disagree.
+						entry.Mutations, entry.Traits, entry.Sizes, entry.Rarities = {}, {}, {}, {}
+						entry.GearAttributes = {}
+						entry.Signature, entry.Level = nil, nil
+						entry.Signatures, entry.SpecificSignatures = nil, nil
+						entry.SpecificSizes, entry.Levels, entry.SpecificLevels = nil, nil, nil
+						entry.MinimumTraitCount = nil
+						entry.Multiplier, entry.Cooldown, entry.Power = nil, nil, nil
+					end
 					local emptyChoiceText = (entryIndex > 1 and entry.Item == nil) and "Select Another" or "Select"
 					local itemButton = makeButton(entry.Item and tostring(entry.Item) or emptyChoiceText, y)
 					itemButton.MouseButton1Click:Connect(function()
@@ -9187,22 +10561,44 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 								entry.Mutations, entry.Traits, entry.Sizes, entry.Rarities = {}, {}, {}, {}
 								entry.GearAttributes = {}
 								entry.Signature, entry.Level = nil, nil
+								entry.MinimumTraitCount = nil
+								entry.MaxTokens = definition.SpecificCriteriaWithMaxTokens == true and 1000000 or nil
+								entry.OwnedLimitEnabled = false
+								entry.OwnedLimit = definition.SpecificCriteriaWithOwnedLimit == true and 1 or nil
 								entry.Multiplier, entry.Cooldown, entry.Power = nil, nil, nil
 							end
 							entry.Item = option
 						end)
 					end)
-					y += px(31)
-					local itemKind = entry.Item ~= nil and specificItemKind(entry.Item) or nil
+					y += px(29)
+					local itemKind = entry.Item ~= nil
+						and (
+							definition.SpecificCriteriaTreatAsBrainrot == true
+								and "Brainrot"
+								or specificItemKind(entry.Item)
+						)
+						or nil
 					if entry.Item ~= nil and definition.SpecificCriteriaSimple ~= true and itemKind ~= nil then
-						local capabilities = autoServerHopState.SpecificItemCapabilities(entry.Item)
+						local capabilities = definition.SpecificCriteriaTreatAsBrainrot == true
+							and {
+								Kind = "Brainrot",
+								Mutation = true,
+								Traits = true,
+								Signature = true,
+								Size = true,
+								Level = true,
+							}
+							or autoServerHopState.SpecificItemCapabilities(entry.Item)
 						entry.GearAttributes = type(entry.GearAttributes) == "table" and entry.GearAttributes or {}
 
 						-- Remove stale attributes that the newly selected item cannot actually have.
 						-- This also clears legacy hidden state so an old save can never enforce an
 						-- attribute that the currently selected item does not support.
 						if capabilities.Mutation ~= true then entry.Mutations = {} end
-						if capabilities.Traits ~= true then entry.Traits = {} end
+						if capabilities.Traits ~= true then
+							entry.Traits = {}
+							entry.MinimumTraitCount = nil
+						end
 						if capabilities.Signature ~= true then
 							entry.Signature = nil
 							entry.Signatures = nil
@@ -9226,28 +10622,42 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 							local names = selectedNames(entry.Mutations, autoServerHopState.BoothMutationOptions())
 							local button = makeButton(#names > 0 and ("Mutation: " .. table.concat(names, ", ")) or "Mutation: Select", y)
 							button.MouseButton1Click:Connect(function() openCriteriaDropdown(button, autoServerHopState.BoothMutationOptions(), entry.Mutations, nil) end)
-							y += px(31)
+							y += px(29)
 						end
 						local function addTraits()
 							local names = selectedNames(entry.Traits, autoServerHopState.BoothTraitOptions())
 							local button = makeButton(#names > 0 and ("Traits: " .. table.concat(names, ", ")) or "Traits: Select", y)
 							button.MouseButton1Click:Connect(function() openCriteriaDropdown(button, autoServerHopState.BoothTraitOptions(), entry.Traits, nil) end)
-							y += px(31)
+							y += px(29)
 						end
 						local function addSize()
 							local names = selectedNames(entry.Sizes, autoServerHopState.SpecificSizeOptions())
 							local button = makeButton(#names > 0 and ("Size: " .. table.concat(names, ", ")) or "Size: Select", y)
 							button.MouseButton1Click:Connect(function() openCriteriaDropdown(button, autoServerHopState.SpecificSizeOptions(), entry.Sizes, nil) end)
-							y += px(31)
+							y += px(29)
 						end
 						local function addLevel()
 							local button = makeButton("This Level Or Higher: " .. tostring(entry.Level or "Select"), y)
 							button.MouseButton1Click:Connect(function()
 								openCriteriaDropdown(button, autoServerHopState.SpecificLevelOptions(), nil, function(option)
-									entry.Level = option and math.clamp(math.floor(tonumber(option) or 1), 1, 125) or nil
+									entry.Level = option and math.clamp(math.floor(tonumber(option) or 1), 1, 350) or nil
 								end)
 							end)
-							y += px(31)
+							y += px(29)
+						end
+						local function addMinimumTraits()
+							makeNumericField(
+								"Minimum Traits Required",
+								entry.MinimumTraitCount or 0,
+								y,
+								function(value)
+									entry.MinimumTraitCount = math.clamp(math.floor(tonumber(value) or 0), 0, 5)
+								end,
+								nil,
+								0,
+								5
+							)
+							y += amountControlsHeight + featureRowGap
 						end
 
 						if itemKind == "Brainrot" then
@@ -9259,9 +10669,10 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 									entry.Signature = if option == "Any" then nil else option
 								end)
 							end)
-							y += px(31)
+							y += px(29)
 							addSize()
 							addLevel()
+							addMinimumTraits()
 						elseif itemKind == "LuckyBlock" then
 							-- Actual Lucky Block inventory identity: type + mutation + level + scale + traits.
 							-- There is intentionally no Rarity selector here, including for Fool's Infinity.
@@ -9269,6 +10680,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 							addLevel()
 							addTraits()
 							addMutation()
+							addMinimumTraits()
 						elseif itemKind == "Gear" then
 							addMutation()
 							local allowed = {}
@@ -9282,13 +10694,61 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 								makeNumericField(attribute.Label, entry.GearAttributes[attribute.Key], y, function(value)
 									entry.GearAttributes[attribute.Key] = value
 								end)
-								y += px(31)
+								y += px(29)
 							end
 							for key in pairs(entry.GearAttributes) do
 								if allowed[key] ~= true then entry.GearAttributes[key] = nil end
 							end
 							entry.Multiplier, entry.Cooldown, entry.Power = nil, nil, nil
 						end
+					end
+					if entry.Item ~= nil and definition.SpecificCriteriaWithMaxTokens == true then
+						entry.MaxTokens = math.clamp(
+							math.floor(tonumber(entry.MaxTokens) or 1000000),
+							1,
+							1000000
+						)
+						makeNumericField("Maximum Price (Tokens)", entry.MaxTokens, y, function(value)
+							entry.MaxTokens = math.clamp(
+								math.floor(tonumber(value) or 1000000),
+								1,
+								1000000
+							)
+						end)
+						y += px(29)
+					end
+					if entry.Item ~= nil and definition.SpecificCriteriaWithOwnedLimit == true then
+						makeCheckboxRow(
+							"Stop Buying at Owned Count",
+							entry.OwnedLimitEnabled == true,
+							y,
+							function(enabled)
+								entry.OwnedLimitEnabled = enabled == true
+							end
+						)
+						y += px(29)
+						if entry.OwnedLimitEnabled == true then
+							entry.OwnedLimit = math.clamp(
+								math.floor(tonumber(entry.OwnedLimit) or 1),
+								1,
+								100
+							)
+							makeNumericField("Owned Count Limit", entry.OwnedLimit, y, function(value)
+								entry.OwnedLimit = math.clamp(
+									math.floor(tonumber(value) or 1),
+									1,
+									100
+								)
+							end)
+							y += px(29)
+						end
+					end
+					if entry.Item ~= nil and definition.SpecificCriteriaWithMinimumCopies == true then
+						entry.MinimumCopies = math.clamp(math.floor(tonumber(entry.MinimumCopies) or 1), 1, 100)
+						makeNumericField("Copies to Keep", entry.MinimumCopies, y, function(value)
+							entry.MinimumCopies = math.clamp(math.floor(tonumber(value) or 1), 1, 100)
+						end)
+						y += px(29)
 					end
 					if entry.Item ~= nil and definition.SpecificCriteriaWithAmount == true then
 						local maxAmount = tonumber(definition.SpecificCriteriaMaxAmount) or 6
@@ -9349,7 +10809,7 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 								end)
 							end
 						end)
-						y += px(40)
+						y += px(44)
 					end
 					if entryIndex == 1 or entry.Item ~= nil then
 						local clearChoice = makeButton("Clear Choice", y)
@@ -9359,11 +10819,16 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 							entry.Mutations, entry.Traits, entry.Sizes, entry.Rarities = {}, {}, {}, {}
 							entry.GearAttributes = {}
 							entry.Signature, entry.Level = nil, nil
+							entry.MinimumTraitCount = nil
+							entry.MinimumCopies = definition.SpecificCriteriaWithMinimumCopies == true and 1 or nil
+							entry.MaxTokens = definition.SpecificCriteriaWithMaxTokens == true and 1000000 or nil
+							entry.OwnedLimitEnabled = false
+							entry.OwnedLimit = definition.SpecificCriteriaWithOwnedLimit == true and 1 or nil
 							entry.Multiplier, entry.Cooldown, entry.Power = nil, nil, nil
 							entry.Amount = 1
 							task.defer(rebuildSpecificCriteria)
 						end)
-						y += px(31)
+						y += px(29)
 					end
 					if entryIndex > 1 and entry.Item ~= nil then
 						local remove = makeButton("Remove", y)
@@ -9372,9 +10837,16 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 							table.remove(entries, entryIndex)
 							task.defer(rebuildSpecificCriteria)
 						end)
-						y += px(31)
+						y += px(29)
 					end
-					y += px(6)
+					-- Every new selected-item entry starts a clearly separate visual
+					-- group. Related controls stay 4 px apart, while separate entries
+					-- use a 14 px total break so Clear Choice / Remove is easy to
+					-- distinguish from the next Brainrot or item selector.
+					local nextEntry = entries[entryIndex + 1]
+					if type(nextEntry) == "table" then
+						y += px(10)
+					end
 				end
 				managerHeight = y
 				secondaryContainer.Size = U2(1, 0, 0, managerHeight)
@@ -9708,8 +11180,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				ensureCorner(dropdownSearch, px(5))
 				rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(dropdownSearch)
 				local dropdownSearchPadding = New("UIPadding")
-				dropdownSearchPadding.PaddingLeft = UDim.new(0, px(7))
-				dropdownSearchPadding.PaddingRight = UDim.new(0, px(7))
+				dropdownSearchPadding.PaddingLeft = UDim.new(0, px(10))
+				dropdownSearchPadding.PaddingRight = UDim.new(0, px(10))
 				dropdownSearchPadding.Parent = dropdownSearch
 				local optionButtons = {}
 				local optionSearchLabels = {}
@@ -10159,12 +11631,93 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 							)
 						end)
 					end
+					local function makeInlineMinimumTraits(stateKey, yOffset)
+						local rowLabel = New("TextLabel")
+						rowLabel.Position = U2O(0, yOffset)
+						rowLabel.Size = U2(1, -amountValueWidth - componentLabelGap, 0, px(15))
+						rowLabel.BackgroundTransparency = 1
+						rowLabel.Text = "Minimum Traits Required"
+						rowLabel.TextColor3 = UI.MUTED_TEXT_COLOR
+						rowLabel.FontFace = UI.MENU_FONT_REGULAR_FACE
+						setResponsiveTextSize(rowLabel, 14)
+						rowLabel.TextXAlignment = Enum.TextXAlignment.Left
+						rowLabel.Parent = frame
+						local box = New("TextBox")
+						box.AnchorPoint = V2(1, 0)
+						box.Position = U2(1, 0, 0, yOffset)
+						box.Size = U2O(amountValueWidth, px(20))
+						box.BackgroundColor3 = UI.FEATURE_OFF_COLOR
+						box.BorderSizePixel = 0
+						box.ClearTextOnFocus = false
+						box.ClipsDescendants = true
+						box.TextWrapped = false
+						box.TextTruncate = Enum.TextTruncate.None
+						box.TextColor3 = UI.MENU_TEXT_SELECTED
+						box.FontFace = UI.MENU_FONT_REGULAR_FACE
+						setResponsiveTextSize(box, 14)
+						box.Parent = frame
+						ensureCorner(box, px(5))
+						rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(box)
+						local track = New("Frame")
+						track.Position = U2O(0, yOffset + px(27))
+						track.Size = U2(1, 0, 0, px(5))
+						track.BackgroundColor3 = UI.FEATURE_OFF_COLOR
+						track.BorderSizePixel = 0
+						track.Active = false
+						track.Parent = frame
+						ensureCorner(track, px(3))
+						rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(track)
+						local fill = New("Frame")
+						fill.BackgroundColor3 = UI.PINK
+						fill.BorderSizePixel = 0
+						fill.Parent = track
+						ensureCorner(fill, px(3))
+						local knob = New("Frame")
+						knob.AnchorPoint = V2(0.5, 0.5)
+						knob.Size = U2O(
+							px(isPhonePanelLayout() and 21 or 11),
+							px(isPhonePanelLayout() and 21 or 11)
+						)
+						knob.BackgroundColor3 = UI.MENU_TEXT_SELECTED
+						knob.BorderSizePixel = 0
+						knob.Active = true
+						knob.Parent = track
+						ensureCorner(knob, px(6))
+						local function setValue(value)
+							value = math.clamp(math.floor(tonumber(value) or 0), 0, 5)
+							utility[stateKey] = value
+							box.Text = tostring(value)
+							local alpha = value / 5
+							fill.Size = U2S(alpha, 1)
+							knob.Position = U2(alpha, 0, 0.5, 0)
+						end
+						setValue(utility[stateKey])
+						box.FocusLost:Connect(function()
+							setValue(box.Text)
+						end)
+						knob.InputBegan:Connect(function(input)
+							if input.UserInputType == Enum.UserInputType.MouseButton1
+								or input.UserInputType == Enum.UserInputType.Touch
+							then
+								beginSliderDrag(input, function(pointX)
+									local width = math.max(1, track.AbsoluteSize.X)
+									local alpha = math.clamp(
+										(pointX - track.AbsolutePosition.X) / width,
+										0,
+										1
+									)
+									setValue(math.floor(alpha * 5 + 0.5))
+								end)
+							end
+						end)
+					end
 					makeInlineFilter("Mutations", "AutoSit" .. option .. "Mutations", amountControlsHeight + px(4), function() return autoServerHopState.BoothMutationOptions() end)
 					makeInlineFilter("Traits", "AutoSit" .. option .. "Traits", amountControlsHeight + secondaryControlHeight + px(4), function() return autoServerHopState.BoothTraitOptions() end)
 					makeInlineFilter("Signature", "AutoSit" .. option .. "Signatures", amountControlsHeight + (secondaryControlHeight * 2) + px(4), function() return {"Signed", "Unsigned"} end)
 					makeInlineFilter("Size", "AutoSit" .. option .. "Sizes", amountControlsHeight + (secondaryControlHeight * 3) + px(4), function() return autoServerHopState.SpecificSizeOptions() end)
 					makeInlineFilter("Level", "AutoSit" .. option .. "Levels", amountControlsHeight + (secondaryControlHeight * 4) + px(4), function() return autoServerHopState.SpecificLevelOptions() end)
-					controlHeight = amountControlsHeight + (secondaryControlHeight * 5) + px(4)
+					makeInlineMinimumTraits("AutoSit" .. option .. "MinimumTraits", amountControlsHeight + (secondaryControlHeight * 5) + px(4))
+					controlHeight = amountControlsHeight + (secondaryControlHeight * 5) + amountControlsHeight + (featureRowGap * 2)
 				end
 				local control = {Frame = frame, Option = option, SetAmount = setAmount, ValueBox = valueBox, Height = controlHeight}
 				amountControls[#amountControls + 1] = control
@@ -10334,8 +11887,8 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				ensureCorner(dropdownSearch, px(5))
 				rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(dropdownSearch)
 				local dropdownSearchPadding = New("UIPadding")
-				dropdownSearchPadding.PaddingLeft = UDim.new(0, px(7))
-				dropdownSearchPadding.PaddingRight = UDim.new(0, px(7))
+				dropdownSearchPadding.PaddingLeft = UDim.new(0, px(10))
+				dropdownSearchPadding.PaddingRight = UDim.new(0, px(10))
 				dropdownSearchPadding.Parent = dropdownSearch
 				local optionButtons = {}
 				local optionSearchLabels = {}
@@ -10764,7 +12317,13 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			local label = New("TextLabel")
 			label.Size = U2(1, -amountValueWidth - px(10), 0, px(15))
 			label.BackgroundTransparency = 1
-			label.Text = isTokenCriterion and "Token Amount" or (criterionKey .. " Amount")
+			label.Text = isTokenCriterion
+				and (
+					definition.AutoCancelDirectSlider == true
+						and "Tokens"
+						or "Token Amount"
+				)
+				or (criterionKey .. " Amount")
 			label.TextColor3 = UI.MENU_TEXT_SELECTED
 			label.FontFace = UI.MENU_FONT_FACE
 			setResponsiveTextSize(label, 14)
@@ -10797,19 +12356,59 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			local fill = New("Frame") fill.BackgroundColor3 = UI.PINK fill.BorderSizePixel = 0 fill.Parent = track ensureCorner(fill, px(3))
 			local knob = New("Frame") knob.AnchorPoint = V2(0.5,0.5) knob.Size = U2O(px(isPhonePanelLayout() and 21 or 11),px(isPhonePanelLayout() and 21 or 11)) knob.BackgroundColor3 = UI.MENU_TEXT_SELECTED knob.BorderSizePixel = 0 knob.Active = true knob.Parent = track ensureCorner(knob,px(6))
 			local function setAmount(v, update)
-				v = math.clamp(math.floor(tonumber(v) or 1), 1, maxAmount)
-				if isTokenCriterion then stateEntry.Tokens = v else stateEntry.Amounts[criterionKey] = v end
+				local minimum = isTokenCriterion
+					and definition.AutoCancelDirectSlider == true
+					and 0
+					or 1
+				v = math.clamp(math.floor(tonumber(v) or minimum), minimum, maxAmount)
+				if isTokenCriterion then
+					stateEntry.Tokens = v
+					if definition.AutoCancelDirectSlider == true then
+						stateEntry.Targets = type(stateEntry.Targets) == "table"
+							and stateEntry.Targets
+							or {}
+						stateEntry.Targets.Tokens = v > 0 and true or nil
+					end
+				else
+					stateEntry.Amounts[criterionKey] = v
+				end
 				if update then value.Text = tostring(v) end
-				local alpha = maxAmount == 1 and 0 or ((v - 1) / (maxAmount - 1))
-				fill.Size = U2S(alpha,1) knob.Position = U2(alpha,0,0.5,0)
+				local alpha = maxAmount == minimum
+					and 0
+					or ((v - minimum) / (maxAmount - minimum))
+				fill.Size = U2S(alpha, 1)
+				knob.Position = U2(alpha, 0, 0.5, 0)
 			end
-			setAmount(isTokenCriterion and stateEntry.Tokens or stateEntry.Amounts[criterionKey], true)
+			setAmount(
+				isTokenCriterion
+					and (
+						definition.AutoCancelDirectSlider == true
+							and not (
+								type(stateEntry.Targets) == "table"
+								and stateEntry.Targets.Tokens == true
+							)
+							and 0
+							or stateEntry.Tokens
+					)
+					or stateEntry.Amounts[criterionKey],
+				true
+			)
 			value.FocusLost:Connect(function() setAmount(value.Text, true) end)
 			knob.InputBegan:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 					beginSliderDrag(input, function(x)
 						local alpha = math.clamp((x-track.AbsolutePosition.X)/math.max(1,track.AbsoluteSize.X),0,1)
-						setAmount(1 + math.floor(alpha*(maxAmount-1)+0.5), true)
+						local minimum = isTokenCriterion
+							and definition.AutoCancelDirectSlider == true
+							and 0
+							or 1
+						setAmount(
+							minimum
+								+ math.floor(
+									alpha * (maxAmount - minimum) + 0.5
+								),
+							true
+						)
 					end)
 				end
 			end)
@@ -10862,12 +12461,93 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 						end)
 					end)
 				end
+				local function makeInlineMinimumTraits(stateKey, yOffset)
+					local rowLabel = New("TextLabel")
+					rowLabel.Position = U2O(0, yOffset)
+					rowLabel.Size = U2(1, -amountValueWidth - componentLabelGap, 0, px(15))
+					rowLabel.BackgroundTransparency = 1
+					rowLabel.Text = "Minimum Traits Required"
+					rowLabel.TextColor3 = UI.MUTED_TEXT_COLOR
+					rowLabel.FontFace = UI.MENU_FONT_REGULAR_FACE
+					setResponsiveTextSize(rowLabel, 14)
+					rowLabel.TextXAlignment = Enum.TextXAlignment.Left
+					rowLabel.Parent = frame
+					local box = New("TextBox")
+					box.AnchorPoint = V2(1, 0)
+					box.Position = U2(1, 0, 0, yOffset)
+					box.Size = U2O(amountValueWidth, px(20))
+					box.BackgroundColor3 = UI.FEATURE_OFF_COLOR
+					box.BorderSizePixel = 0
+					box.ClearTextOnFocus = false
+					box.ClipsDescendants = true
+					box.TextWrapped = false
+					box.TextTruncate = Enum.TextTruncate.None
+					box.TextColor3 = UI.MENU_TEXT_SELECTED
+					box.FontFace = UI.MENU_FONT_REGULAR_FACE
+					setResponsiveTextSize(box, 14)
+					box.Parent = frame
+					ensureCorner(box, px(5))
+					rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(box)
+					local track = New("Frame")
+					track.Position = U2O(0, yOffset + px(27))
+					track.Size = U2(1, 0, 0, px(5))
+					track.BackgroundColor3 = UI.FEATURE_OFF_COLOR
+					track.BorderSizePixel = 0
+					track.Active = false
+					track.Parent = frame
+					ensureCorner(track, px(3))
+					rawget(_G, "__DROIDHUB_ENSURE_INPUT_BORDER")(track)
+					local fill = New("Frame")
+					fill.BackgroundColor3 = UI.PINK
+					fill.BorderSizePixel = 0
+					fill.Parent = track
+					ensureCorner(fill, px(3))
+					local knob = New("Frame")
+					knob.AnchorPoint = V2(0.5, 0.5)
+					knob.Size = U2O(
+						px(isPhonePanelLayout() and 21 or 11),
+						px(isPhonePanelLayout() and 21 or 11)
+					)
+					knob.BackgroundColor3 = UI.MENU_TEXT_SELECTED
+					knob.BorderSizePixel = 0
+					knob.Active = true
+					knob.Parent = track
+					ensureCorner(knob, px(6))
+					local function setValue(value)
+						value = math.clamp(math.floor(tonumber(value) or 0), 0, 5)
+						utility[stateKey] = value
+						box.Text = tostring(value)
+						local alpha = value / 5
+						fill.Size = U2S(alpha, 1)
+						knob.Position = U2(alpha, 0, 0.5, 0)
+					end
+					setValue(utility[stateKey])
+					box.FocusLost:Connect(function()
+						setValue(box.Text)
+					end)
+					knob.InputBegan:Connect(function(input)
+						if input.UserInputType == Enum.UserInputType.MouseButton1
+							or input.UserInputType == Enum.UserInputType.Touch
+						then
+							beginSliderDrag(input, function(pointX)
+								local width = math.max(1, track.AbsoluteSize.X)
+								local alpha = math.clamp(
+									(pointX - track.AbsolutePosition.X) / width,
+									0,
+									1
+								)
+								setValue(math.floor(alpha * 5 + 0.5))
+							end)
+						end
+					end)
+				end
 				makeInlineFilter("Mutations", "AutoCancel" .. criterionKey .. "Mutations", amountControlsHeight + px(4), function() return autoServerHopState.BoothMutationOptions() end)
 				makeInlineFilter("Traits", "AutoCancel" .. criterionKey .. "Traits", amountControlsHeight + secondaryControlHeight + px(4), function() return autoServerHopState.BoothTraitOptions() end)
 				makeInlineFilter("Signature", "AutoCancel" .. criterionKey .. "Signatures", amountControlsHeight + (secondaryControlHeight * 2) + px(4), function() return {"Signed", "Unsigned"} end)
 				makeInlineFilter("Size", "AutoCancel" .. criterionKey .. "Sizes", amountControlsHeight + (secondaryControlHeight * 3) + px(4), function() return autoServerHopState.SpecificSizeOptions() end)
 				makeInlineFilter("Level", "AutoCancel" .. criterionKey .. "Levels", amountControlsHeight + (secondaryControlHeight * 4) + px(4), function() return autoServerHopState.SpecificLevelOptions() end)
-				controlHeight = amountControlsHeight + (secondaryControlHeight * 5) + px(4)
+				makeInlineMinimumTraits("AutoCancel" .. criterionKey .. "MinimumTraits", amountControlsHeight + (secondaryControlHeight * 5) + px(4))
+				controlHeight = amountControlsHeight + (secondaryControlHeight * 5) + amountControlsHeight + (featureRowGap * 2)
 			end
 			amountControls[#amountControls+1] = {Frame=frame, Option=criterionKey, SetAmount=setAmount, ValueBox=value, Height=controlHeight}
 		end
@@ -10923,7 +12603,10 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				return
 			end
 			if definition and definition.MomentaryAction then
-				if autoServerHopState.Utility.PauseScript == true then
+				if autoServerHopState.Utility.PauseScript == true
+					and definition.MomentaryAction ~= "ManualServerHop"
+					and definition.MomentaryAction ~= "ManualKickMinigame"
+				then
 					return
 				end
 				if definition.MomentaryAction == "ManualServerHop" then
@@ -11180,6 +12863,11 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				featureEnabled = stateEntry and stateEntry[definition.ServerHopKey] == true or false
 			elseif isAutoOfferSourceManager then
 				featureEnabled = stateEntry and stateEntry.Enabled == true or false
+			elseif isAutoCancelRarity
+				and definition
+				and definition.AutoCancelDirectSlider == true
+			then
+				featureEnabled = true
 			elseif isAutoCancelRarity then
 				featureEnabled = stateEntry and type(stateEntry.Targets) == "table"
 					and stateEntry.Targets[definition.AutoCancelRarityKey] == true or false
@@ -11285,7 +12973,20 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 				for _, control in ipairs(amountControls) do
 					control.Frame.Visible = featureEnabled
 					if control.SetAmount then
-						control.SetAmount(control.Option == "Tokens" and stateEntry.Tokens or (stateEntry.Amounts and stateEntry.Amounts[control.Option]), true)
+						control.SetAmount(
+							control.Option == "Tokens"
+								and (
+									definition.AutoCancelDirectSlider == true
+										and not (
+											type(stateEntry.Targets) == "table"
+											and stateEntry.Targets.Tokens == true
+										)
+										and 0
+										or stateEntry.Tokens
+								)
+								or (stateEntry.Amounts and stateEntry.Amounts[control.Option]),
+							true
+						)
 					end
 				end
 			elseif hasDropdown and stateEntry then
@@ -11379,6 +13080,16 @@ autoServerHopState.RuntimeCreateEmptyCollapsiblePanel = function(
 			FeatureLabel = featureLabel,
 			RefreshFromState = refreshFeatureRowFromState,
 			RefreshSpecificCriteria = specificCriteriaRefresh,
+			IsSpecificCriteriaManager = isSpecificCriteriaManager == true,
+			IsSliderVisualRow = (
+				isUtilitySlider == true
+				or isServerHopSliderOnly == true
+				or (
+					isServerHop == true
+					and definition
+					and definition.SliderKey ~= nil
+				)
+			),
 		}
 		if isUtilityToggle then
 			autoServerHopState.RuntimeUtilityToggleRows = autoServerHopState.RuntimeUtilityToggleRows or {}
@@ -11518,7 +13229,10 @@ end
 			activeChoiceOverlay:Destroy()
 		end
 		activeChoiceOverlay = nil
+		autoServerHopState.RestoreDropdownBottomReserve()
 	end
+
+	autoServerHopState.CloseSettingsChoicePopup = closeChoicePopup
 
 	local function openChoicePopup(anchor, options, selected, onPick)
 		closeChoicePopup()
@@ -11603,7 +13317,7 @@ end
 			button.BorderSizePixel = 0
 			button.AutoButtonColor = false
 			button.Text = tostring(option)
-			button.TextColor3 = tostring(option) == tostring(selected) and UI.MENU_TEXT_SELECTED or UI.MENU_TEXT_IDLE
+			button.TextColor3 = tostring(option) == tostring(selected) and UI.MENU_TEXT_SELECTED or UI.MUTED_TEXT_COLOR
 			button.FontFace = UI.MENU_FONT_REGULAR_FACE
 			setResponsiveTextSize(button, 12)
 			button.TextXAlignment = Enum.TextXAlignment.Left
@@ -11802,6 +13516,19 @@ end
 			line.Parent = row
 			return row, line
 		end
+		local function selectionValueColor(value)
+			local normalized = string.lower(
+				(string.gsub(tostring(value or ""), "^%s*(.-)%s*$", "%1"))
+			)
+			if normalized == ""
+				or normalized == "select"
+				or normalized == "choose saved config"
+				or normalized == "choose autoload config"
+			then
+				return UI.MUTED_TEXT_COLOR
+			end
+			return UI.MENU_TEXT_SELECTED
+		end
 		function helpers.info(labelText, valueText, valueColor)
 			local row = helpers.row()
 			local label = New("TextLabel")
@@ -11823,7 +13550,7 @@ end
 			value.BackgroundTransparency = 1
 			value.BorderSizePixel = 0
 			value.Text = tostring(valueText or "")
-			value.TextColor3 = valueColor or UI.MENU_TEXT_IDLE
+			value.TextColor3 = valueColor or UI.MUTED_TEXT_COLOR
 			value.FontFace = UI.MENU_FONT_REGULAR_FACE
 			setResponsiveTextSize(value, 12.5)
 			value.TextXAlignment = Enum.TextXAlignment.Right
@@ -11839,7 +13566,7 @@ end
 			label.BackgroundTransparency = 1
 			label.BorderSizePixel = 0
 			label.Text = tostring(text or "")
-			label.TextColor3 = color or UI.MENU_TEXT_IDLE
+			label.TextColor3 = color or UI.MUTED_TEXT_COLOR
 			label.FontFace = UI.MENU_FONT_REGULAR_FACE
 			setResponsiveTextSize(label, 12.5)
 			label.TextWrapped = true
@@ -11918,7 +13645,10 @@ end
 			button.BorderSizePixel = 0
 			button.AutoButtonColor = false
 			button.Text = tostring(currentText or "")
-			button.TextColor3 = UI.MENU_TEXT_IDLE
+			button.TextColor3 = selectionValueColor(button.Text)
+			button:GetPropertyChangedSignal("Text"):Connect(function()
+				button.TextColor3 = selectionValueColor(button.Text)
+			end)
 			button.FontFace = UI.MENU_FONT_REGULAR_FACE
 			setResponsiveTextSize(button, 12)
 			button.TextXAlignment = Enum.TextXAlignment.Center
@@ -11942,7 +13672,10 @@ end
 			button.BorderSizePixel = 0
 			button.AutoButtonColor = false
 			button.Text = tostring(currentText or "Select")
-			button.TextColor3 = UI.MENU_TEXT_IDLE
+			button.TextColor3 = selectionValueColor(button.Text)
+			button:GetPropertyChangedSignal("Text"):Connect(function()
+				button.TextColor3 = selectionValueColor(button.Text)
+			end)
 			button.FontFace = UI.MENU_FONT_REGULAR_FACE
 			setResponsiveTextSize(button, 12.5)
 			button.TextXAlignment = Enum.TextXAlignment.Left
@@ -11994,7 +13727,7 @@ end
 			box.BorderSizePixel = 0
 			box.ClearTextOnFocus = false
 			box.Text = tostring(autoServerHopState.Utility[utilityKey] or defaultHex)
-			box.TextColor3 = UI.MENU_TEXT_IDLE
+			box.TextColor3 = UI.MENU_TEXT_SELECTED
 			box.FontFace = UI.MENU_FONT_REGULAR_FACE
 			setResponsiveTextSize(box, 11.5)
 			box.TextXAlignment = Enum.TextXAlignment.Center
@@ -12130,10 +13863,10 @@ end
 		local font = hexColor(utility.ThemeFont, RGB(234,236,241))
 		local search = blendColor(main, font, 0.025)
 		local feature = blendColor(main, font, 0.045)
-		local idle = blendColor(font, background, 0.43)
-		local hover = blendColor(font, background, 0.14)
 		local muted = blendColor(font, background, 0.50)
-		local placeholder = blendColor(font, background, 0.54)
+		local idle = muted
+		local hover = font
+		local placeholder = muted
 
 		UI.BLACK = background
 		UI.PINK = accent
@@ -12211,7 +13944,7 @@ end
 		h.info("Status", "Fully Functional", GOOD)
 	end)
 	makePanel(tabs.Home, 2, 2, 1, "Latest Updates", "latest updates changelog finished development", function(h)
-		h.note("• 9/21/26: Added Bat Battle Minigame Support.\n• 9/20/26: Added Hot Potato Minigame Support.\n• 9/16/26: Finished Development.", UI.MENU_TEXT_SELECTED, px(76))
+		h.note("• 9/21/26: Added Bat Battle Minigame Support.\n• 9/20/26: Added Hot Potato Minigame Support.\n• 9/16/26: Finished Development.", UI.MENU_TEXT_SELECTED, px(48))
 	end)
 	makePanel(tabs.Home, 3, 1, 2, "Executor", "executor supported volt potassium delta", function(h)
 		local executorName = identifyExecutorName()
@@ -12323,7 +14056,12 @@ end
 			if ok and type(files) == "table" then
 				for _, path in ipairs(files) do
 					local name = tostring(path):match("([^/\\]+)%.json$")
-					if name and name ~= "" then configNames[#configNames + 1] = name end
+					if name
+						and name ~= ""
+						and string.lower(name) ~= "runtime_blacklists"
+					then
+						configNames[#configNames + 1] = name
+					end
 				end
 			end
 		end
@@ -12558,7 +14296,10 @@ end
 		h.button("Reset Autoload", function()
 			writeAutoloadConfigName(nil)
 			autoloadSelectionName = nil
-			if autoloadSelectButton then autoloadSelectButton.Text = "Choose Autoload Config" end
+			if autoloadSelectButton then
+				autoloadSelectButton.Text = "Choose Autoload Config"
+				autoloadSelectButton.TextColor3 = UI.MUTED_TEXT_COLOR
+			end
 			if autoServerHopState.RuntimeAutoloadCurrentLabel then
 				autoServerHopState.RuntimeAutoloadCurrentLabel.Text = "Autoloaded Config: None"
 			end
@@ -12587,6 +14328,7 @@ end
 	screenGui.Destroying:Connect(function()
 		autoServerHopState.RuntimeMenuBindCaptureActive = false
 		autoServerHopState.RuntimeAutoloadCurrentLabel = nil
+		autoServerHopState.CloseSettingsChoicePopup = nil
 		closeChoicePopup()
 		if bindCaptureConnection then bindCaptureConnection:Disconnect(); bindCaptureConnection = nil end
 		for _, connection in ipairs(liveConnections) do
@@ -12771,9 +14513,32 @@ end)()
 		autoSitFeatures[#autoSitFeatures + 1] = {Label = "Require Any Criterion", UtilityToggleKey = "AutoSitMustOwnOneSelected", VisibilitySitKey = "OneOfTwo", SeparatorGroup = "AutoSitOneOfTwoGroup", AdaptiveLockApplyKey = "AdaptiveCriteriaApplyAutoSit", HideWhenUtilityTrueKey = "AdaptiveCriteriaApplyAutoSit", VisualIndentLevel = 1, ForceVisualIndentLevel = true}
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Matchmaking, 3, 1, 1, "Auto Sit", autoSitFeatures)
 	end
-	local function appendAcceptCriteria(features, parentKey, acceptStateProvider, mutationPrefix, specificStateKey, allKey, oneKey, adaptiveApplyKey, adaptiveCriteriaModeKey, adaptiveRuleKey)
-		appendCriteriaModeControls(features, adaptiveApplyKey, adaptiveCriteriaModeKey, adaptiveRuleKey, {UtilityParentKey = parentKey})
+	local function appendAcceptCriteria(features, parentKey, acceptStateProvider, mutationPrefix, specificStateKey, allKey, oneKey, adaptiveApplyKey, adaptiveCriteriaModeKey, adaptiveRuleKey, sharedVisibilityKeys)
+		local visibilityKeys = {parentKey}
+		for _, key in ipairs(type(sharedVisibilityKeys) == "table" and sharedVisibilityKeys or {}) do
+			if type(key) == "string" and key ~= "" and not table.find(visibilityKeys, key) then
+				visibilityKeys[#visibilityKeys + 1] = key
+			end
+		end
+		local sharedWithServerEligibility = #visibilityKeys > 1
+		if sharedWithServerEligibility then
+			features[#features + 1] = {
+				InfoNoteText = "Criteria below also define eligible players for Minigame Server Eligibility.",
+				VisibilityAnyUtilityParentKeys = visibilityKeys,
+				SeparatorGroup = parentKey .. "ServerEligibilityCriteriaGroup",
+			}
+		end
+		appendCriteriaModeControls(
+			features,
+			adaptiveApplyKey,
+			adaptiveCriteriaModeKey,
+			adaptiveRuleKey,
+			{VisibilityAnyUtilityParentKeys = visibilityKeys}
+		)
 		local function manualRow(row)
+			row.UtilityParentKey = nil
+			row.VisibilityUtilityParentKey = nil
+			row.VisibilityAnyUtilityParentKeys = visibilityKeys
 			row.AdaptiveLockApplyKey = adaptiveApplyKey
 			row.HideWhenUtilityTrueKey = adaptiveApplyKey
 			row.VisualIndentLevel = 1
@@ -12782,31 +14547,43 @@ end)()
 		end
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 			manualRow({
-				Label = rarity, AcceptKey = rarity, VisibilityUtilityParentKey = parentKey,
+				Label = rarity,
+				AcceptKey = rarity,
 				AcceptStateProvider = acceptStateProvider,
 			})
-			manualRow({Label = "Mutations", UtilityMultiDropdownKey = mutationPrefix .. rarity .. "Mutations", UtilityParentKey = parentKey, VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end})
-			manualRow({Label = "Traits", UtilityMultiDropdownKey = mutationPrefix .. rarity .. "Traits", UtilityParentKey = parentKey, VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end})
-			manualRow({Label = "Signature", UtilityMultiDropdownKey = mutationPrefix .. rarity .. "Signatures", UtilityParentKey = parentKey, VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, Placeholder = "Any", Options = {"Signed", "Unsigned"}})
-			manualRow({Label = "Size", UtilityMultiDropdownKey = mutationPrefix .. rarity .. "Sizes", UtilityParentKey = parentKey, VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end})
-			manualRow({Label = "Level", UtilityMultiDropdownKey = mutationPrefix .. rarity .. "Levels", UtilityParentKey = parentKey, VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end})
+			manualRow({Label = "Mutations", UtilityMultiDropdownKey = mutationPrefix .. rarity .. "Mutations", VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end})
+			manualRow({Label = "Traits", UtilityMultiDropdownKey = mutationPrefix .. rarity .. "Traits", VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end})
+			manualRow({Label = "Signature", UtilityMultiDropdownKey = mutationPrefix .. rarity .. "Signatures", VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, Placeholder = "Any", Options = {"Signed", "Unsigned"}})
+			manualRow({Label = "Size", UtilityMultiDropdownKey = mutationPrefix .. rarity .. "Sizes", VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end})
+			manualRow({Label = "Level", UtilityMultiDropdownKey = mutationPrefix .. rarity .. "Levels", VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end})
+			manualRow({Label = "Minimum Traits Required", UtilitySliderKey = mutationPrefix .. rarity .. "MinimumTraits", VisibilityAcceptKey = rarity, AcceptStateProvider = acceptStateProvider, MinValue = 0, MaxValue = 5, UnitLabel = "Traits"})
 		end
-		manualRow({Label = "Tokens", AcceptKey = "Tokens", VisibilityUtilityParentKey = parentKey, AcceptStateProvider = acceptStateProvider})
-		features[#features + 1] = {Label = "Specific Brainrots & Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = specificStateKey, UtilityParentKey = parentKey, VisualIndentLevel = 1, ForceVisualIndentLevel = true}
-		manualRow({Label = "Require All Criteria", UtilityToggleKey = allKey, UtilityParentKey = parentKey, UtilityExclusiveGroup = parentKey .. "CriteriaMode", UtilityExclusiveRequired = true})
-		manualRow({Label = "Require Any Criterion", UtilityToggleKey = oneKey, UtilityParentKey = parentKey, UtilityExclusiveGroup = parentKey .. "CriteriaMode", UtilityExclusiveRequired = true})
+		manualRow({Label = "Tokens", AcceptKey = "Tokens", AcceptStateProvider = acceptStateProvider})
+		manualRow({Label = "Specific Brainrots & Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = specificStateKey})
+		manualRow({Label = "Require All Criteria", UtilityToggleKey = allKey, UtilityExclusiveGroup = parentKey .. "CriteriaMode", UtilityExclusiveRequired = true})
+		manualRow({Label = "Require Any Criterion", UtilityToggleKey = oneKey, UtilityExclusiveGroup = parentKey .. "CriteriaMode", UtilityExclusiveRequired = true})
 		return features
 	end
 	local function sharedAcceptStateProvider() return autoAcceptState end
 	local function tradeRequestStateProvider() return tradeRequestCriteriaState end
 	do
 		local features = {{Label = "Auto Accept Offers", UtilityToggleKey = "AutoAcceptMaster"}}
-		appendAcceptCriteria(features, "AutoAcceptMaster", sharedAcceptStateProvider, "AutoAccept", "AutoAcceptSpecificItems", "AutoAcceptMustHaveAll", "AutoAcceptMustHaveOne", "AdaptiveCriteriaApplyAcceptOffers", "AdaptiveAcceptCriteriaMode", "AdaptiveAcceptMode")
+		appendAcceptCriteria(features, "AutoAcceptMaster", sharedAcceptStateProvider, "AutoAccept", "AutoAcceptSpecificItems", "AutoAcceptMustHaveAll", "AutoAcceptMustHaveOne", "AdaptiveCriteriaApplyAcceptOffers", "AdaptiveAcceptCriteriaMode", "AdaptiveAcceptMode", {
+			"CheckServerHopNobodyServer",
+			"CheckServerHopPlayedEveryoneServer",
+			"CheckServerHopNobodyMinigamesArea",
+			"CheckServerHopPlayedEveryoneMinigamesArea",
+		})
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Offers, 4, 2, 2, "Auto Accept", features)
 	end
 	do
 		local acceptOfferFeatures = {{Label = "Auto Accept Offers", UtilityToggleKey = "AutoAcceptTradesAcceptOffers"}}
-		appendAcceptCriteria(acceptOfferFeatures, "AutoAcceptTradesAcceptOffers", sharedAcceptStateProvider, "AutoAccept", "AutoAcceptSpecificItems", "AutoAcceptMustHaveAll", "AutoAcceptMustHaveOne", "AdaptiveCriteriaApplyAcceptOffers", "AdaptiveAcceptCriteriaMode", "AdaptiveAcceptMode")
+		appendAcceptCriteria(acceptOfferFeatures, "AutoAcceptTradesAcceptOffers", sharedAcceptStateProvider, "AutoAccept", "AutoAcceptSpecificItems", "AutoAcceptMustHaveAll", "AutoAcceptMustHaveOne", "AdaptiveCriteriaApplyAcceptOffers", "AdaptiveAcceptCriteriaMode", "AdaptiveAcceptMode", {
+			"CheckServerHopNobodyServer",
+			"CheckServerHopPlayedEveryoneServer",
+			"CheckServerHopNobodyMinigamesArea",
+			"CheckServerHopPlayedEveryoneMinigamesArea",
+		})
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 32, 1, 1, "Auto Accept", acceptOfferFeatures)
 
 		local requestFeatures = {{Label = "Auto Accept Trade Requests", UtilityToggleKey = "AutoAcceptTradesAcceptRequests"}}
@@ -12878,24 +14655,51 @@ end)()
 		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Custom Token Amount", UtilityToggleKey = "RegularOpeningCustomTokens", UtilityExclusiveGroup = "RegularOpeningTokenMode", SeparatorGroup = "RegularOpeningTokensGroup"}
 		regularOpeningFeatures[#regularOpeningFeatures + 1] = {Label = "Token Amount", UtilitySliderKey = "RegularOpeningTokenAmount", UtilityParentKey = "RegularOpeningCustomTokens", SeparatorGroup = "RegularOpeningTokensGroup", MinValue = 0, MaxValue = 1000000, MaxValueProvider = function() return autoServerHopState.CurrentTradeTokenBalance() end, UnitLabel = "Tokens"}
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 34, 2, 3, "Opening Offer", regularOpeningFeatures)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
+			tabs.AutoAcceptTrades,
+			36,
+			2,
+			4,
+			"Auto Send Trades",
+			{
+				{Label = "Auto Send Trades", UtilityToggleKey = "AutoSendTradesEnabled", SeparatorGroup = "AutoSendTradesCoreGroup"},
+				{
+					InfoNoteText = "Criteria below are shared with Regular Trade Server Eligibility.",
+					VisibilityAnyUtilityParentKeys = {"AutoSendTradesEnabled", "CheckServerHopNoEligibleTradePlayers"},
+					SeparatorGroup = "AutoSendTradesCriteriaGroup",
+				},
+				{Label = "Rarities", UtilityMultiDropdownKey = "AutoSendTradeRarities", VisibilityAnyUtilityParentKeys = {"AutoSendTradesEnabled", "CheckServerHopNoEligibleTradePlayers"}, SeparatorGroup = "AutoSendTradesCriteriaGroup", Placeholder = "Any", Options = BRAINROT_RARITY_OPTIONS},
+				{Label = "Mutations", UtilityMultiDropdownKey = "AutoSendTradeMutations", VisibilityAnyUtilityParentKeys = {"AutoSendTradesEnabled", "CheckServerHopNoEligibleTradePlayers"}, SeparatorGroup = "AutoSendTradesCriteriaGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+				{Label = "Traits", UtilityMultiDropdownKey = "AutoSendTradeTraits", VisibilityAnyUtilityParentKeys = {"AutoSendTradesEnabled", "CheckServerHopNoEligibleTradePlayers"}, SeparatorGroup = "AutoSendTradesCriteriaGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+				{Label = "Signature", UtilityMultiDropdownKey = "AutoSendTradeSignatures", VisibilityAnyUtilityParentKeys = {"AutoSendTradesEnabled", "CheckServerHopNoEligibleTradePlayers"}, SeparatorGroup = "AutoSendTradesCriteriaGroup", Placeholder = "Any", Options = {"Signed", "Unsigned"}},
+				{Label = "Size", UtilityMultiDropdownKey = "AutoSendTradeSizes", VisibilityAnyUtilityParentKeys = {"AutoSendTradesEnabled", "CheckServerHopNoEligibleTradePlayers"}, SeparatorGroup = "AutoSendTradesCriteriaGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+				{Label = "Level", UtilityMultiDropdownKey = "AutoSendTradeLevels", VisibilityAnyUtilityParentKeys = {"AutoSendTradesEnabled", "CheckServerHopNoEligibleTradePlayers"}, SeparatorGroup = "AutoSendTradesCriteriaGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
+				{Label = "Minimum Traits Required", UtilitySliderKey = "AutoSendTradeMinimumTraits", VisibilityAnyUtilityParentKeys = {"AutoSendTradesEnabled", "CheckServerHopNoEligibleTradePlayers"}, SeparatorGroup = "AutoSendTradesCriteriaGroup", MinValue = 0, MaxValue = 5, UnitLabel = "Traits"},
+				{Label = "Specific Brainrots & Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "AutoSendTradeSpecificItems", VisibilityAnyUtilityParentKeys = {"AutoSendTradesEnabled", "CheckServerHopNoEligibleTradePlayers"}, SeparatorGroup = "AutoSendTradesCriteriaGroup"},
+				{Label = "Minimum Tokens or Higher", UtilitySliderKey = "AutoSendTradeMinimumTokens", VisibilityAnyUtilityParentKeys = {"AutoSendTradesEnabled", "CheckServerHopNoEligibleTradePlayers"}, SeparatorGroup = "AutoSendTradesCriteriaGroup", MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"},
+				{Label = "Require All Criteria", UtilityToggleKey = "AutoSendTradeMustOwnAll", VisibilityAnyUtilityParentKeys = {"AutoSendTradesEnabled", "CheckServerHopNoEligibleTradePlayers"}, UtilityExclusiveGroup = "AutoSendTradeCriteriaMode", UtilityExclusiveRequired = true, SeparatorGroup = "AutoSendTradesCriteriaGroup"},
+				{Label = "Require Any Criterion", UtilityToggleKey = "AutoSendTradeMustOwnOne", VisibilityAnyUtilityParentKeys = {"AutoSendTradesEnabled", "CheckServerHopNoEligibleTradePlayers"}, UtilityExclusiveGroup = "AutoSendTradeCriteriaMode", UtilityExclusiveRequired = true, SeparatorGroup = "AutoSendTradesCriteriaGroup"},
+				{Label = "Retry Same Player After", UtilitySliderKey = "AutoSendTradeRetrySeconds", UtilityParentKey = "AutoSendTradesEnabled", SeparatorGroup = "AutoSendTradesTimingGroup", MinValue = 5, MaxValue = 120, UnitLabel = "Seconds"},
+			}
+		)
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.AutoAcceptTrades, 35, 1, 4, "Trade Timing", {
-			{Label="Custom Timing", UtilityToggleKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup"},
-			{Label="Trade Request Delay", UtilitySliderKey="AutoAcceptTradesInitialDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
-			{Label="Post-Message Delay", UtilitySliderKey="AutoAcceptTradesDelayAfterTradeMessage", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
-			{Label="Reaction Delay", UtilitySliderKey="AutoAcceptTradesReactionDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Custom Delays", UtilityToggleKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup"},
+			{Label="Delay Before Trade Request", UtilitySliderKey="AutoAcceptTradesInitialDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Delay After Trade Message", UtilitySliderKey="AutoAcceptTradesDelayAfterTradeMessage", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Delay Before Responding", UtilitySliderKey="AutoAcceptTradesReactionDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
 			{Label="Add Brainrot Delay", UtilitySliderKey="AutoAcceptTradesAddBrainrotDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
 			{Label="Remove Brainrot Delay", UtilitySliderKey="AutoAcceptTradesRemoveBrainrotDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
 			{Label="Add Token Delay", UtilitySliderKey="AutoAcceptTradesAddTokenDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
 			{Label="Remove Token Delay", UtilitySliderKey="AutoAcceptTradesRemoveTokenDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
-			{Label="Accept Delay", UtilitySliderKey="AutoAcceptTradesAcceptDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
+			{Label="Delay Before Accepting", UtilitySliderKey="AutoAcceptTradesAcceptDelay", UtilityParentKey="AutoAcceptTradesCustomDelays", SeparatorGroup="RegularTradeDelaysGroup", MinValue=0, MaxValue=5, Step=0.0005, Decimals=4, UnitLabel="Seconds"},
 		})
 	end
 	do
-		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Cancel, 5, 1, 1, "Trade Timeouts", {
-			{Label = "Trade Timeout", UtilityToggleKey = "AutoCancelTradeTimeoutEnabled", SeparatorGroup = "AutoCancelTradeTimeoutGroup"},
-			{Label = "Timeout Duration", UtilitySliderKey = "AutoCancelTradeTimeout", UtilityParentKey = "AutoCancelTradeTimeoutEnabled", SeparatorGroup = "AutoCancelTradeTimeoutGroup", MinValue = 1, MaxValue = 60, UnitLabel = "Seconds"},
-			{Label = "No-Value Timeout", UtilityToggleKey = "AutoCancelNoValueTimeoutEnabled", SeparatorGroup = "AutoCancelNoValueTimeoutGroup"},
-			{Label = "Timeout Duration", UtilitySliderKey = "AutoCancelNoValueTimeout", UtilityParentKey = "AutoCancelNoValueTimeoutEnabled", SeparatorGroup = "AutoCancelNoValueTimeoutGroup", MinValue = 1, MaxValue = 30, UnitLabel = "Seconds"},
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Cancel, 5, 1, 1, "Automatic Trade Cancel", {
+			{Label = "Cancel Slow Trades", UtilityToggleKey = "AutoCancelTradeTimeoutEnabled", SeparatorGroup = "AutoCancelTradeTimeoutGroup"},
+			{Label = "Cancel After", UtilitySliderKey = "AutoCancelTradeTimeout", UtilityParentKey = "AutoCancelTradeTimeoutEnabled", SeparatorGroup = "AutoCancelTradeTimeoutGroup", MinValue = 1, MaxValue = 60, UnitLabel = "Seconds"},
+			{Label = "Cancel Empty Trades", UtilityToggleKey = "AutoCancelNoValueTimeoutEnabled", SeparatorGroup = "AutoCancelNoValueTimeoutGroup"},
+			{Label = "Cancel If No Offer After", UtilitySliderKey = "AutoCancelNoValueTimeout", UtilityParentKey = "AutoCancelNoValueTimeoutEnabled", SeparatorGroup = "AutoCancelNoValueTimeoutGroup", MinValue = 1, MaxValue = 30, UnitLabel = "Seconds"},
 		})
 		local inventory = {
 			{Label = "Inventory Requirements", UtilityToggleKey = "AutoCancelMaster"},
@@ -12912,8 +14716,46 @@ end)()
 
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Cancel, 28, 2, 1, "Inventory Requirements", inventory)
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Cancel, 29, 1, 2, "Token Requirement", {
-			{Label = "Minimum Tokens Required", AutoCancelRarityKey = "Tokens", VisibilityUtilityParentKey = "AutoCancelMaster", AdaptiveLockApplyKey = "AdaptiveCriteriaApplyAutoCancel", HideWhenUtilityTrueKey = "AdaptiveCriteriaApplyAutoCancel", VisualIndentLevel = 1, ForceVisualIndentLevel = true},
+			{Label = "Minimum Tokens or Higher", AutoCancelRarityKey = "Tokens", AutoCancelDirectSlider = true, VisibilityUtilityParentKey = "AutoCancelMaster", AdaptiveLockApplyKey = "AdaptiveCriteriaApplyAutoCancel", HideWhenUtilityTrueKey = "AdaptiveCriteriaApplyAutoCancel", VisualIndentLevel = 1, ForceVisualIndentLevel = true},
 		})
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
+			tabs.Cancel,
+			40,
+			2,
+			2,
+			"Offer Protection",
+			{
+				{Label = "Avoid Offering Items", UtilityToggleKey = "GlobalNeverOfferEnabled", SeparatorGroup = "TradeAvoidOfferGroup"},
+				{Label = "Rarities to Avoid", UtilityMultiDropdownKey = "GlobalNeverOfferRarities", UtilityParentKey = "GlobalNeverOfferEnabled", SeparatorGroup = "TradeAvoidOfferGroup", Placeholder = "Select", Options = BRAINROT_RARITY_OPTIONS},
+				{Label = "Mutations to Avoid", UtilityMultiDropdownKey = "GlobalNeverOfferMutations", UtilityParentKey = "GlobalNeverOfferEnabled", SeparatorGroup = "TradeAvoidOfferGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+				{Label = "Traits to Avoid", UtilityMultiDropdownKey = "GlobalNeverOfferTraits", UtilityParentKey = "GlobalNeverOfferEnabled", SeparatorGroup = "TradeAvoidOfferGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+				{Label = "Signatures to Avoid", UtilityMultiDropdownKey = "GlobalNeverOfferSignatures", UtilityParentKey = "GlobalNeverOfferEnabled", SeparatorGroup = "TradeAvoidOfferGroup", Placeholder = "Any", Options = {"Signed", "Unsigned"}},
+				{Label = "Sizes to Avoid", UtilityMultiDropdownKey = "GlobalNeverOfferSizes", UtilityParentKey = "GlobalNeverOfferEnabled", SeparatorGroup = "TradeAvoidOfferGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+				{Label = "Levels to Avoid", UtilityMultiDropdownKey = "GlobalNeverOfferLevels", UtilityParentKey = "GlobalNeverOfferEnabled", SeparatorGroup = "TradeAvoidOfferGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
+				{Label = "Avoid If It Has At Least This Many Traits", UtilitySliderKey = "GlobalNeverOfferMinimumTraits", UtilityParentKey = "GlobalNeverOfferEnabled", SeparatorGroup = "TradeAvoidOfferGroup", MinValue = 0, MaxValue = 5, UnitLabel = "Traits"},
+				{Label = "Specific Brainrots & Items to Avoid", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "GlobalNeverOfferSpecificItems", UtilityParentKey = "GlobalNeverOfferEnabled", SeparatorGroup = "TradeAvoidOfferGroup"},
+
+				{Label = "Keep Copies", UtilityToggleKey = "TradeKeepCopiesEnabled", SeparatorGroup = "TradeKeepCopiesGroup"},
+				{
+					Label = "Keep Copies by Item",
+					SpecificCriteriaManager = true,
+					SpecificCriteriaStateKey = "TradeKeepCopiesSpecificItems",
+					SpecificCriteriaWithMinimumCopies = true,
+					UtilityParentKey = "TradeKeepCopiesEnabled",
+					SeparatorGroup = "TradeKeepCopiesItemsGroup",
+				},
+				{
+					Label = "Keep Copies by Rarity",
+					SpecificCriteriaManager = true,
+					SpecificCriteriaStateKey = "TradeKeepCopiesRarityRules",
+					SpecificCriteriaWithMinimumCopies = true,
+					SpecificCriteriaSimple = true,
+					SpecificCriteriaOptionsProvider = function() return BRAINROT_RARITY_OPTIONS end,
+					UtilityParentKey = "TradeKeepCopiesEnabled",
+					SeparatorGroup = "TradeKeepCopiesRarityGroup",
+				},
+			}
+		)
 	end
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.Matchmaking,
@@ -12924,22 +14766,43 @@ end)()
 		{
 			{Label = "Server Hop", ServerHopKey = "Enabled"},
 			{
-				Label = "Server Time Limit",
+				Label = "Hop After Time in Server",
 				ServerHopKey = "ServerTimeEnabled",
 				SliderKey = "ServerTime",
 				MinValue = 1,
 				MaxValue = 60,
 			},
 			{
-				Label = "No-Game Timeout",
+				Label = "Hop After No Minigames",
 				ServerHopKey = "TimeSinceLastGameEnabled",
 				SliderKey = "TimeSinceLastGame",
 				MinValue = 1,
 				MaxValue = 60,
 			},
+			{
+				Label = "Hop After No Booth Sales",
+				ServerHopKey = "NoOwnBoothPurchaseEnabled",
+				SliderKey = "NoOwnBoothPurchase",
+				MinValue = 1,
+				MaxValue = 60,
+			},
+			{
+				Label = "Hop After No Booth Buys",
+				ServerHopKey = "NoBoothBuyEnabled",
+				SliderKey = "NoBoothBuy",
+				MinValue = 1,
+				MaxValue = 60,
+			},
+			{
+				Label = "Hop After No Regular Trade Activity",
+				ServerHopKey = "NoRegularTradeEnabled",
+				SliderKey = "NoRegularTrade",
+				MinValue = 1,
+				MaxValue = 60,
+			},
 			{Label = "Extra Time After Win", ServerHopSliderKey = "WinWagerTimeAdded", MinValue = 0, MaxValue = 60, UnitLabel = "Minutes"},
 			{Label = "Extra Time After Booth Purchase", ServerHopSliderKey = "BoothPurchaseTimeAdded", MinValue = 1, MaxValue = 60, UnitLabel = "Minutes"},
-			{Label = "Server Blacklist Duration", ServerHopSliderKey = "ServerBlacklistMinutes", ServerHopSliderAlwaysVisible = true, MinValue = 1, MaxValue = 60, UnitLabel = "Minutes"},
+			{Label = "Avoid Recent Servers For", ServerHopSliderKey = "ServerBlacklistMinutes", ServerHopSliderAlwaysVisible = true, MinValue = 1, MaxValue = 60, UnitLabel = "Minutes"},
 		}
 	)
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
@@ -12949,38 +14812,45 @@ end)()
 		2,
 		"Server Eligibility",
 		(function()
-			local eligibilityTriggers = {
-				"CheckServerHopNobodyServer",
-				"CheckServerHopPlayedEveryoneServer",
-				"CheckServerHopNobodyMinigamesArea",
-				"CheckServerHopPlayedEveryoneMinigamesArea",
-			}
 			local features = {
-				{Label = "Hop If No Eligible Player Is in the Server", UtilityToggleKey = "CheckServerHopNobodyServer"},
-				{Label = "Hop After Queueing With All Eligible Players in the Server", UtilityToggleKey = "CheckServerHopPlayedEveryoneServer"},
-				{Label = "Hop If No Eligible Player Is in the Minigame Area", UtilityToggleKey = "CheckServerHopNobodyMinigamesArea"},
-				{Label = "Hop After Queueing With All Eligible Players in the Minigame Area", UtilityToggleKey = "CheckServerHopPlayedEveryoneMinigamesArea"},
+				{Label = "Hop If No Eligible Player Is in the Server", UtilityToggleKey = "CheckServerHopNobodyServer", SeparatorGroup = "CheckServerMinigameEligibilityGroup"},
+				{Label = "Hop After Queueing With All Eligible Players in the Server", UtilityToggleKey = "CheckServerHopPlayedEveryoneServer", SeparatorGroup = "CheckServerMinigameEligibilityGroup"},
+				{Label = "Hop If No Eligible Player Is in the Minigame Area", UtilityToggleKey = "CheckServerHopNobodyMinigamesArea", SeparatorGroup = "CheckServerMinigameEligibilityGroup"},
+				{Label = "Hop After Queueing With All Eligible Players in the Minigame Area", UtilityToggleKey = "CheckServerHopPlayedEveryoneMinigamesArea", SeparatorGroup = "CheckServerMinigameEligibilityGroup"},
+				{
+					InfoNoteText = "Eligible minigame players use Auto Accept criteria.",
+					VisibilityAnyUtilityParentKeys = {
+						"CheckServerHopNobodyServer",
+						"CheckServerHopPlayedEveryoneServer",
+						"CheckServerHopNobodyMinigamesArea",
+						"CheckServerHopPlayedEveryoneMinigamesArea",
+					},
+					SeparatorGroup = "CheckServerMinigameEligibilityGroup",
+				},
+				{
+					Label = "Hop If No Eligible Booth Listings Are Available",
+					UtilityToggleKey = "CheckServerHopNoEligibleBooths",
+					SeparatorGroup = "CheckServerBoothEligibilityGroup",
+				},
+				{
+					Label = "Hop If No Player Is Eligible for Regular Trades",
+					UtilityToggleKey = "CheckServerHopNoEligibleTradePlayers",
+					SeparatorGroup = "CheckServerTradeEligibilityGroup",
+				},
 			}
-			appendCriteriaModeControls(features, "AdaptiveCriteriaApplyServerEligibility", "AdaptiveCheckServerCriteriaMode", "AdaptiveCheckServerMode", {VisibilityAnyUtilityParentKeys = eligibilityTriggers})
-			local function addManual(row)
-				row.VisibilityAnyUtilityParentKeys = eligibilityTriggers
-				row.AdaptiveLockApplyKey = "AdaptiveCriteriaApplyServerEligibility"
-				row.HideWhenUtilityTrueKey = "AdaptiveCriteriaApplyServerEligibility"
-				row.VisualIndentLevel = 1
-				row.ForceVisualIndentLevel = true
-				features[#features + 1] = row
-			end
-			addManual({Label = "Rarities", UtilityMultiDropdownKey = "CheckServerBrainrotRarities", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "None", Options = BRAINROT_RARITY_OPTIONS})
-			addManual({Label = "Mutations", UtilityMultiDropdownKey = "CheckServerMutations", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end})
-			addManual({Label = "Traits", UtilityMultiDropdownKey = "CheckServerTraits", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "None", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end})
-			addManual({Label = "Signature", UtilityMultiDropdownKey = "CheckServerSignatures", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "Any", Options = {"Signed", "Unsigned"}})
-			addManual({Label = "Size", UtilityMultiDropdownKey = "CheckServerSizes", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end})
-			addManual({Label = "Level", UtilityMultiDropdownKey = "CheckServerLevels", SeparatorGroup = "CheckServerCriteriaGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end})
-			features[#features + 1] = {Label = "Specific Brainrots & Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "CheckServerSpecificItems", VisibilityAnyUtilityParentKeys = eligibilityTriggers, SeparatorGroup = "CheckServerCriteriaGroup", VisualIndentLevel = 1, ForceVisualIndentLevel = true}
-			addManual({Label = "Require All Criteria", UtilityToggleKey = "CheckServerMustOwnAll", UtilityExclusiveGroup = "CheckServerOwnershipMode", SeparatorGroup = "CheckServerCriteriaGroup"})
-			addManual({Label = "Require Any Criterion", UtilityToggleKey = "CheckServerMustOwnOne", UtilityExclusiveGroup = "CheckServerOwnershipMode", SeparatorGroup = "CheckServerCriteriaGroup"})
 			return features
 		end)()
+	)
+
+	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
+		tabs.Matchmaking,
+		41,
+		2,
+		2,
+		"Eligible Players",
+		{
+			{InfoNoteText = "No active Server Eligibility criteria.", EligiblePlayersDisplay = true},
+		}
 	)
 
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
@@ -13111,78 +14981,42 @@ end)()
 		1,
 		"Inventory Cleanup",
 		{
+			{Label = "Auto Cleanup", UtilityToggleKey = "AutoDeleteWorstInventory", SeparatorGroup = "AutoDeleteCoreGroup"},
+			{Label = "Delete Non-Brainrots First", UtilityToggleKey = "DeleteNonBrainrotsFirst", SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory", UtilityExclusiveGroup = "DeletePriority"},
+			{Label = "Delete Worst Brainrots First", UtilityToggleKey = "DeleteWorstBrainrotsFirst", SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory", UtilityExclusiveGroup = "DeletePriority"},
+			{Label = "Start Cleanup at Inventory Count", UtilitySliderKey = "DeleteInventoryThreshold", SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory", MinValue = 1, MaxValue = 100, UnitLabel = "Inventory"},
+
+			{Label = "Avoid Deleting Traits", UtilityMultiDropdownKey = "AvoidDeletingTraits", SeparatorGroup = "AutoDeleteAvoidGroup", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
+			{Label = "Avoid Deleting Mutations", UtilityMultiDropdownKey = "AvoidDeletingMutations", SeparatorGroup = "AutoDeleteAvoidGroup", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
+			{Label = "Never Delete Signed Brainrots", UtilityToggleKey = "AvoidDeletingSignedBrainrots", SeparatorGroup = "AutoDeleteAvoidGroup", UtilityParentKey = "AutoDeleteWorstInventory"},
+			{Label = "Never Delete Locked Items", UtilityToggleKey = "AvoidDeletingLockedItems", SeparatorGroup = "AutoDeleteAvoidGroup", UtilityParentKey = "AutoDeleteWorstInventory"},
+			{Label = "Avoid Deleting Sizes", UtilityMultiDropdownKey = "AvoidDeletingSizes", SeparatorGroup = "AutoDeleteAvoidGroup", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
+			{Label = "Avoid Deleting Levels", UtilityMultiDropdownKey = "AvoidDeletingLevels", SeparatorGroup = "AutoDeleteAvoidGroup", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
+
+			{Label = "Never Delete Non-Brainrots", UtilityToggleKey = "NeverDeleteNonBrainrots", UtilityParentKey = "AutoDeleteWorstInventory", SeparatorGroup = "AutoDeleteNeverGroup"},
+			{Label = "Never Delete Selected Rarities", UtilityToggleKey = "NeverDeleteRaritiesEnabled", UtilityParentKey = "AutoDeleteWorstInventory", SeparatorGroup = "AutoDeleteNeverGroup"},
+			{Label = "Rarities to Never Delete", UtilityMultiDropdownKey = "NeverDeleteRarities", UtilityParentKeys = {"AutoDeleteWorstInventory", "NeverDeleteRaritiesEnabled"}, SeparatorGroup = "AutoDeleteNeverGroup", Placeholder = "Select", OptionsProvider = function() return BRAINROT_RARITY_OPTIONS end},
+			{Label = "Never Delete Specific Items", UtilityToggleKey = "NeverDeleteEnabled", UtilityParentKey = "AutoDeleteWorstInventory", SeparatorGroup = "AutoDeleteSpecificGroup"},
+			{Label = "Specific Brainrots & Items", SpecificCriteriaManager = true, SpecificCriteriaStateKey = "NeverDeleteSpecificItems", UtilityParentKeys = {"AutoDeleteWorstInventory", "NeverDeleteEnabled"}, SeparatorGroup = "AutoDeleteSpecificGroup"},
+
+			{Label = "Keep Copies", UtilityToggleKey = "DeleteKeepCopiesEnabled", UtilityParentKey = "AutoDeleteWorstInventory", SeparatorGroup = "AutoDeleteKeepCopiesGroup"},
 			{
-				Label = "Auto Cleanup",
-				UtilityToggleKey = "AutoDeleteWorstInventory",
-				SeparatorGroup = "AutoDeleteCoreGroup",
-			},
-			{
-				Label = "Delete Non-Brainrots First",
-				UtilityToggleKey = "DeleteNonBrainrotsFirst",
-				SeparatorGroup = "AutoDeleteCoreGroup",
-				UtilityParentKey = "AutoDeleteWorstInventory",
-				UtilityExclusiveGroup = "DeletePriority",
-			},
-			{
-				Label = "Delete Worst Brainrots First",
-				UtilityToggleKey = "DeleteWorstBrainrotsFirst",
-				SeparatorGroup = "AutoDeleteCoreGroup",
-				UtilityParentKey = "AutoDeleteWorstInventory",
-				UtilityExclusiveGroup = "DeletePriority",
-			},
-			{
-				Label = "Cleanup Threshold",
-				UtilitySliderKey = "DeleteInventoryThreshold",
-				SeparatorGroup = "AutoDeleteCoreGroup",
-				UtilityParentKey = "AutoDeleteWorstInventory",
-				MinValue = 1,
-				MaxValue = 100,
-				UnitLabel = "Inventory",
-			},
-			{Label = "Protected Traits", UtilityMultiDropdownKey = "AvoidDeletingTraits",
-				SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothTraitOptions() end},
-			{Label = "Protected Mutations", UtilityMultiDropdownKey = "AvoidDeletingMutations",
-				SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothMutationOptions() end},
-			{Label = "Protect Signed Brainrots", UtilityToggleKey = "AvoidDeletingSignedBrainrots",
-				SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory"},
-			{Label = "Protect Locked Items", UtilityToggleKey = "AvoidDeletingLockedItems",
-				SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory"},
-			{Label = "Protected Sizes", UtilityMultiDropdownKey = "AvoidDeletingSizes",
-				SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end},
-			{Label = "Protected Levels", UtilityMultiDropdownKey = "AvoidDeletingLevels",
-				SeparatorGroup = "AutoDeleteCoreGroup", UtilityParentKey = "AutoDeleteWorstInventory", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end},
-			{
-				Label = "Protect All Non-Brainrots",
-				UtilityToggleKey = "NeverDeleteNonBrainrots",
-				UtilityParentKey = "AutoDeleteWorstInventory",
-				SeparatorGroup = "NeverDeleteProtectionGroup",
-			},
-			{
-				Label = "Protect Rarities",
-				UtilityToggleKey = "NeverDeleteRaritiesEnabled",
-				UtilityParentKey = "AutoDeleteWorstInventory",
-				SeparatorGroup = "NeverDeleteProtectionGroup",
-			},
-			{
-				Label = "Protected Rarities",
-				UtilityMultiDropdownKey = "NeverDeleteRarities",
-				UtilityParentKeys = {"AutoDeleteWorstInventory", "NeverDeleteRaritiesEnabled"},
-				SeparatorGroup = "NeverDeleteProtectionGroup",
-				Placeholder = "Select",
-				OptionsProvider = function() return BRAINROT_RARITY_OPTIONS end,
-			},
-			{
-				Label = "Protect Specific Items",
-				UtilityToggleKey = "NeverDeleteEnabled",
-				UtilityParentKey = "AutoDeleteWorstInventory",
-				SeparatorGroup = "NeverDeleteSpecificItemsGroup",
-			},
-			{
-				Label = "Specific Brainrots & Items",
+				Label = "Keep Copies by Item",
 				SpecificCriteriaManager = true,
-				SpecificCriteriaStateKey = "NeverDeleteSpecificItems",
-				UtilityParentKeys = {"AutoDeleteWorstInventory", "NeverDeleteEnabled"},
-				SeparatorGroup = "NeverDeleteSpecificItemsGroup",
+				SpecificCriteriaStateKey = "DeleteKeepCopiesSpecificItems",
+				SpecificCriteriaWithMinimumCopies = true,
+				UtilityParentKeys = {"AutoDeleteWorstInventory", "DeleteKeepCopiesEnabled"},
+				SeparatorGroup = "AutoDeleteKeepCopiesItemsGroup",
+			},
+			{
+				Label = "Keep Copies by Rarity",
+				SpecificCriteriaManager = true,
+				SpecificCriteriaStateKey = "DeleteKeepCopiesRarityRules",
+				SpecificCriteriaWithMinimumCopies = true,
+				SpecificCriteriaSimple = true,
+				SpecificCriteriaOptionsProvider = function() return BRAINROT_RARITY_OPTIONS end,
+				UtilityParentKeys = {"AutoDeleteWorstInventory", "DeleteKeepCopiesEnabled"},
+				SeparatorGroup = "AutoDeleteKeepCopiesRarityGroup",
 			},
 		}
 	)
@@ -13390,6 +15224,7 @@ end)()
 			{Label = "Disconnects", UtilityToggleKey = "PrintDisconnectsToTerminal"},
 			{Label = "Inventory Cleanup", UtilityToggleKey = "PrintAutoDeletesToTerminal"},
 			{Label = "Booth Purchases", UtilityToggleKey = "PrintPurchasedBoothListingsToTerminal"},
+			{Label = "Trades", UtilityToggleKey = "PrintTradesToTerminal"},
 		}
 	)
 	do
@@ -13426,6 +15261,7 @@ end)()
 			add({Label = "Signature", UtilityMultiDropdownKey = prefix .. "BrainrotSignatures", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Any", Options = {"Signed", "Unsigned"}})
 			add({Label = "Size", UtilityMultiDropdownKey = prefix .. "BrainrotSizes", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end})
 			add({Label = "Level", UtilityMultiDropdownKey = prefix .. "BrainrotLevels", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end})
+			add({Label = "Minimum Traits Required", UtilitySliderKey = prefix .. "BrainrotMinimumTraits", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", MinValue = 0, MaxValue = 5, UnitLabel = "Traits"})
 			add({Label = "Minimum Copies Owned", UtilitySliderKey = prefix .. "MinimumCopies", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByRarity"}, SeparatorGroup = prefix .. "ListByRarityGroup", MinValue = 1, MaxValue = 100, UnitLabel = "Owned"})
 			add({Label = "List by Brainrot Name", UtilityToggleKey = prefix .. "ListByBrainrot", UtilityParentKeys = parents, UtilityExclusiveGroup = prefix .. "SelectionMode", UtilityExclusiveRequired = true, SeparatorGroup = prefix .. "ListByBrainrotGroup"})
 			add({Label = "Brainrot Name", UtilityDropdownKey = prefix .. "Brainrot", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.BoothBrainrotOptions() end})
@@ -13434,11 +15270,16 @@ end)()
 			add({Label = "Signature", UtilityMultiDropdownKey = prefix .. "BrainrotSignatures", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Any", Options = {"Signed", "Unsigned"}})
 			add({Label = "Size", UtilityMultiDropdownKey = prefix .. "BrainrotSizes", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificSizeOptions() end})
 			add({Label = "Level", UtilityMultiDropdownKey = prefix .. "BrainrotLevels", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", Placeholder = "Any", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end})
+			add({Label = "Minimum Traits Required", UtilitySliderKey = prefix .. "BrainrotMinimumTraits", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", MinValue = 0, MaxValue = 5, UnitLabel = "Traits"})
 			add({Label = "Minimum Copies Owned", UtilitySliderKey = prefix .. "MinimumCopies", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListByBrainrot"}, SeparatorGroup = prefix .. "ListByBrainrotGroup", MinValue = 1, MaxValue = 100, UnitLabel = "Owned"})
 			add({Label = "List Specific Owned Brainrot", UtilityToggleKey = prefix .. "ListSpecificBrainrot", UtilityParentKeys = parents, UtilityExclusiveGroup = prefix .. "SelectionMode", UtilityExclusiveRequired = true, SeparatorGroup = prefix .. "ListSpecificBrainrotGroup"})
 			add({Label = "Owned Brainrot", UtilityDropdownKey = prefix .. "SpecificBrainrotId", UtilityParentKeys = {prefix .. "Enabled", prefix .. "ListSpecificBrainrot"}, SeparatorGroup = prefix .. "ListSpecificBrainrotGroup", Placeholder = "Select", OptionsProvider = function() return autoServerHopState.RefreshOwnedBrainrotOptions() end, OptionLabelProvider = function(id) return autoServerHopState.OwnedBrainrotOptionLabel(id) end, ClearIfMissing = true})
 			add({Label = "Minimum Inventory Count", UtilitySliderKey = prefix .. "InventoryThreshold", UtilityParentKeys = parents, SeparatorGroup = prefix .. "ListingConditionsGroup", MinValue = 1, MaxValue = 100, UnitLabel = "Inventory"})
-			add({Label = "Listing " .. tostring(index) .. " Tokens", UtilitySliderKey = prefix .. "Tokens", UtilityParentKeys = parents, SeparatorGroup = prefix .. "ListingConditionsGroup", MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"})
+			add({Label = "Starting Price", UtilitySliderKey = prefix .. "Tokens", UtilityParentKeys = parents, SeparatorGroup = prefix .. "ListingConditionsGroup", MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"})
+			add({Label = "Dynamic Repricing", UtilityToggleKey = prefix .. "DynamicRepricing", UtilityParentKeys = parents, SeparatorGroup = prefix .. "DynamicRepricingGroup"})
+			add({Label = "Minimum Price", UtilitySliderKey = prefix .. "MinimumPrice", UtilityParentKeys = {prefix .. "Enabled", prefix .. "DynamicRepricing"}, SeparatorGroup = prefix .. "DynamicRepricingGroup", MinValue = 1, MaxValue = 1000000, MaxValueProvider = function() return math.max(1, math.floor(tonumber(autoServerHopState.Utility[prefix .. "Tokens"]) or 1)) end, UnitLabel = "Tokens"})
+			add({Label = "Price Change", UtilitySliderKey = prefix .. "PriceChange", UtilityParentKeys = {prefix .. "Enabled", prefix .. "DynamicRepricing"}, SeparatorGroup = prefix .. "DynamicRepricingGroup", MinValue = 1, MaxValue = 1000000, UnitLabel = "Tokens"})
+			add({Label = "Change After X Minutes Unsold", UtilitySliderKey = prefix .. "RepriceMinutes", UtilityParentKeys = {prefix .. "Enabled", prefix .. "DynamicRepricing"}, SeparatorGroup = prefix .. "DynamicRepricingGroup", MinValue = 1, MaxValue = 60, UnitLabel = "Minutes"})
 			add({Label = "Message When Listed", UtilityToggleKey = prefix .. "MessageWhenListed", UtilityParentKeys = parents, SeparatorGroup = prefix .. "MessageWhenListedGroup"})
 			add({Label = "Message", UtilityTextKey = prefix .. "ListedMessage", UtilityParentKeys = {prefix .. "Enabled", prefix .. "MessageWhenListed"}, SeparatorGroup = prefix .. "MessageWhenListedGroup", Placeholder = "Message to send when listed"})
 			add({Label = "Message Delay", UtilitySliderKey = prefix .. "MessageDelay", UtilityParentKeys = {prefix .. "Enabled", prefix .. "MessageWhenListed"}, SeparatorGroup = prefix .. "MessageWhenListedGroup", MinValue = 0, MaxValue = 30, Step = 0.25, Decimals = 2, UnitLabel = "Seconds"})
@@ -13446,13 +15287,53 @@ end)()
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Booth, 16, 1, 1, "Booth Settings", boothSettings)
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Booth, 30, 2, 1, "Booth Messages", boothMessages)
 		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Booth, 31, 1, 2, "Listings", listings)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
+			tabs.Booth,
+			42,
+			2,
+			2,
+			"Auto Buy Booth Items",
+			{
+				{Label = "Auto Buy Booth Items", UtilityToggleKey = "AutoBoothBuyEnabled", SeparatorGroup = "AutoBoothBuyCoreGroup"},
+				{
+					InfoNoteText = "Rules below are shared with Booth Server Eligibility.",
+					VisibilityAnyUtilityParentKeys = {"AutoBoothBuyEnabled", "CheckServerHopNoEligibleBooths"},
+					SeparatorGroup = "AutoBoothBuyCriteriaGroup",
+				},
+				{
+					Label = "Specific Brainrots & Items",
+					SpecificCriteriaManager = true,
+					SpecificCriteriaStateKey = "AutoBoothBuySpecificRules",
+					SpecificCriteriaOptionsProvider = function()
+						return autoServerHopState.AllDeletableItemOptions()
+					end,
+					SpecificCriteriaWithMaxTokens = true,
+					SpecificCriteriaWithOwnedLimit = true,
+					VisibilityAnyUtilityParentKeys = {"AutoBoothBuyEnabled", "CheckServerHopNoEligibleBooths"},
+					SeparatorGroup = "AutoBoothBuySpecificGroup",
+				},
+				{
+					Label = "Brainrot Rarities",
+					SpecificCriteriaManager = true,
+					SpecificCriteriaStateKey = "AutoBoothBuyRarityRules",
+					SpecificCriteriaOptionsProvider = function()
+						return BRAINROT_RARITY_OPTIONS
+					end,
+					SpecificCriteriaTreatAsBrainrot = true,
+					SpecificCriteriaWithMaxTokens = true,
+					SpecificCriteriaWithOwnedLimit = true,
+					VisibilityAnyUtilityParentKeys = {"AutoBoothBuyEnabled", "CheckServerHopNoEligibleBooths"},
+					SeparatorGroup = "AutoBoothBuyRarityGroup",
+				},
+			}
+		)
 	end
 	do
 		local function fallbackPriorityOptions()
 			return FALLBACK_PRIORITY_OPTIONS
 		end
 		local features = {
-			{Label = "Customize Fallback Priority", UtilityToggleKey = "FallbackCustomPriority", SeparatorGroup = "MinigameFallbackPriorityGroup"},
+			{Label = "Customize Backup Order", UtilityToggleKey = "FallbackCustomPriority", SeparatorGroup = "MinigameFallbackPriorityGroup"},
 		}
 		for priorityIndex = 1, 5 do
 			local slotIndex = priorityIndex
@@ -13492,15 +15373,15 @@ end)()
 		features[#features + 1] = {Label = "Excluded Levels", UtilityMultiDropdownKey = "FallbackAvoidLevels", SeparatorGroup = "MinigameFallbackSharedFiltersGroup", VisibilityAnyUtilityParentKeys = {"FallbackToNextHigherRarityBrainrot", "FallbackToNextLowerRarityBrainrot"}, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end}
 		features[#features + 1] = {Label = "Best Available Brainrots", UtilityToggleKey = "FallbackToBestAvailableBrainrots", SeparatorGroup = "MinigameFallbackBestGroup"}
 		features[#features + 1] = {Label = "Brainrots to Offer", UtilitySliderKey = "FallbackBestAvailableBrainrotAmount", UtilityParentKey = "FallbackToBestAvailableBrainrots", SeparatorGroup = "MinigameFallbackBestGroup", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"}
-		features[#features + 1] = {Label = "Token Fallback", UtilityToggleKey = "FallbackToTokens"}
+		features[#features + 1] = {Label = "Use Tokens as Backup", UtilityToggleKey = "FallbackToTokens"}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 			features[#features + 1] = {Label = rarity .. " Tokens", UtilitySliderKey = "FallbackTokens" .. rarity, UtilityParentKey = "FallbackToTokens", SeparatorGroup = "FallbackTokens" .. rarity .. "Group", MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"}
 			features[#features + 1] = {Label = rarity .. " Offer All Tokens", UtilityToggleKey = "Fallback" .. rarity .. "OfferAllTokens", UtilityParentKey = "FallbackToTokens", SeparatorGroup = "FallbackTokens" .. rarity .. "Group"}
 		end
-		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Fallbacks, 17, 1, 1, "Minigame Fallbacks", features)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Fallbacks, 17, 1, 1, "Minigame Backup Offers", features)
 
 		local regularFeatures = {
-			{Label = "Customize Fallback Priority", UtilityToggleKey = "RegularFallbackCustomPriority", SeparatorGroup = "RegularFallbackPriorityGroup"},
+			{Label = "Customize Backup Order", UtilityToggleKey = "RegularFallbackCustomPriority", SeparatorGroup = "RegularFallbackPriorityGroup"},
 		}
 		for priorityIndex = 1, 5 do
 			local slotIndex = priorityIndex
@@ -13540,12 +15421,12 @@ end)()
 		regularFeatures[#regularFeatures + 1] = {Label = "Excluded Levels", UtilityMultiDropdownKey = "RegularFallbackAvoidLevels", SeparatorGroup = "RegularFallbackSharedFiltersGroup", VisibilityAnyUtilityParentKeys = {"RegularFallbackToNextHigherRarityBrainrot", "RegularFallbackOffers"}, Placeholder = "Select", OptionsProvider = function() return autoServerHopState.SpecificLevelOptions() end}
 		regularFeatures[#regularFeatures + 1] = {Label = "Best Available Brainrots", UtilityToggleKey = "RegularFallbackToBestAvailableBrainrots", SeparatorGroup = "RegularFallbackBestGroup"}
 		regularFeatures[#regularFeatures + 1] = {Label = "Brainrots to Offer", UtilitySliderKey = "RegularFallbackBestAvailableBrainrotAmount", UtilityParentKey = "RegularFallbackToBestAvailableBrainrots", SeparatorGroup = "RegularFallbackBestGroup", MinValue = 1, MaxValue = 6, UnitLabel = "Brainrots"}
-		regularFeatures[#regularFeatures + 1] = {Label = "Token Fallback", UtilityToggleKey = "RegularFallbackToTokens"}
+		regularFeatures[#regularFeatures + 1] = {Label = "Use Tokens as Backup", UtilityToggleKey = "RegularFallbackToTokens"}
 		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
 			regularFeatures[#regularFeatures + 1] = {Label = rarity .. " Tokens", UtilitySliderKey = "RegularFallbackTokens" .. rarity, UtilityParentKey = "RegularFallbackToTokens", SeparatorGroup = "RegularFallbackTokens" .. rarity .. "Group", MinValue = 0, MaxValue = 1000000, UnitLabel = "Tokens"}
 			regularFeatures[#regularFeatures + 1] = {Label = rarity .. " Offer All Tokens", UtilityToggleKey = "RegularFallback" .. rarity .. "OfferAllTokens", UtilityParentKey = "RegularFallbackToTokens", SeparatorGroup = "RegularFallbackTokens" .. rarity .. "Group"}
 		end
-		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Fallbacks, 36, 2, 1, "Regular Trade Fallbacks", regularFeatures)
+		autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(tabs.Fallbacks, 36, 2, 1, "Regular Trade Backup Offers", regularFeatures)
 	end
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
 		tabs.Matchmaking,
@@ -13558,7 +15439,7 @@ end)()
 			{Label = "Canceled Trades Before Blacklist", UtilitySliderKey = "TempBlacklistAfterCanceledTrades", UtilityParentKey = "TempBlacklistPlayersAfterCanceledTrade", MinValue = 1, MaxValue = 10, UnitLabel = "Trades"},
 			{Label = "Permanent Blacklist", UtilityToggleKey = "PermanentBlacklistPlayersAfterCanceledTrade"},
 			{Label = "Canceled Trades Before Blacklist", UtilitySliderKey = "PermanentBlacklistAfterCanceledTrades", UtilityParentKey = "PermanentBlacklistPlayersAfterCanceledTrade", MinValue = 1, MaxValue = 10, UnitLabel = "Trades"},
-			{Label = "Player Revisit Cooldown", UtilitySliderKey = "AvoidSamePlayerSeconds", MinValue = 1, MaxValue = 60, UnitLabel = "Seconds"},
+			{Label = "Wait Before Same Player", UtilitySliderKey = "AvoidSamePlayerSeconds", MinValue = 1, MaxValue = 60, UnitLabel = "Seconds"},
 		}
 	)
 	autoServerHopState.RuntimeCreateEmptyCollapsiblePanel(
@@ -13805,6 +15686,10 @@ local function syncRightPanelGeometry(
 		contentHeight,
 		panelContentBottom
 			+ contentEdgeSpacing
+		)
+		+ math.max(
+			0,
+			tonumber(autoServerHopState.RuntimeDropdownBottomReserve) or 0
 		)
 	rightContent.CanvasSize = U2O(
 		0,
@@ -14134,7 +16019,7 @@ if MINIGAME_MODE then
 				TradeRequest = selected("AdaptiveTradeRequestCriteriaMode", "AdaptiveCriteriaApplyTradeRequests", "AdaptiveTradeRequestMode"),
 				RegularOffer = selected("AdaptiveRegularOfferCriteriaMode", "AdaptiveCriteriaApplyRegularOffers", "AdaptiveRegularOfferMode"),
 				AutoCancel = selected("AdaptiveAutoCancelCriteriaMode", "AdaptiveCriteriaApplyAutoCancel", "AdaptiveAutoCancelMode"),
-				CheckServer = selected("AdaptiveCheckServerCriteriaMode", "AdaptiveCriteriaApplyServerEligibility", "AdaptiveCheckServerMode"),
+				-- Server Eligibility follows Auto Accept's criteria mode directly.
 			}
 			local anyAdaptive = false
 			for _, mode in pairs(modes) do if mode ~= "Manual" then anyAdaptive = true break end end
@@ -14249,6 +16134,9 @@ if MINIGAME_MODE then
 					autoServerHopState.ServerTimeEnabled = false
 					autoServerHopState.TimeSinceLastGameEnabled = true
 					autoServerHopState.TimeSinceLastGame = 1
+					autoServerHopState.NoOwnBoothPurchaseEnabled = false
+					autoServerHopState.NoBoothBuyEnabled = false
+					autoServerHopState.NoRegularTradeEnabled = false
 					autoServerHopState.WinWagerTimeAdded = 0
 					autoServerHopState.LeaveIfScriptUserInServer = true
 					autoServerHopState.ServerBlacklistMinutes = 30
@@ -14279,6 +16167,9 @@ if MINIGAME_MODE then
 					autoServerHopState.Utility.AvoidSamePlayerSeconds = 30
 					autoServerHopState.Utility.CheckServerHopNobodyMinigamesArea = true
 					autoServerHopState.Utility.CheckServerHopPlayedEveryoneMinigamesArea = true
+					autoServerHopState.Utility.CheckServerHopNoEligibleBooths = false
+					autoServerHopState.Utility.CheckServerHopNoEligibleTradePlayers = false
+					autoServerHopState.Utility.AutoSendTradesEnabled = false
 					autoServerHopState.Utility.CheckServerHopNobodyServer = false
 					autoServerHopState.Utility.CheckServerHopPlayedEveryoneServer = false
 					autoServerHopState.Utility.AutoChooseGame = true
@@ -14456,14 +16347,7 @@ if MINIGAME_MODE then
 					autoSitState.OneOfTwo.Targets.Tokens = true
 					autoSitState.OneOfTwo.Tokens = tokenMinimum
 
-					local checkRarities = autoServerHopState.Utility.CheckServerBrainrotRarities
-					if type(checkRarities) ~= "table" then
-						checkRarities = {}
-						autoServerHopState.Utility.CheckServerBrainrotRarities = checkRarities
-					end
-					for index, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
-						checkRarities[rarity] = index >= targetIndex and true or nil
-					end
+					-- Server Eligibility reads these same Auto Accept targets directly.
 					if changed then
 						autoServerHopState.RuntimeCheckServerHopRequested = false
 						local refresh = rawget(_G, "__DROIDHUB_REFRESH_ALL_SETTINGS_UI")
@@ -15290,8 +17174,17 @@ end)()
 			or string.find(string.lower(brainrotName), "%f[%a]meta%f[%A]") ~= nil
 		return rarity == "Infinity" and meta and "Meta" or rarity
 	end
+	local snapshotCache = setmetatable({}, {__mode = "k"})
+	local PUBLIC_SNAPSHOT_TTL = 0.20
 	local function snapshot(player)
 		if typeof(player) ~= "Instance" or not player:IsA("Player") then return nil end
+		local now = os.clock()
+		local cached = snapshotCache[player]
+		if type(cached) == "table"
+			and now - (tonumber(cached.At) or 0) <= PUBLIC_SNAPSHOT_TTL
+		then
+			return cached.Value
+		end
 		local records = {}
 		local function scan(container)
 			if not container then return end
@@ -15308,9 +17201,331 @@ end)()
 		end
 		scan(player:FindFirstChildOfClass("Backpack"))
 		scan(player.Character)
-		return {Records = records, Tokens = publicTokens(player)}
+		local result = {Records = records, Tokens = publicTokens(player)}
+		snapshotCache[player] = {At = now, Value = result}
+		return result
 	end
 	rawset(_G, "__DROIDHUB_PUBLIC_OWNERSHIP_SNAPSHOT", snapshot)
+
+	-- Auto Accept is the single source of truth for minigame-player Server
+	-- Eligibility. The matcher intentionally uses only client-replicated ownership,
+	-- matching what the client can actually know before entering a trade/minigame.
+	autoServerHopState.PlayerEligibleForAutoAccept = function(player)
+		if typeof(player) ~= "Instance"
+			or not player:IsA("Player")
+			or player == Players.LocalPlayer
+			or player.Parent ~= Players
+		then
+			return false
+		end
+
+		local utility = autoServerHopState.Utility
+		local userId = tostring(player.UserId)
+		local scriptUsers = autoServerHopState.RuntimeScriptUserIds
+		if type(scriptUsers) == "table" and scriptUsers[userId] == true then
+			return false
+		end
+		local tempChecker = autoServerHopState.IsTempBlacklistedUser
+		if utility.TempBlacklistPlayersAfterCanceledTrade == true
+			and type(tempChecker) == "function"
+			and tempChecker(player.UserId)
+		then
+			return false
+		end
+		if utility.PermanentBlacklistPlayersAfterCanceledTrade == true
+			and type(utility.PermanentBlacklistedUserIds) == "table"
+			and utility.PermanentBlacklistedUserIds[userId] == true
+		then
+			return false
+		end
+
+		local ownership = snapshot(player)
+		if type(ownership) ~= "table" then return false end
+		local records = type(ownership.Records) == "table" and ownership.Records or {}
+		local adaptive = utility.AdaptiveCriteriaApplyAcceptOffers == true
+
+		local function recordMatchesRarity(record, rarity)
+			if type(record) ~= "table" or record.Rarity ~= rarity then return false end
+			if adaptive then return true end
+			local tool = record.Tool
+			if typeof(tool) ~= "Instance" or not tool:IsA("Tool") then return false end
+			return autoServerHopState.ToolMatchesSpecificRule(tool, {
+				Mutations = utility["AutoAccept" .. rarity .. "Mutations"],
+				Traits = utility["AutoAccept" .. rarity .. "Traits"],
+				Signatures = utility["AutoAccept" .. rarity .. "Signatures"],
+				Sizes = utility["AutoAccept" .. rarity .. "Sizes"],
+				Levels = utility["AutoAccept" .. rarity .. "Levels"],
+				MinimumTraitCount = utility["AutoAccept" .. rarity .. "MinimumTraits"],
+			})
+		end
+
+		local function recordMatchesSpecific(record, rule)
+			if type(record) ~= "table"
+				or type(rule) ~= "table"
+				or rule.Item == nil
+				or tostring(rule.Item) == ""
+			then
+				return false
+			end
+			local tool = record.Tool
+			local names = {tostring(record.Name or "")}
+			if typeof(tool) == "Instance" and tool:IsA("Tool") then
+				names[#names + 1] = tostring(tool:GetAttribute("BrainrotName") or "")
+				names[#names + 1] = tostring(tool:GetAttribute("ItemName") or "")
+				names[#names + 1] = tostring(tool:GetAttribute("DisplayName") or "")
+				names[#names + 1] = tostring(tool.Name or "")
+			end
+			local nameMatched = false
+			for _, name in ipairs(names) do
+				if autoServerHopState.SpecificItemNamesEquivalent(name, rule.Item) then
+					nameMatched = true
+					break
+				end
+			end
+			if not nameMatched then return false end
+			if typeof(tool) == "Instance" and tool:IsA("Tool") then
+				return autoServerHopState.ToolMatchesSpecificRule(tool, rule)
+			end
+			return not autoServerHopState.SpecificRuleHasActiveAttributes(rule)
+		end
+
+		local enabled, matched = 0, 0
+		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+			local config = autoAcceptState and autoAcceptState[rarity]
+			if type(config) == "table" and config.Enabled == true then
+				enabled += 1
+				local required = adaptive
+					and 1
+					or math.clamp(
+						math.floor(tonumber(config.Amount) or 1),
+						1,
+						6
+					)
+				local count = 0
+				for _, record in ipairs(records) do
+					if recordMatchesRarity(record, rarity) then
+						count += 1
+						if count >= required then break end
+					end
+				end
+				if count >= required then matched += 1 end
+			end
+		end
+
+		local tokenConfig = autoAcceptState and autoAcceptState.Tokens
+		if type(tokenConfig) == "table" and tokenConfig.Enabled == true then
+			enabled += 1
+			local required = math.clamp(
+				math.floor(tonumber(tokenConfig.Amount) or 1),
+				1,
+				1000000
+			)
+			if (tonumber(ownership.Tokens) or 0) >= required then
+				matched += 1
+			end
+		end
+
+		for _, rule in ipairs(
+			type(utility.AutoAcceptSpecificItems) == "table"
+				and utility.AutoAcceptSpecificItems
+				or {}
+		) do
+			if type(rule) == "table"
+				and rule.Item ~= nil
+				and tostring(rule.Item) ~= ""
+			then
+				enabled += 1
+				local hit = false
+				for _, record in ipairs(records) do
+					if recordMatchesSpecific(record, rule) then
+						hit = true
+						break
+					end
+				end
+				if hit then matched += 1 end
+			end
+		end
+
+		if enabled == 0 then return false end
+		if utility.AutoAcceptMustHaveAll == true then
+			return matched == enabled
+		end
+		return matched > 0
+	end
+
+	-- Shared recipient matcher for Auto Send Trades and the matching Server
+	-- Eligibility condition. This intentionally uses only client-replicated public
+	-- ownership data, exactly like Auto Sit and incoming Trade Request criteria.
+	autoServerHopState.PlayerEligibleForRegularTradeSend = function(player)
+		if typeof(player) ~= "Instance"
+			or not player:IsA("Player")
+			or player == Players.LocalPlayer
+			or player.Parent ~= Players
+			or player:GetAttribute("Seated") == true
+		then
+			return false
+		end
+
+		local utility = autoServerHopState.Utility
+		local userId = tostring(player.UserId)
+		local scriptUsers = autoServerHopState.RuntimeScriptUserIds
+		if type(scriptUsers) == "table" and scriptUsers[userId] == true then
+			return false
+		end
+		local tempChecker = autoServerHopState.IsTempBlacklistedUser
+		if utility.TempBlacklistPlayersAfterCanceledTrade == true
+			and type(tempChecker) == "function"
+			and tempChecker(player.UserId)
+		then
+			return false
+		end
+		if utility.PermanentBlacklistPlayersAfterCanceledTrade == true
+			and type(utility.PermanentBlacklistedUserIds) == "table"
+			and utility.PermanentBlacklistedUserIds[userId] == true
+		then
+			return false
+		end
+
+		local ownership = snapshot(player)
+		if type(ownership) ~= "table" then return false end
+		local records = type(ownership.Records) == "table" and ownership.Records or {}
+
+		local filters = {
+			Mutations = utility.AutoSendTradeMutations,
+			Traits = utility.AutoSendTradeTraits,
+			Signatures = utility.AutoSendTradeSignatures,
+			Sizes = utility.AutoSendTradeSizes,
+			Levels = utility.AutoSendTradeLevels,
+			MinimumTraitCount = utility.AutoSendTradeMinimumTraits,
+		}
+		local function recordPassesFilters(record)
+			local tool = type(record) == "table" and record.Tool or nil
+			if typeof(tool) ~= "Instance" or not tool:IsA("Tool") then
+				return false
+			end
+			return autoServerHopState.ToolMatchesSpecificRule(tool, filters)
+		end
+		local function recordMatchesSpecific(record, rule)
+			if type(record) ~= "table"
+				or type(rule) ~= "table"
+				or rule.Item == nil
+				or tostring(rule.Item) == ""
+			then
+				return false
+			end
+			local tool = record.Tool
+			local names = {tostring(record.Name or "")}
+			if typeof(tool) == "Instance" and tool:IsA("Tool") then
+				names[#names + 1] = tostring(tool:GetAttribute("BrainrotName") or "")
+				names[#names + 1] = tostring(tool:GetAttribute("ItemName") or "")
+				names[#names + 1] = tostring(tool:GetAttribute("DisplayName") or "")
+				names[#names + 1] = tostring(tool.Name or "")
+			end
+			local nameMatched = false
+			for _, name in ipairs(names) do
+				if autoServerHopState.SpecificItemNamesEquivalent(name, rule.Item) then
+					nameMatched = true
+					break
+				end
+			end
+			if not nameMatched then return false end
+			if typeof(tool) == "Instance" and tool:IsA("Tool") then
+				return autoServerHopState.ToolMatchesSpecificRule(tool, rule)
+			end
+			return not autoServerHopState.SpecificRuleHasActiveAttributes(rule)
+		end
+
+		local enabled, matched = 0, 0
+		local rarityMap = type(utility.AutoSendTradeRarities) == "table"
+			and utility.AutoSendTradeRarities
+			or {}
+		for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
+			if rarityMap[rarity] == true then
+				enabled += 1
+				local hit = false
+				for _, record in ipairs(records) do
+					if record.Rarity == rarity and recordPassesFilters(record) then
+						hit = true
+						break
+					end
+				end
+				if hit then matched += 1 end
+			end
+		end
+
+		for _, rule in ipairs(
+			type(utility.AutoSendTradeSpecificItems) == "table"
+				and utility.AutoSendTradeSpecificItems
+				or {}
+		) do
+			if type(rule) == "table"
+				and rule.Item ~= nil
+				and tostring(rule.Item) ~= ""
+			then
+				enabled += 1
+				local hit = false
+				for _, record in ipairs(records) do
+					if recordMatchesSpecific(record, rule) then
+						hit = true
+						break
+					end
+				end
+				if hit then matched += 1 end
+			end
+		end
+
+		local minimumTokens = math.max(
+			0,
+			math.floor(tonumber(utility.AutoSendTradeMinimumTokens) or 0)
+		)
+		if minimumTokens > 0 then
+			enabled += 1
+			if (tonumber(ownership.Tokens) or 0) >= minimumTokens then
+				matched += 1
+			end
+		end
+
+		-- With no ownership criteria configured, Auto Send Trades simply targets
+		-- otherwise-valid players. This keeps the feature useful as a general
+		-- automatic request sender while still allowing strict filtering.
+		if enabled == 0 then return true end
+		if utility.AutoSendTradeMustOwnAll == true then
+			return matched == enabled
+		end
+		return matched > 0
+	end
+	local priorityRarityRank = {}
+	for index, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do priorityRarityRank[rarity] = index end
+	autoServerHopState.PublicPlayerPriorityScore = function(player, specificRules)
+		local ownership = snapshot(player)
+		if type(ownership) ~= "table" then return -math.huge end
+		local highestRank, highestSpecificRank, rankPoints, count = 0, 0, 0, 0
+		for _, record in ipairs(type(ownership.Records) == "table" and ownership.Records or {}) do
+			local rank = priorityRarityRank[record.Rarity] or 0
+			if rank > 0 then
+				highestRank = math.max(highestRank, rank)
+				rankPoints += rank
+				count += 1
+				if type(specificRules) == "table" then
+					for _, rule in ipairs(specificRules) do
+						if type(rule) == "table" and rule.Item ~= nil and tostring(rule.Item) ~= "" then
+							local tool = record.Tool
+							local nameMatched = autoServerHopState.SpecificItemNamesEquivalent(record.Name, rule.Item)
+								or (typeof(tool) == "Instance" and autoServerHopState.SpecificItemNamesEquivalent(tool.Name, rule.Item))
+							if nameMatched and (typeof(tool) ~= "Instance" or autoServerHopState.ToolMatchesSpecificRule(tool, rule)) then
+								highestSpecificRank = math.max(highestSpecificRank, rank)
+							end
+						end
+					end
+				end
+			end
+		end
+		-- Rarity always dominates. Within the same rarity, a configured specific
+		-- Brainrot/item beats a generic rarity match; tokens are only a tie-breaker.
+		local specificBonus = highestSpecificRank == highestRank and highestRank > 0 and 100000000 or 0
+		local tokens = math.max(0, tonumber(ownership.Tokens) or 0)
+		return (highestRank * 1000000000) + specificBonus + (rankPoints * 10000) + (count * 100) + math.min(tokens, 1000000000) / 1000000
+	end
 end)()
 if MINIGAME_MODE then
 	task.spawn(function()
@@ -15609,7 +17824,10 @@ if MINIGAME_MODE then
 				local checker = autoServerHopState.IsTempBlacklistedUser
 				if type(checker) == "function" and checker(player.UserId) then return true end
 				local temporary = autoServerHopState.RuntimeTempBlacklistedUserIds
-				if type(temporary) == "table" and temporary[userId] == true then return true end
+				local untilAt = type(temporary) == "table"
+					and tonumber(temporary[userId])
+					or nil
+				if untilAt and os.clock() < untilAt then return true end
 			end
 			if utility.PermanentBlacklistPlayersAfterCanceledTrade == true then
 				local permanent = utility.PermanentBlacklistedUserIds
@@ -15637,6 +17855,7 @@ if MINIGAME_MODE then
 				Signatures = utility[prefix .. "Signatures"],
 				Sizes = utility[prefix .. "Sizes"],
 				Levels = utility[prefix .. "Levels"],
+				MinimumTraitCount = utility[prefix .. "MinimumTraits"],
 			})
 		end
 		local function toolSpecificNameAS(tool)
@@ -15758,7 +17977,11 @@ if MINIGAME_MODE then
 		local farmRarityRankAS = {}
 		for index, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do farmRarityRankAS[rarity] = index end
 		local function annotateFarmValueAS(candidate, player)
-			if not candidate or not player or autoServerHopState.Utility.SimpleAutofarmEnabled ~= true then return end
+			if not candidate or not player then return end
+			local priority = autoServerHopState.PublicPlayerPriorityScore
+			candidate.GeneralPriorityScore = type(priority) == "function"
+				and priority(player, autoServerHopState.Utility.AutoSitSpecificItems) or 0
+			if autoServerHopState.Utility.SimpleAutofarmEnabled ~= true then return end
 			local ownership = ownershipSnapshotAS(player)
 			local highestRank, highestQualifyingRank, progressScore, qualifyingCount = 0, 0, 0, 0
 			local targetRank = farmRarityRankAS[autoServerHopState.RuntimeSimpleAutofarmTargetRarity] or 1
@@ -15805,6 +18028,9 @@ if MINIGAME_MODE then
 					if at ~= bt then return at > bt end
 				end
 			end
+			local ap = tonumber(a.GeneralPriorityScore) or 0
+			local bp = tonumber(b.GeneralPriorityScore) or 0
+			if ap ~= bp then return ap > bp end
 			if a.PromptReady ~= b.PromptReady then return a.PromptReady == true end
 			if a.MachineDistance ~= b.MachineDistance then return a.MachineDistance < b.MachineDistance end
 			return a.TravelDistance < b.TravelDistance
@@ -15827,7 +18053,7 @@ if MINIGAME_MODE then
 						local model = root and tableFromCustomSeatWeldAS(root, folder)
 						local seatPart = humanoid and humanoid.SeatPart
 						if not model and seatPart and seatPart:IsDescendantOf(folder) then model = seatPart:FindFirstAncestor("Table") end
-						if model and model ~= excludedModel and model ~= blockedPreviousTableAS and not seen[model] and mustOwnMatchesAS(player) then
+						if model and model ~= excludedModel and not seen[model] and mustOwnMatchesAS(player) then
 							seen[model] = true
 							local candidate = bestOpenSeatAS(model, 1)
 							if candidate then
@@ -15840,17 +18066,29 @@ if MINIGAME_MODE then
 				end
 			else
 				for _, model in ipairs(folder:GetChildren()) do
-					if model:IsA("Model") and model.Name == "Table" and model ~= excludedModel and model ~= blockedPreviousTableAS then
+					if model:IsA("Model") and model.Name == "Table" and model ~= excludedModel then
 						local count = replicatedTablePlayerCountAS(model)
 						if count == nil or count < 2 then
 							local partner = waitingPartnerAtTableAS(model, count)
 							local candidate = bestOpenSeatAS(model, count)
 							if candidate then
-								if typeof(partner) == "Instance" and partner:IsA("Player") and mustOwnMatchesAS(partner) then
+								if typeof(partner) == "Instance"
+									and partner:IsA("Player")
+									and mustOwnMatchesAS(partner)
+								then
+									-- The table we just left is blocked from normal
+									-- re-entry, but becomes valid again immediately if
+									-- it is now a real 1/2 with an eligible opponent.
 									candidate.Partner, candidate.LockedAsPartner = partner, true
 									annotateFarmValueAS(candidate, partner)
-									if betterPartnerAS(candidate, bestPartner) then bestPartner = candidate end
-								elseif partner == nil and (count == nil or count == 0) and betterEmptyAS(candidate, bestEmpty) then
+									if betterPartnerAS(candidate, bestPartner) then
+										bestPartner = candidate
+									end
+								elseif model ~= blockedPreviousTableAS
+									and partner == nil
+									and (count == nil or count == 0)
+									and betterEmptyAS(candidate, bestEmpty)
+								then
 									bestEmpty = candidate
 								end
 							end
@@ -16856,6 +19094,8 @@ if MINIGAME_MODE then
 				or utility.CheckServerHopPlayedEveryoneServer == true
 				or utility.CheckServerHopNobodyMinigamesArea == true
 				or utility.CheckServerHopPlayedEveryoneMinigamesArea == true
+				or utility.CheckServerHopNoEligibleBooths == true
+				or utility.CheckServerHopNoEligibleTradePlayers == true
 			if not checkEnabled then return false end
 			return autoServerHopState.RuntimeCheckServerStartupResolved ~= true
 				or autoServerHopState.RuntimeCheckServerHopRequested == true
@@ -17104,7 +19344,10 @@ if MINIGAME_MODE then
 				local checker = autoServerHopState.IsTempBlacklistedUser
 				if type(checker) == "function" and checker(player.UserId) then return true end
 				local temporary = autoServerHopState.RuntimeTempBlacklistedUserIds
-				if type(temporary) == "table" and temporary[userId] == true then return true end
+				local untilAt = type(temporary) == "table"
+					and tonumber(temporary[userId])
+					or nil
+				if untilAt and os.clock() < untilAt then return true end
 			end
 			if utility.PermanentBlacklistPlayersAfterCanceledTrade == true then
 				local permanent = utility.PermanentBlacklistedUserIds
@@ -17143,6 +19386,7 @@ if MINIGAME_MODE then
 				Signatures = utility[prefix .. "Signatures"],
 				Sizes = utility[prefix .. "Sizes"],
 				Levels = utility[prefix .. "Levels"],
+				MinimumTraitCount = utility[prefix .. "MinimumTraits"],
 			})
 		end
 		local function toolSpecificNameAC(tool)
@@ -18211,10 +20455,7 @@ if MINIGAME_MODE then
 		local ReplicatorCS = requireCS(
 			RSCS:WaitForChild("Client"):WaitForChild("Modules"):WaitForChild("ReplicatorClient")
 		)
-		local EconomyMathCS = requireCS(
-			SharedCS:WaitForChild("utils"):WaitForChild("EconomyMath")
-		)
-		if not (ReplicatorCS and EconomyMathCS) then return end
+		if not ReplicatorCS then return end
 		local playerSeenAtCS = {}
 		local minigameBoundsCacheCS
 		local minigameBoundsBuiltAtCS = 0
@@ -18228,187 +20469,11 @@ if MINIGAME_MODE then
 			playerSeenAtCS[tostring(player.UserId)] = nil
 		end)
 		local tryCS = safeTryIndex
-		local function publicBrainrotRarityCS(tool, name)
-			local explicit = tool:GetAttribute("Rarity")
-				or tool:GetAttribute("BrainrotRarity")
-			if explicit == "Meta" then return "Meta" end
-			local rarity = type(explicit) == "string" and explicit or nil
-			if not rarity then
-				pcall(function()
-					rarity = EconomyMathCS.GetBrainrotRarity(name)
-				end)
-			end
-			local metaMarked = tool:GetAttribute("Meta") == true
-				or tool:GetAttribute("IsMeta") == true
-				or (
-					type(name) == "string"
-					and string.find(string.lower(name), "%f[%a]meta%f[%A]") ~= nil
-				)
-			return rarity == "Infinity" and metaMarked and "Meta" or rarity
-		end
-		local function toolMutationCS(tool)
-			if not tool then return nil end
-			local value = tool:GetAttribute("Mutation") or tool:GetAttribute("BrainrotMutation")
-			return type(value) == "string" and value or nil
-		end
-		local function toolTraitsCS(tool)
-			local result = {}
-			if not tool then return result end
-			for _, attributeName in ipairs({"Traits", "BrainrotTraits", "Trait"}) do
-				local value = tool:GetAttribute(attributeName)
-				if type(value) == "string" then
-					for trait in string.gmatch(value, "[^,|;]+") do
-						trait = string.gsub(trait, "^%s*(.-)%s*$", "%1")
-						if trait ~= "" then result[trait] = true end
-					end
-				end
-			end
-			return result
-		end
-		local function brainrotPassesGlobalFiltersCS(tool)
-			local utility = autoServerHopState.Utility
-			if utility.AdaptiveCriteriaApplyServerEligibility == true then return true end
-			return autoServerHopState.ToolMatchesSpecificRule(tool, {
-				Mutations = utility.CheckServerMutations,
-				Traits = utility.CheckServerTraits,
-				Signatures = utility.CheckServerSignatures,
-				Sizes = utility.CheckServerSizes,
-				Levels = utility.CheckServerLevels,
-			})
-		end
-		local function toolSpecificNameCS(tool)
-			if not tool or not tool:IsA("Tool") then return "" end
-			return tostring(
-				tool:GetAttribute("BrainrotName")
-					or tool:GetAttribute("ItemName")
-					or tool:GetAttribute("DisplayName")
-					or tool.Name
-					or ""
-			)
-		end
-		local function checkCriteriaCS()
-			local utility = autoServerHopState.Utility
-			local criteria = {}
-			local rarities = type(utility.CheckServerBrainrotRarities) == "table"
-				and utility.CheckServerBrainrotRarities or {}
-			for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
-				if rarities[rarity] == true then
-					criteria[#criteria + 1] = {Kind = "Rarity", Value = rarity}
-				end
-			end
-			local specifics = type(utility.CheckServerSpecificItems) == "table" and utility.CheckServerSpecificItems or {}
-			for _, rule in ipairs(specifics) do
-				if type(rule) == "table" and rule.Item ~= nil and tostring(rule.Item) ~= "" then
-					criteria[#criteria + 1] = {Kind = "Specific", Rule = rule}
-				end
-			end
-			return criteria
-		end
-		local function toolMatchesSpecificRuleCS(tool, rule)
-			if not tool or type(rule) ~= "table" or rule.Item == nil then return false end
-			local wanted = tostring(rule.Item)
-			if not autoServerHopState.SpecificItemNamesEquivalent(toolSpecificNameCS(tool), wanted)
-				and not autoServerHopState.SpecificItemNamesEquivalent(tostring(tool.Name or ""), wanted)
-			then return false end
-			local mutations = type(rule.Mutations) == "table" and rule.Mutations or {}
-			if next(mutations) ~= nil then
-				local mutation = toolMutationCS(tool)
-				if not mutation or mutations[mutation] ~= true then return false end
-			end
-			local traits = type(rule.Traits) == "table" and rule.Traits or {}
-			if next(traits) ~= nil then
-				local present = toolTraitsCS(tool)
-				local matched = false
-				for trait in pairs(traits) do if present[tostring(trait)] == true then matched = true break end end
-				if not matched then return false end
-			end
-			return true
-		end
-		local function playerMatchesCheckCriteriaCS(player, criteria)
-			if typeof(player) ~= "Instance"
-				or not player:IsA("Player")
-				or player == LocalPlayerCS
-			then
-				return false
-			end
-			if autoServerHopState.Utility.SimpleAutofarmEnabled == true then
-				local utility = autoServerHopState.Utility
-				local userId = tostring(player.UserId)
-				local scriptUsers = autoServerHopState.RuntimeScriptUserIds
-				if type(scriptUsers) == "table" and scriptUsers[userId] == true then return false end
-				if utility.TempBlacklistPlayersAfterCanceledTrade == true then
-					local checker = autoServerHopState.IsTempBlacklistedUser
-					if type(checker) == "function" and checker(player.UserId) then return false end
-				end
-				if utility.PermanentBlacklistPlayersAfterCanceledTrade == true then
-					local permanent = utility.PermanentBlacklistedUserIds
-					if type(permanent) == "table" and permanent[userId] == true then return false end
-				end
-				-- A short same-player reuse cooldown is an Auto Sit concern, not a reason to
-				-- abandon an otherwise profitable server.
-				local snapshotter = rawget(_G, "__DROIDHUB_PUBLIC_OWNERSHIP_SNAPSHOT")
-				local ownership = type(snapshotter) == "function" and snapshotter(player) or nil
-				if type(ownership) ~= "table" then return false end
-				local config = autoSitState and autoSitState.OneOfTwo
-				if type(config) ~= "table" then return false end
-				local records = type(ownership.Records) == "table" and ownership.Records or {}
-				local selected, matched = 0, 0
-				for _, rarity in ipairs(BRAINROT_RARITY_OPTIONS) do
-					if type(config.Targets) == "table" and config.Targets[rarity] == true then
-						selected += 1
-						local required = math.max(1, math.floor(tonumber(config.Amounts and config.Amounts[rarity]) or 1))
-						local count = 0
-						for _, record in ipairs(records) do
-							if record.Rarity == rarity then count += 1 end
-						end
-						if count >= required then matched += 1 end
-					end
-				end
-				if type(config.Targets) == "table" and config.Targets.Tokens == true then
-					selected += 1
-					local required = math.max(1, math.floor(tonumber(config.Tokens) or 1))
-					if (tonumber(ownership.Tokens) or 0) >= required then matched += 1 end
-				end
-				return selected > 0 and matched > 0
-			end
-			if type(criteria) ~= "table" or #criteria == 0 then return false end
-			local tools = {}
-			local function scan(container)
-				if not container then return end
-				for _, child in ipairs(container:GetChildren()) do
-					if child:IsA("Tool") then tools[#tools + 1] = child end
-				end
-			end
-			scan(player:FindFirstChildOfClass("Backpack"))
-			scan(player.Character)
-			local matched = 0
-			for _, criterion in ipairs(criteria) do
-				local criterionMatched = false
-				if criterion.Kind == "Rarity" then
-					for _, tool in ipairs(tools) do
-						local name = tool:GetAttribute("BrainrotName")
-						if type(name) == "string" and name ~= ""
-							and publicBrainrotRarityCS(tool, name) == criterion.Value
-							and brainrotPassesGlobalFiltersCS(tool)
-						then
-							criterionMatched = true
-							break
-						end
-					end
-				else
-					for _, tool in ipairs(tools) do
-						if toolMatchesSpecificRuleCS(tool, criterion.Rule) then
-							criterionMatched = true
-							break
-						end
-					end
-				end
-				if criterionMatched then matched += 1 end
-			end
-			local utility = autoServerHopState.Utility
-			if utility.CheckServerMustOwnAll == true then return matched == #criteria end
-			if utility.CheckServerMustOwnOne == true then return matched > 0 end
-			return false
+		local function playerMatchesAutoAcceptCS(player)
+			local matcher = autoServerHopState.PlayerEligibleForAutoAccept
+			if type(matcher) ~= "function" then return false end
+			local ok, eligible = pcall(matcher, player)
+			return ok and eligible == true
 		end
 		local function minigameTablesCS()
 			local gameObjects = workspace:FindFirstChild("GameObjects")
@@ -18477,17 +20542,45 @@ if MINIGAME_MODE then
 			end
 			return true
 		end
-		local function eligiblePlayersCS(criteria, areaOnly)
+		local function eligiblePlayersCS(areaOnly)
 			local list = {}
 			for _, player in ipairs(PlayersCS:GetPlayers()) do
 				if player ~= LocalPlayerCS
 					and (not areaOnly or playerInMinigamesAreaCS(player))
-					and playerMatchesCheckCriteriaCS(player, criteria)
+					and playerMatchesAutoAcceptCS(player)
 				then
 					list[#list + 1] = player
 				end
 			end
+			local scorer = autoServerHopState.PublicPlayerPriorityScore
+			if type(scorer) == "function" then
+				table.sort(list, function(a, b)
+					local as = scorer(a, autoServerHopState.Utility.AutoAcceptSpecificItems)
+					local bs = scorer(b, autoServerHopState.Utility.AutoAcceptSpecificItems)
+					if as ~= bs then return as > bs end
+					return string.lower(a.Name) < string.lower(b.Name)
+				end)
+			end
 			return list
+		end
+		local function updateEligiblePlayersDisplayCS(players, activeCriteria)
+			local setter = autoServerHopState.SetEligiblePlayersDisplay
+			if type(setter) ~= "function" then return end
+			if activeCriteria ~= true then
+				setter("No active Server Eligibility criteria.")
+				return
+			end
+			if type(players) ~= "table" or #players == 0 then
+				setter("No eligible players in this server.")
+				return
+			end
+			local lines = {}
+			for index, player in ipairs(players) do
+				local display = tostring(player.DisplayName or "")
+				local name = tostring(player.Name or "")
+				lines[#lines + 1] = tostring(index) .. ". " .. (display ~= "" and display ~= name and (display .. " (@" .. name .. ")") or name)
+			end
+			setter(table.concat(lines, "\n"))
 		end
 		local function everyoneQueuedCS(players)
 			if #players == 0 then return false end
@@ -18537,6 +20630,8 @@ if MINIGAME_MODE then
 				or utility.CheckServerHopPlayedEveryoneServer == true
 				or utility.CheckServerHopNobodyMinigamesArea == true
 				or utility.CheckServerHopPlayedEveryoneMinigamesArea == true
+				or utility.CheckServerHopNoEligibleBooths == true
+				or utility.CheckServerHopNoEligibleTradePlayers == true
 			if not enabled then
 				autoServerHopState.RuntimeCheckServerStartupResolved = true
 				refreshStartupDecisionCS()
@@ -18586,44 +20681,44 @@ if MINIGAME_MODE then
 			local nowCS = os.clock()
 			if nowCS < nextEligibilityEvaluationAtCS then continue end
 			nextEligibilityEvaluationAtCS = nowCS + 0.90
-			local anyCondition =
+			local playerConditionEnabled =
 				utility.CheckServerHopNobodyServer == true
 				or utility.CheckServerHopPlayedEveryoneServer == true
 				or utility.CheckServerHopNobodyMinigamesArea == true
 				or utility.CheckServerHopPlayedEveryoneMinigamesArea == true
+			local anyCondition =
+				playerConditionEnabled
+				or utility.CheckServerHopNoEligibleBooths == true
+				or utility.CheckServerHopNoEligibleTradePlayers == true
 			if not anyCondition then
+				updateEligiblePlayersDisplayCS(nil, false)
 				autoServerHopState.RuntimeCheckServerHopRequested = false
 				autoServerHopState.RuntimeCheckServerStartupResolved = true
 				refreshStartupDecisionCS()
-				continue
-			end
-			-- Simple Autofarm builds its live rarity criteria from replicated inventory.
-			-- Do not declare the initial server check finished before that first target
-			-- rarity exists, or Auto Sit can start walking against stale/empty criteria.
-			if utility.SimpleAutofarmEnabled == true
-				and autoServerHopState.RuntimeSimpleAutofarmTargetRarity == nil
-			then
-				autoServerHopState.RuntimeCheckServerHopRequested = false
 				continue
 			end
 			if not rosterStableCS() then
 				autoServerHopState.RuntimeCheckServerHopRequested = false
 				continue
 			end
-			local criteria = checkCriteriaCS()
-			if #criteria == 0 then
-				autoServerHopState.RuntimeCheckServerHopRequested = false
-				autoServerHopState.RuntimeCheckServerStartupResolved = true
-				refreshStartupDecisionCS()
-				continue
-			end
-			local serverPlayers
+
+			local serverPlayers = {}
 			local areaPlayers
 			local shouldHop = false
-			if utility.CheckServerHopNobodyServer == true
-				or utility.CheckServerHopPlayedEveryoneServer == true
-			then
-				serverPlayers = eligiblePlayersCS(criteria, false)
+
+			if playerConditionEnabled then
+				-- Simple Auto Farm updates Auto Accept from its live progression floor.
+				-- Wait for that first target before making the initial server decision.
+				if utility.SimpleAutofarmEnabled == true
+					and autoServerHopState.RuntimeSimpleAutofarmTargetRarity == nil
+				then
+					autoServerHopState.RuntimeCheckServerHopRequested = false
+					continue
+				end
+
+				serverPlayers = eligiblePlayersCS(false)
+				updateEligiblePlayersDisplayCS(serverPlayers, true)
+
 				if utility.CheckServerHopNobodyServer == true
 					and #serverPlayers == 0
 				then
@@ -18635,29 +20730,80 @@ if MINIGAME_MODE then
 				then
 					shouldHop = true
 				end
-			end
-			if not shouldHop
-				and (
-					utility.CheckServerHopNobodyMinigamesArea == true
-					or utility.CheckServerHopPlayedEveryoneMinigamesArea == true
-				)
-			then
-				areaPlayers = eligiblePlayersCS(criteria, true)
-				if utility.CheckServerHopNobodyMinigamesArea == true
-					and #areaPlayers == 0
-				then
-					shouldHop = true
-				end
+
 				if not shouldHop
-					and utility.CheckServerHopPlayedEveryoneMinigamesArea == true
-					and everyoneQueuedCS(areaPlayers)
+					and (
+						utility.CheckServerHopNobodyMinigamesArea == true
+						or utility.CheckServerHopPlayedEveryoneMinigamesArea == true
+					)
 				then
+					areaPlayers = eligiblePlayersCS(true)
+					if utility.CheckServerHopNobodyMinigamesArea == true
+						and #areaPlayers == 0
+					then
+						shouldHop = true
+					end
+					if not shouldHop
+						and utility.CheckServerHopPlayedEveryoneMinigamesArea == true
+						and everyoneQueuedCS(areaPlayers)
+					then
+						shouldHop = true
+					end
+				end
+			end
+
+			if not shouldHop and utility.CheckServerHopNoEligibleBooths == true then
+				local boothChecker = autoServerHopState.HasEligibleBoothListing
+				if type(boothChecker) ~= "function" then
+					autoServerHopState.RuntimeCheckServerHopRequested = false
+					continue
+				end
+				local okBooth, hasBooth = pcall(boothChecker)
+				if not okBooth then
+					autoServerHopState.RuntimeCheckServerHopRequested = false
+					continue
+				end
+				if hasBooth ~= true then
 					shouldHop = true
 				end
 			end
+
+			if not shouldHop
+				and utility.CheckServerHopNoEligibleTradePlayers == true
+			then
+				local tradeChecker =
+					autoServerHopState.PlayerEligibleForRegularTradeSend
+				if type(tradeChecker) ~= "function" then
+					autoServerHopState.RuntimeCheckServerHopRequested = false
+					continue
+				end
+				local eligibleTradePlayers = {}
+				for _, player in ipairs(PlayersCS:GetPlayers()) do
+					if player ~= LocalPlayerCS then
+						local okPlayer, eligible = pcall(tradeChecker, player)
+						if okPlayer and eligible == true then
+							eligibleTradePlayers[#eligibleTradePlayers + 1] = player
+						end
+					end
+				end
+				if not playerConditionEnabled then
+					updateEligiblePlayersDisplayCS(eligibleTradePlayers, true)
+				end
+				if #eligibleTradePlayers == 0 then
+					shouldHop = true
+				end
+			end
+			local wasHopRequested =
+				autoServerHopState.RuntimeCheckServerHopRequested == true
 			autoServerHopState.RuntimeCheckServerHopRequested = shouldHop
 			autoServerHopState.RuntimeCheckServerStartupResolved = true
 			refreshStartupDecisionCS()
+			if shouldHop and not wasHopRequested then
+				local wake = autoServerHopState.RuntimeServerHopWake
+				if type(wake) == "function" then
+					task.spawn(wake)
+				end
+			end
 		end
 	end)
 end
@@ -18693,6 +20839,21 @@ if MINIGAME_MODE then
 			autoServerHopState.Enabled == true
 			and autoServerHopState.TimeSinceLastGameEnabled == true
 		) and startupElapsedHP or 0
+		local noOwnBoothPurchaseElapsedHP = 0
+		local noBoothBuyElapsedHP = 0
+		local noRegularTradeElapsedHP = 0
+		local lastOwnBoothPurchaseSeenHP =
+			tonumber(autoServerHopState.RuntimeLastOwnBoothPurchaseAt)
+				or nowStartedHP
+		local lastBoothBuySeenHP =
+			tonumber(autoServerHopState.RuntimeLastBoothBuyAt)
+				or nowStartedHP
+		local lastRegularTradeSeenHP =
+			tonumber(autoServerHopState.RuntimeLastRegularTradeActivityAt)
+				or nowStartedHP
+		local wasNoOwnBoothPurchaseTimerEnabledHP = false
+		local wasNoBoothBuyTimerEnabledHP = false
+		local wasNoRegularTradeTimerEnabledHP = false
 		local lastTimerTickHP = nowStartedHP
 		local lastResetEpochHP = tonumber(autoServerHopState.RuntimeSettingsResetEpoch) or 0
 		local wasPlayingHP = false
@@ -18714,7 +20875,18 @@ if MINIGAME_MODE then
 		local serverCacheAtHP = 0
 		local cacheRefreshingHP = false
 		local wasPresenceDueHP = false
-		local PRESENCE_HOP_CACHE_MAX_AGE_HP = 4.0
+		local PRESENCE_HOP_CACHE_MAX_AGE_HP = 2.0
+		local HOP_SELECTION_CACHE_MAX_AGE_HP = 2.0
+		local lastPersistentBlacklistMergeAtHP = -math.huge
+		local function refreshPersistentBlacklistHP()
+			local now = os.clock()
+			if now - lastPersistentBlacklistMergeAtHP < 0.50 then return end
+			lastPersistentBlacklistMergeAtHP = now
+			local mergePersistent = autoServerHopState.MergePersistentBlacklistState
+			if type(mergePersistent) == "function" then
+				mergePersistent()
+			end
+		end
 		local function pruneServerBlacklistHP()
 			local blacklist = autoServerHopState.JoinedServerBlacklist
 			if type(blacklist) ~= "table" then
@@ -18731,6 +20903,7 @@ if MINIGAME_MODE then
 		end
 		local function serverBlacklistedHP(id)
 			if type(id) ~= "string" or id == "" then return true end
+			refreshPersistentBlacklistHP()
 			local blacklist = pruneServerBlacklistHP()
 			if tonumber(blacklist[id]) ~= nil then return true end
 			local occupied = autoServerHopState.RuntimeScriptUserServerIds
@@ -18762,6 +20935,8 @@ if MINIGAME_MODE then
 			)
 			local blacklist = pruneServerBlacklistHP()
 			blacklist[id] = DateTime.now().UnixTimestamp + (minutes * 60)
+			local persist = autoServerHopState.PersistBlacklistState
+			if type(persist) == "function" then persist() end
 		end
 		recordRecentServerHP(game.JobId)
 		local tryIndexHP = safeTryIndex
@@ -18813,7 +20988,11 @@ if MINIGAME_MODE then
 			end
 		end
 		local function hopPreparationBlockedHP(active, forcedManual)
-			if autoServerHopState.Utility.PauseScript == true then return true end
+			if autoServerHopState.Utility.PauseScript == true
+				and forcedManual ~= true
+			then
+				return true
+			end
 			if autoServerHopState.RuntimeServerHopHardFreeze == true then return false end
 			local immediateManualKick = forcedManual == true
 				and autoServerHopState.RuntimeManualKickRequested == true
@@ -18834,6 +21013,24 @@ if MINIGAME_MODE then
 		local function noGameDurationHP()
 			return math.max(1, tonumber(autoServerHopState.TimeSinceLastGame) or 3) * 60
 		end
+		local function noOwnBoothPurchaseDurationHP()
+			return math.max(
+				1,
+				tonumber(autoServerHopState.NoOwnBoothPurchase) or 10
+			) * 60
+		end
+		local function noBoothBuyDurationHP()
+			return math.max(
+				1,
+				tonumber(autoServerHopState.NoBoothBuy) or 10
+			) * 60
+		end
+		local function noRegularTradeDurationHP()
+			return math.max(
+				1,
+				tonumber(autoServerHopState.NoRegularTrade) or 10
+			) * 60
+		end
 		local function presenceDueHP()
 			return autoServerHopState.Utility.PauseScript ~= true
 				and autoServerHopState.Utility.PauseMinigameFeatures ~= true
@@ -18841,13 +21038,13 @@ if MINIGAME_MODE then
 				and autoServerHopState.RuntimeScriptUserHopRequested == true
 		end
 		local function scheduledDueHP()
-			if autoServerHopState.Utility.PauseScript == true then
-				return false
-			end
-			-- Manual hop/kick is an explicit departure request. It may bypass
-			-- Pause Minigame Features, but it remains queued through active trades/games.
+			-- Manual Hop / Manual Kick are explicit user actions and remain available
+			-- while Pause Script is enabled. Automatic hop reasons remain paused.
 			if autoServerHopState.RuntimeManualServerHopRequested == true then
 				return true
+			end
+			if autoServerHopState.Utility.PauseScript == true then
+				return false
 			end
 			if presenceDueHP() then
 				return true
@@ -18868,6 +21065,21 @@ if MINIGAME_MODE then
 			end
 			if autoServerHopState.TimeSinceLastGameEnabled == true
 				and noGameElapsedHP >= noGameDurationHP()
+			then
+				return true
+			end
+			if autoServerHopState.NoOwnBoothPurchaseEnabled == true
+				and noOwnBoothPurchaseElapsedHP >= noOwnBoothPurchaseDurationHP()
+			then
+				return true
+			end
+			if autoServerHopState.NoBoothBuyEnabled == true
+				and noBoothBuyElapsedHP >= noBoothBuyDurationHP()
+			then
+				return true
+			end
+			if autoServerHopState.NoRegularTradeEnabled == true
+				and noRegularTradeElapsedHP >= noRegularTradeDurationHP()
 			then
 				return true
 			end
@@ -18945,6 +21157,10 @@ if MINIGAME_MODE then
 						if not screenGui.Parent then return end
 						local liveState = myBoothStateHP()
 						if boothContainsItemHP(liveState, itemId) or inventoryContainsHP(itemId) then return end
+						autoServerHopState.RuntimeLastOwnBoothPurchaseAt = os.clock()
+						noOwnBoothPurchaseElapsedHP = 0
+						lastOwnBoothPurchaseSeenHP =
+							autoServerHopState.RuntimeLastOwnBoothPurchaseAt
 						if autoServerHopState.Utility.PrintPurchasedBoothListingsToTerminal == true then
 							local info = type(previousOffer) == "table" and previousOffer or {}
 							local parts = {"BOOTH PURCHASE"}
@@ -19080,18 +21296,27 @@ if MINIGAME_MODE then
 		end
 		local function collectCandidatesHP(forcedManual)
 			-- Server discovery is read-only and may run while a trade/game is active.
-			-- The actual teleport remains guarded by hopPreparationBlockedHP. Keeping
-			-- this cache warm removes the post-game HTTP wait without affecting gameplay.
-			if autoServerHopState.Utility.PauseScript == true then return {} end
+			-- Explicit manual departures may also discover a destination while the
+			-- automation is paused.
+			if autoServerHopState.Utility.PauseScript == true
+				and forcedManual ~= true
+			then
+				return {}
+			end
 			local requestFn = requestFunctionHP()
 			local candidates = {}
 			local seen = {}
 			local cursor
+			refreshPersistentBlacklistHP()
 			pruneServerBlacklistHP()
 			-- The API is already sorted by player count descending. Stop as soon as
 			-- ten eligible servers are known; later pages cannot outrank them.
 			for _ = 1, 3 do
-				if autoServerHopState.Utility.PauseScript == true then break end
+				if autoServerHopState.Utility.PauseScript == true
+					and forcedManual ~= true
+				then
+					break
+				end
 				local decoded = fetchServerPageHP(requestFn, cursor)
 				if not decoded then break end
 				for _, server in ipairs(decoded.data or {}) do
@@ -19116,6 +21341,10 @@ if MINIGAME_MODE then
 							fullness = playing / maxPlayers,
 							openSlots = maxPlayers - playing,
 						}
+						-- Public-server results are already descending by player count.
+						-- Once ten eligible servers are collected, nothing later in this
+						-- page or a later page can enter the top ten.
+						if #candidates >= 10 then break end
 					end
 				end
 				cursor = decoded.nextPageCursor
@@ -19127,19 +21356,28 @@ if MINIGAME_MODE then
 				if a.openSlots ~= b.openSlots then return a.openSlots < b.openSlots end
 				return a.id < b.id
 			end)
+			while #candidates > 10 do
+				candidates[#candidates] = nil
+			end
 			return candidates
 		end
 		local function refreshServerCacheHP(forcedManual)
 			if cacheRefreshingHP
 				or not screenGui.Parent
-				or autoServerHopState.Utility.PauseScript == true
+				or (
+					autoServerHopState.Utility.PauseScript == true
+					and forcedManual ~= true
+				)
 			then
 				return
 			end
 			cacheRefreshingHP = true
 			local ok, candidates = pcall(collectCandidatesHP, forcedManual)
 			if ok
-				and autoServerHopState.Utility.PauseScript ~= true
+				and (
+					autoServerHopState.Utility.PauseScript ~= true
+					or forcedManual == true
+				)
 				and type(candidates) == "table"
 				and #candidates > 0
 			then
@@ -19150,7 +21388,8 @@ if MINIGAME_MODE then
 		end
 		local function chooseTopTenHP(candidates)
 			if type(candidates) ~= "table" or #candidates == 0 then return nil end
-			local topTen = {}
+			local eligible = {}
+			refreshPersistentBlacklistHP()
 			for _, candidate in ipairs(candidates) do
 				if candidate.id ~= game.JobId
 					and not serverBlacklistedHP(candidate.id)
@@ -19158,12 +21397,18 @@ if MINIGAME_MODE then
 					and tonumber(candidate.maxPlayers)
 					and candidate.playing < candidate.maxPlayers
 				then
-					topTen[#topTen + 1] = candidate
-					if #topTen >= 10 then break end
+					eligible[#eligible + 1] = candidate
 				end
 			end
-			if #topTen == 0 then return nil end
-			return topTen[serverRngHP:NextInteger(1, #topTen)]
+			if #eligible == 0 then return nil end
+			table.sort(eligible, function(a, b)
+				if a.playing ~= b.playing then return a.playing > b.playing end
+				if a.fullness ~= b.fullness then return a.fullness > b.fullness end
+				if a.openSlots ~= b.openSlots then return a.openSlots < b.openSlots end
+				return a.id < b.id
+			end)
+			local topCount = math.min(10, #eligible)
+			return eligible[serverRngHP:NextInteger(1, topCount)]
 		end
 		local function cachedChoiceHP()
 			return chooseTopTenHP(cachedCandidatesHP)
@@ -19211,7 +21456,9 @@ if MINIGAME_MODE then
 			-- normally supplies the complete eligible top ten and avoids the old
 			-- cache-refresh + second-fetch delay.
 			local chosen
-			if serverCacheAtHP > 0 and os.clock() - serverCacheAtHP <= 4.0 then
+			if serverCacheAtHP > 0
+				and os.clock() - serverCacheAtHP <= HOP_SELECTION_CACHE_MAX_AGE_HP
+			then
 				chosen = chooseTopTenHP(cachedCandidatesHP)
 			end
 			if not chosen then
@@ -19286,13 +21533,16 @@ if MINIGAME_MODE then
 		autoServerHopState.RuntimePresenceHopWake = wakePresenceHopHP
 		while screenGui.Parent do
 			task.wait(0.20)
-			if autoServerHopState.Utility.PauseScript == true then
+			local manualDeparturePendingHP =
+				autoServerHopState.RuntimeManualServerHopRequested == true
+			if autoServerHopState.Utility.PauseScript == true
+				and not manualDeparturePendingHP
+			then
 				autoServerHopState.RuntimeServerHopPending = false
 				autoServerHopState.RuntimeServerHopHardFreeze = false
-			autoServerHopState.RuntimeServerHopFreezeCFrame = nil
+				autoServerHopState.RuntimeServerHopFreezeCFrame = nil
 				autoServerHopState.RuntimeScriptUserHopRequested = false
 				autoServerHopState.RuntimeCheckServerHopRequested = false
-				autoServerHopState.RuntimeManualServerHopRequested = false
 				autoServerHopState.RuntimeManualKickRequested = false
 				table.clear(cachedCandidatesHP)
 				serverCacheAtHP = 0
@@ -19352,6 +21602,15 @@ if MINIGAME_MODE then
 				lastResetEpochHP = resetEpochHP
 				serverElapsedHP = 0
 				noGameElapsedHP = 0
+				noOwnBoothPurchaseElapsedHP = 0
+				noBoothBuyElapsedHP = 0
+				noRegularTradeElapsedHP = 0
+				lastOwnBoothPurchaseSeenHP =
+					tonumber(autoServerHopState.RuntimeLastOwnBoothPurchaseAt) or nowHP
+				lastBoothBuySeenHP =
+					tonumber(autoServerHopState.RuntimeLastBoothBuyAt) or nowHP
+				lastRegularTradeSeenHP =
+					tonumber(autoServerHopState.RuntimeLastRegularTradeActivityAt) or nowHP
 				boothBlockRemainingHP = 0
 				hopNotBeforeHP = 0
 				wagerNotBeforeHP = 0
@@ -19368,6 +21627,36 @@ if MINIGAME_MODE then
 				and autoServerHopState.ServerTimeEnabled == true
 			local noGameTimerEnabledHP = masterEnabledHP
 				and autoServerHopState.TimeSinceLastGameEnabled == true
+			local noOwnBoothPurchaseTimerEnabledHP = masterEnabledHP
+				and autoServerHopState.NoOwnBoothPurchaseEnabled == true
+			local noBoothBuyTimerEnabledHP = masterEnabledHP
+				and autoServerHopState.NoBoothBuyEnabled == true
+			local noRegularTradeTimerEnabledHP = masterEnabledHP
+				and autoServerHopState.NoRegularTradeEnabled == true
+
+			if noOwnBoothPurchaseTimerEnabledHP
+				and not wasNoOwnBoothPurchaseTimerEnabledHP
+			then
+				noOwnBoothPurchaseElapsedHP = 0
+				lastOwnBoothPurchaseSeenHP =
+					tonumber(autoServerHopState.RuntimeLastOwnBoothPurchaseAt) or nowHP
+			end
+			if noBoothBuyTimerEnabledHP and not wasNoBoothBuyTimerEnabledHP then
+				noBoothBuyElapsedHP = 0
+				lastBoothBuySeenHP =
+					tonumber(autoServerHopState.RuntimeLastBoothBuyAt) or nowHP
+			end
+			if noRegularTradeTimerEnabledHP
+				and not wasNoRegularTradeTimerEnabledHP
+			then
+				noRegularTradeElapsedHP = 0
+				lastRegularTradeSeenHP =
+					tonumber(autoServerHopState.RuntimeLastRegularTradeActivityAt) or nowHP
+			end
+			wasNoOwnBoothPurchaseTimerEnabledHP = noOwnBoothPurchaseTimerEnabledHP
+			wasNoBoothBuyTimerEnabledHP = noBoothBuyTimerEnabledHP
+			wasNoRegularTradeTimerEnabledHP = noRegularTradeTimerEnabledHP
+
 			if serverTimerEnabledHP then serverElapsedHP += deltaHP end
 			if nowPlaying then
 				noGameElapsedHP = 0
@@ -19378,6 +21667,37 @@ if MINIGAME_MODE then
 					noGameElapsedHP += deltaHP
 				end
 			end
+
+			local ownBoothPurchaseAt =
+				tonumber(autoServerHopState.RuntimeLastOwnBoothPurchaseAt)
+					or lastOwnBoothPurchaseSeenHP
+			if ownBoothPurchaseAt > lastOwnBoothPurchaseSeenHP then
+				lastOwnBoothPurchaseSeenHP = ownBoothPurchaseAt
+				noOwnBoothPurchaseElapsedHP = 0
+			elseif noOwnBoothPurchaseTimerEnabledHP then
+				noOwnBoothPurchaseElapsedHP += deltaHP
+			end
+
+			local boothBuyAt =
+				tonumber(autoServerHopState.RuntimeLastBoothBuyAt)
+					or lastBoothBuySeenHP
+			if boothBuyAt > lastBoothBuySeenHP then
+				lastBoothBuySeenHP = boothBuyAt
+				noBoothBuyElapsedHP = 0
+			elseif noBoothBuyTimerEnabledHP then
+				noBoothBuyElapsedHP += deltaHP
+			end
+
+			local regularTradeAt =
+				tonumber(autoServerHopState.RuntimeLastRegularTradeActivityAt)
+					or lastRegularTradeSeenHP
+			if regularTradeAt > lastRegularTradeSeenHP then
+				lastRegularTradeSeenHP = regularTradeAt
+				noRegularTradeElapsedHP = 0
+			elseif noRegularTradeTimerEnabledHP then
+				noRegularTradeElapsedHP += deltaHP
+			end
+
 			wasPlayingHP = nowPlaying
 			if masterEnabledHP and boothBlockRemainingHP > 0 then
 				boothBlockRemainingHP = math.max(0, boothBlockRemainingHP - deltaHP)
@@ -19405,10 +21725,16 @@ if MINIGAME_MODE then
 				and not lifecycleNowBlockedHP
 			local departurePendingHP = (hopDueHP or hoppingHP)
 				and (not lifecycleNowBlockedHP or immediateManualKickPendingHP)
-			local pendingHopHP = autoServerHopState.Utility.PauseScript ~= true
+			local pendingHopHP = (
+					autoServerHopState.Utility.PauseScript ~= true
+					or manualHopDueHP
+				)
 				and (
 					autoServerHopState.RuntimeServerHopHardFreeze == true
-					or (not wagerDelayActiveHP and (startupHoldPendingHP or departurePendingHP))
+					or (
+						not wagerDelayActiveHP
+						and (startupHoldPendingHP or departurePendingHP)
+					)
 				)
 			autoServerHopState.RuntimeServerHopPending = pendingHopHP
 			if pendingHopHP then
@@ -19417,18 +21743,34 @@ if MINIGAME_MODE then
 			elseif standstillActiveHP then
 				standstillActiveHP = false
 			end
-			if autoServerHopState.Utility.PauseScript ~= true and not cacheRefreshingHP then
+			if (
+					autoServerHopState.Utility.PauseScript ~= true
+					or manualHopDueHP
+				)
+				and not cacheRefreshingHP
+			then
 				local shouldRefreshHP = false
+				local serverEligibilityPrimingHP =
+					autoServerHopState.RuntimeCheckServerStartupResolved ~= true
+					and (
+						autoServerHopState.Utility.CheckServerHopNobodyServer == true
+						or autoServerHopState.Utility.CheckServerHopPlayedEveryoneServer == true
+						or autoServerHopState.Utility.CheckServerHopNobodyMinigamesArea == true
+						or autoServerHopState.Utility.CheckServerHopPlayedEveryoneMinigamesArea == true
+						or autoServerHopState.Utility.CheckServerHopNoEligibleBooths == true
+						or autoServerHopState.Utility.CheckServerHopNoEligibleTradePlayers == true
+					)
 				local requestedNowHP = presenceNowHP
 					or rawHopDueHP
 					or autoServerHopState.RuntimeCheckServerHopRequested == true
 					or autoServerHopState.RuntimeManualServerHopRequested == true
+					or serverEligibilityPrimingHP
 				if requestedNowHP then
 					-- Only keep a hot server cache when an actual hop request is pending.
 					-- The previous code refreshed up to five HTTP pages every 1.25s any
 					-- time the script was unpaused, which was a major mobile CPU/network cost.
 					shouldRefreshHP = serverCacheAtHP == 0
-						or nowHP - serverCacheAtHP >= 4.0
+						or nowHP - serverCacheAtHP >= HOP_SELECTION_CACHE_MAX_AGE_HP
 				elseif masterEnabledHP then
 					local nearestRemainingHP = math.huge
 					if serverTimerEnabledHP then
@@ -19436,6 +21778,24 @@ if MINIGAME_MODE then
 					end
 					if noGameTimerEnabledHP and not nowPlaying then
 						nearestRemainingHP = math.min(nearestRemainingHP, noGameDurationHP() - noGameElapsedHP)
+					end
+					if noOwnBoothPurchaseTimerEnabledHP then
+						nearestRemainingHP = math.min(
+							nearestRemainingHP,
+							noOwnBoothPurchaseDurationHP() - noOwnBoothPurchaseElapsedHP
+						)
+					end
+					if noBoothBuyTimerEnabledHP then
+						nearestRemainingHP = math.min(
+							nearestRemainingHP,
+							noBoothBuyDurationHP() - noBoothBuyElapsedHP
+						)
+					end
+					if noRegularTradeTimerEnabledHP then
+						nearestRemainingHP = math.min(
+							nearestRemainingHP,
+							noRegularTradeDurationHP() - noRegularTradeElapsedHP
+						)
 					end
 					if nearestRemainingHP <= 5 then
 						shouldRefreshHP = serverCacheAtHP == 0 or nowHP - serverCacheAtHP >= 2.0
@@ -20288,7 +22648,7 @@ if MINIGAME_MODE then
 					or ""
 			)
 		end
-		local function neverDeleteADI(item)
+		local function neverDeleteADI(item, id)
 			local state = autoServerHopState and autoServerHopState.Utility
 			if not state or type(item) ~= "table" then return false end
 			-- A Roblox inventory lock is always authoritative protection. Simple Autofarm
@@ -20355,6 +22715,11 @@ if MINIGAME_MODE then
 			if state.AvoidDeletingLockedItems == true and item.locked == true then
 				return true
 			end
+			if id ~= nil and type(autoServerHopState.InventoryConsumeAllowed) == "function"
+				and not autoServerHopState.InventoryConsumeAllowed(id, item, "Delete", nil, inventoryDataADI())
+			then
+				return true
+			end
 			local sizeName = autoServerHopState.ItemSizeName(item)
 			if sizeName
 				and type(state.AvoidDeletingSizes) == "table"
@@ -20375,7 +22740,7 @@ if MINIGAME_MODE then
 			if id == nil
 				or (listedIds or boothListedIdsADI())[tostring(id)] == true
 				or type(item) ~= "table"
-				or neverDeleteADI(item)
+				or neverDeleteADI(item, id)
 			then
 				return false
 			end
@@ -20435,7 +22800,7 @@ if MINIGAME_MODE then
 			if id == nil
 				or (listedIds or boothListedIdsADI())[tostring(id)] == true
 				or type(item) ~= "table"
-				or neverDeleteADI(item)
+				or neverDeleteADI(item, id)
 				or inventoryItemTypeADI(item) ~= "Brainrot"
 			then
 				return nil
@@ -20499,7 +22864,7 @@ if MINIGAME_MODE then
 			if brainrotCount <= baseline then return nil end
 			local bestId, bestRank = nil, math.huge
 			for id, item in pairs(inventory) do
-				if listed[tostring(id)] ~= true and not neverDeleteADI(item) then
+				if listed[tostring(id)] ~= true and not neverDeleteADI(item, id) then
 					local rarity = effectiveBrainrotRarityADI(item)
 					local rank = RARITY_ORDER_ADI[rarity]
 					if rank and rank < targetRank and rank < bestRank
@@ -20919,13 +23284,17 @@ if MINIGAME_MODE then
 		local ActiveMinigame=Rep.get("ActiveMinigame")
 		local PlayerData=Rep.get("PlayerData")
 		local Respond=Remotes.TradeRespondToOffer
+		local SendTrade=Remotes.TradeSendTrade
 		local SetSlot=Remotes.NegotiationSetSlot
 		local OfferCurrency=Remotes.NegotiationOfferCurrency
 		local Ready=Remotes.NegotiationReady
-		if not (TradeRequests and Negotiation and Respond and SetSlot and OfferCurrency and Ready) then return end
+		if not (TradeRequests and Negotiation and Respond and SendTrade and SetSlot and OfferCurrency and Ready) then return end
 		local localPlayer=Players.LocalPlayer
 		local handledRequests={}
+		local outgoingTradeCooldowns={}
 		local opponentItemCache={}
+		local lastAutoSendAttempt=0
+		local autoSendPendingUntil=0
 		local lastGuid=nil
 		local openingAppliedGuid=nil
 		local tradeReactionAt=0
@@ -21068,6 +23437,7 @@ if MINIGAME_MODE then
 				rule.Signatures = extra.Signatures
 				rule.Sizes = extra.Sizes
 				rule.Levels = extra.Levels
+				rule.MinimumTraitCount = extra.MinimumTraits or extra.MinimumTraitCount
 			end
 			if typeof(tool) ~= "Instance" or not tool:IsA("Tool") then
 				return next(rule.Mutations) == nil
@@ -21113,7 +23483,7 @@ if MINIGAME_MODE then
 					enabled+=1
 					local count=0
 					for _,record in ipairs(records) do
-						if record.Rarity==r and (adaptiveRequest or publicRecordMatchesFilters(record,u["AutoAcceptTradesRequest"..r.."Mutations"],u["AutoAcceptTradesRequest"..r.."Traits"],{Signatures=u["AutoAcceptTradesRequest"..r.."Signatures"],Sizes=u["AutoAcceptTradesRequest"..r.."Sizes"],Levels=u["AutoAcceptTradesRequest"..r.."Levels"]})) then count+=1 end
+						if record.Rarity==r and (adaptiveRequest or publicRecordMatchesFilters(record,u["AutoAcceptTradesRequest"..r.."Mutations"],u["AutoAcceptTradesRequest"..r.."Traits"],{Signatures=u["AutoAcceptTradesRequest"..r.."Signatures"],Sizes=u["AutoAcceptTradesRequest"..r.."Sizes"],Levels=u["AutoAcceptTradesRequest"..r.."Levels"],MinimumTraits=u["AutoAcceptTradesRequest"..r.."MinimumTraits"]})) then count+=1 end
 					end
 					local wanted = adaptiveRequest and 1 or math.clamp(math.floor(tonumber(cfg.Amount) or 1),1,6)
 					if count>=wanted then matched+=1 end
@@ -21230,9 +23600,12 @@ if MINIGAME_MODE then
 			local balance=math.max(0,math.floor(tonumber(root.TradeTokens or try(PlayerData,{"TradeTokens"})) or 0))
 			return inv,sorted,balance
 		end
-		local function validOutgoing(inv,id)
+		local function validOutgoing(inv,id,reserved)
 			id=tostring(id or ""); local it=inv[id] or inv[tonumber(id)]
 			if type(it)~="table" or rarity(it)=="Eternal" then return nil end
+			if type(autoServerHopState.InventoryConsumeAllowed)=="function"
+				and not autoServerHopState.InventoryConsumeAllowed(id,it,"Offer",reserved,inv)
+			then return nil end
 			local ok,v=pcall(ItemIsTradeable,it); return ok and v and it or nil
 		end
 		local function applyOpeningOffer(u)
@@ -21242,7 +23615,7 @@ if MINIGAME_MODE then
 			local inv,sorted,balance=inventoryContext(); local desired,used={},{}
 			local function add(id, mutations, traits, extra)
 				id=tostring(id or ""); if id=="" or used[id] or #desired>=6 then return false end
-				local item=validOutgoing(inv,id)
+				local item=validOutgoing(inv,id,used)
 				if not item or not selectedFilterMatches(item,mutations,traits,extra) then return false end
 				used[id]=true; desired[#desired+1]=id; return true
 			end
@@ -21316,7 +23689,7 @@ if MINIGAME_MODE then
 			local inv,sorted,balance=inventoryContext(); local desired,used={},{}; local tokens=0; local forceAllTokens=false
 			local function add(id,mutations,traits,extra)
 				id=tostring(id or ""); if id=="" or used[id] or #desired>=6 then return false end
-				local item=validOutgoing(inv,id); if not item or not selectedFilterMatches(item,mutations,traits,extra) then return false end
+				local item=validOutgoing(inv,id,used); if not item or not selectedFilterMatches(item,mutations,traits,extra) then return false end
 				used[id]=true; desired[#desired+1]=id; return true
 			end
 			local function addSelectedInInventoryOrder(selected,maximum,mutations,traits,extra)
@@ -21335,7 +23708,7 @@ if MINIGAME_MODE then
 				for _,id in ipairs(sorted) do
 					if added>=wanted or #desired>=6 then break end; id=tostring(id)
 					if not used[id] then
-						local item=validOutgoing(inv,id)
+						local item=validOutgoing(inv,id,used)
 						local passes=not useFallbackFilters or regularFallbackAllowed(item,u)
 						if item and rarity(item)==target and passes and add(id) then added+=1 end
 					end
@@ -21534,7 +23907,7 @@ if MINIGAME_MODE then
 		local function acceptRequirements(u)
 			local items=offeredItems("player2"); local counts={}; local enabled=0; local matched=0
 			local adaptiveAccept = u.AdaptiveCriteriaApplyAcceptOffers == true
-			for _,it in ipairs(items) do local r=rarity(it); if r and (adaptiveAccept or selectedFilterMatches(it,u["AutoAccept"..r.."Mutations"],u["AutoAccept"..r.."Traits"],{Signatures=u["AutoAccept"..r.."Signatures"],Sizes=u["AutoAccept"..r.."Sizes"],Levels=u["AutoAccept"..r.."Levels"]})) then counts[r]=(counts[r] or 0)+1 end end
+			for _,it in ipairs(items) do local r=rarity(it); if r and (adaptiveAccept or selectedFilterMatches(it,u["AutoAccept"..r.."Mutations"],u["AutoAccept"..r.."Traits"],{Signatures=u["AutoAccept"..r.."Signatures"],Sizes=u["AutoAccept"..r.."Sizes"],Levels=u["AutoAccept"..r.."Levels"],MinimumTraits=u["AutoAccept"..r.."MinimumTraits"]})) then counts[r]=(counts[r] or 0)+1 end end
 			for _,r in ipairs(BRAINROT_RARITY_OPTIONS) do local cfg=autoAcceptState[r]; if cfg and cfg.Enabled==true then enabled+=1; local wanted=adaptiveAccept and 1 or math.clamp(math.floor(tonumber(cfg.Amount) or 1),1,6); if (counts[r] or 0)>=wanted then matched+=1 end end end
 			local tokenCfg=autoAcceptState.Tokens; local offeredTokens=math.max(0,math.floor(tonumber(try(Negotiation,{"player2","currency"})) or 0))
 			if tokenCfg and tokenCfg.Enabled==true then enabled+=1; if offeredTokens>=math.clamp(math.floor(tonumber(tokenCfg.Amount) or 1),1,1000000) then matched+=1 end end
@@ -21542,6 +23915,84 @@ if MINIGAME_MODE then
 			if enabled==0 then return false,false end
 			local ok=(u.AutoAcceptMustHaveAll==true and matched==enabled) or (u.AutoAcceptMustHaveOne==true and matched>0)
 			return ok,true
+		end
+		local function outgoingRequestPending(requests)
+			if type(requests) ~= "table" then return false end
+			local myId = tostring(localPlayer.UserId)
+			for key, request in pairs(requests) do
+				if type(request) == "table"
+					and request.gift ~= true
+					and tostring(key) == myId
+					and tostring(request.targetPlayer or "") ~= myId
+				then
+					return true
+				end
+			end
+			return false
+		end
+		local function bestAutoSendPlayer(u, requests)
+			local matcher = autoServerHopState.PlayerEligibleForRegularTradeSend
+			if type(matcher) ~= "function" then return nil end
+			local now = os.clock()
+			local scorer = autoServerHopState.PublicPlayerPriorityScore
+			local best, bestScore
+			for _, player in ipairs(Players:GetPlayers()) do
+				if player ~= localPlayer
+					and now >= (tonumber(outgoingTradeCooldowns[tostring(player.UserId)]) or 0)
+				then
+					local incoming = type(requests) == "table"
+						and requests[tostring(player.UserId)]
+						or nil
+					if not (
+						type(incoming) == "table"
+						and incoming.targetPlayer == tostring(localPlayer.UserId)
+						and incoming.gift ~= true
+					) then
+						local okEligible, eligible = pcall(matcher, player)
+						if okEligible and eligible == true then
+							local score = type(scorer) == "function"
+								and scorer(player, u.AutoSendTradeSpecificItems)
+								or 0
+							if not best or score > bestScore then
+								best, bestScore = player, score
+							end
+						end
+					end
+				end
+			end
+			return best
+		end
+		local function tryAutoSendTrade(u, requests)
+			if u.AutoSendTradesEnabled ~= true
+				or u.PauseScript == true
+				or autoServerHopState.RuntimeServerHopPending == true
+				or outgoingRequestPending(requests)
+				or isNormalTrade() ~= nil
+			then
+				return false
+			end
+			local now = os.clock()
+			if now < autoSendPendingUntil
+				or now - lastAutoSendAttempt < 1.00
+			then
+				return false
+			end
+			local player = bestAutoSendPlayer(u, requests)
+			if not player then return false end
+			lastAutoSendAttempt = now
+			local retrySeconds = math.clamp(
+				tonumber(u.AutoSendTradeRetrySeconds) or 30,
+				5,
+				120
+			)
+			local ok, result = pcall(SendTrade.InvokeServer, SendTrade, player)
+			local success = ok and result ~= false
+			outgoingTradeCooldowns[tostring(player.UserId)] =
+				os.clock() + (success and retrySeconds or 3)
+			if success then
+				autoSendPendingUntil = os.clock() + 5.00
+			end
+			return success
 		end
 		while screenGui.Parent do
 			local u=autoServerHopState.Utility
@@ -21553,6 +24004,8 @@ if MINIGAME_MODE then
 			end
 			local regularAutomationActive = u.AutoAcceptTradesAcceptRequests==true
 				or u.AutoAcceptTradesAcceptOffers==true
+				or u.AutoSendTradesEnabled==true
+				or autoServerHopState.NoRegularTradeEnabled==true
 				or regularOfferAutomationEnabled(u)
 			if not regularAutomationActive then
 				releaseAutomatedReady()
@@ -21565,10 +24018,17 @@ if MINIGAME_MODE then
 
 			local requests=try(TradeRequests,{})
 			local liveRequestKeys={}
+			local eligibleRequests={}
 			if type(requests)=="table" then
 				for key,req in pairs(requests) do
 					local requestKey=tostring(key)
 					liveRequestKeys[requestKey]=true
+					if type(req)=="table"
+						and req.targetPlayer==tostring(localPlayer.UserId)
+						and req.gift~=true
+					then
+						autoServerHopState.RuntimeLastRegularTradeActivityAt = os.clock()
+					end
 					if u.AutoAcceptTradesAcceptRequests==true
 						and autoServerHopState.RuntimeServerHopPending ~= true
 						and type(req)=="table"
@@ -21580,20 +24040,31 @@ if MINIGAME_MODE then
 						local opponent=opponentId and Players:GetPlayerByUserId(opponentId) or nil
 						local requestOK,configured=tradeRequestRequirements(u,opponent)
 						if configured and requestOK then
-							handledRequests[requestKey]=true
-							local delay=tradeDelay(u,"AutoAcceptTradesInitialDelay",1.75)
-							if delay>0 then task.wait(delay) end
-							if u.PauseScript == true
-								or autoServerHopState.RuntimeServerHopPending == true
-							then break end
-							pcall(Respond.InvokeServer,Respond,key,true)
-							break
+							local scorer=autoServerHopState.PublicPlayerPriorityScore
+							eligibleRequests[#eligibleRequests+1]={Key=key,RequestKey=requestKey,Player=opponent,Score=type(scorer)=="function" and scorer(opponent,u.AutoAcceptTradesRequestSpecificItems) or 0}
 						end
 					end
 				end
 			end
+			if #eligibleRequests>0 then
+				table.sort(eligibleRequests,function(a,b)
+					if a.Score~=b.Score then return a.Score>b.Score end
+					return tostring(a.RequestKey)<tostring(b.RequestKey)
+				end)
+				local chosen=eligibleRequests[1]
+				handledRequests[chosen.RequestKey]=true
+				local delay=tradeDelay(u,"AutoAcceptTradesInitialDelay",1.75)
+				if delay>0 then task.wait(delay) end
+				if u.PauseScript ~= true and autoServerHopState.RuntimeServerHopPending ~= true then
+					pcall(Respond.InvokeServer,Respond,chosen.Key,true)
+				end
+			end
 			for requestKey in pairs(handledRequests) do
 				if liveRequestKeys[requestKey]~=true then handledRequests[requestKey]=nil end
+			end
+
+			if #eligibleRequests == 0 then
+				tryAutoSendTrade(u, requests)
 			end
 
 			local guid=isNormalTrade()
@@ -21603,6 +24074,7 @@ if MINIGAME_MODE then
 				task.wait(0.30); continue
 			end
 			rawset(_G,"__DROIDHUB_NORMAL_TRADE_AUTOMATION_GUID",guid)
+			autoServerHopState.RuntimeLastRegularTradeActivityAt = os.clock()
 			if tostring(guid)~=tostring(lastGuid) then
 				lastGuid=guid
 				openingAppliedGuid=nil
@@ -21665,6 +24137,138 @@ if MINIGAME_MODE then
 				autoReadyGuid=nil
 			end
 			task.wait(0.15)
+		end
+	end)
+end
+-- Completed regular-trade journal. A trade is logged only after both sides were
+-- ready and an inventory/currency transfer is observed after the negotiation closes.
+if MINIGAME_MODE then
+	task.spawn(function()
+		local RS = ReplicatedStorage
+		local client = RS:WaitForChild("Client"):WaitForChild("Modules")
+		local shared = RS:WaitForChild("Shared")
+		local okRep, Replicator = pcall(require, client:WaitForChild("ReplicatorClient"))
+		local okString, ItemToString = pcall(require, shared:WaitForChild("utils"):WaitForChild("ItemToString"))
+		if not okRep or not Replicator then return end
+		local activeGuid, captured
+		local slotItemCache = {}
+		local function playerData() return safeRepGet(Replicator, "PlayerData") end
+		local function inventory()
+			local data = playerData()
+			local inv = data and safeTryIndex(data, {"Inventory"})
+			return type(inv) == "table" and inv or {}
+		end
+		local function tokenBalance()
+			local data = playerData()
+			return math.max(0, math.floor(tonumber(data and safeTryIndex(data, {"TradeTokens"})) or 0))
+		end
+		local function slotSnapshot(negotiation, side)
+			local result, ids = {}, {}
+			local slots = safeTryIndex(negotiation, {side, "slots"})
+			local ownInventory = side == "player1" and inventory() or nil
+			for index = 1, 6 do
+				local entry = type(slots) == "table" and (slots[tostring(index)] or slots[index]) or nil
+				local id = type(entry) == "table" and entry.id or entry
+				local item = type(entry) == "table" and entry.item or nil
+				local cacheKey = tostring(side) .. ":" .. tostring(index)
+				if type(item) ~= "table" and id ~= nil and type(ownInventory) == "table" then
+					item = ownInventory[tostring(id)] or (tonumber(id) and ownInventory[tonumber(id)] or nil)
+				end
+				if type(item) == "table" then
+					slotItemCache[cacheKey] = {Id = tostring(id or ""), Item = item}
+				elseif id ~= nil then
+					local cached = slotItemCache[cacheKey]
+					if type(cached) == "table" and cached.Id == tostring(id) then item = cached.Item end
+				else
+					slotItemCache[cacheKey] = nil
+				end
+				if id ~= nil then ids[tostring(id)] = true end
+				if type(item) == "table" then
+					local display
+					if okString and type(ItemToString) == "function" then
+						pcall(function() display = ItemToString(item, {rich=false, displayLevel=true}) end)
+					end
+					result[#result + 1] = tostring(display or item.name or (item.sub and item.sub.name) or id or "Item")
+				elseif id ~= nil then
+					result[#result + 1] = "Item " .. tostring(id)
+				end
+			end
+			local tokens = math.max(0, math.floor(tonumber(safeTryIndex(negotiation, {side, "currency"})) or 0))
+			if tokens > 0 then result[#result + 1] = tostring(tokens) .. " Tokens" end
+			return result, ids, tokens
+		end
+		local function offerText(parts) return #parts > 0 and table.concat(parts, ", ") or "Nothing" end
+		local function logCompletedTrade(state)
+			task.wait(0.55)
+			if not screenGui.Parent or type(state) ~= "table" or state.SawBothReady ~= true then return end
+			local inv = inventory()
+			local transferred = false
+			for id in pairs(state.MyIds or {}) do
+				if inv[id] == nil and (not tonumber(id) or inv[tonumber(id)] == nil) then transferred = true break end
+			end
+			if not transferred then
+				for id in pairs(state.TheirIds or {}) do
+					if inv[id] ~= nil or (tonumber(id) and inv[tonumber(id)] ~= nil) then transferred = true break end
+				end
+			end
+			if not transferred then
+				local expected = math.max(0, math.floor((tonumber(state.BalanceBefore) or 0) - (tonumber(state.MyTokens) or 0) + (tonumber(state.TheirTokens) or 0)))
+				transferred = tokenBalance() == expected and expected ~= (tonumber(state.BalanceBefore) or 0)
+			end
+			if not transferred then return end
+			autoServerHopState.RuntimeLastRegularTradeActivityAt = os.clock()
+			local resetStreak = autoServerHopState.ResetCanceledTradeStreak
+			if type(resetStreak) == "function" and tonumber(state.UserId) then
+				resetStreak(state.UserId)
+			end
+			local line = "TRADE | " .. tostring(state.Name or "Unknown")
+				.. " | My Offer: " .. offerText(state.MyOffer or {})
+				.. " | Their Offer: " .. offerText(state.TheirOffer or {})
+			autoServerHopState.RuntimeTradeLog = type(autoServerHopState.RuntimeTradeLog) == "table" and autoServerHopState.RuntimeTradeLog or {}
+			autoServerHopState.RuntimeTradeLog[#autoServerHopState.RuntimeTradeLog + 1] = line
+			while #autoServerHopState.RuntimeTradeLog > 100 do table.remove(autoServerHopState.RuntimeTradeLog, 1) end
+			if autoServerHopState.Utility.PrintTradesToTerminal == true then print(line) end
+		end
+		while screenGui.Parent do
+			local negotiation = safeRepGet(Replicator, "ActiveNegotiation")
+			local guid = negotiation and safeTryIndex(negotiation, {"guid"}) or nil
+			local activeMinigame = safeRepGet(Replicator, "ActiveMinigame")
+			local isMinigame = activeMinigame and (safeTryIndex(activeMinigame, {"phase"}) ~= nil or safeTryIndex(activeMinigame, {"session", "gameId"}) ~= nil or safeTryIndex(activeMinigame, {"queued"}) == true)
+			if guid ~= nil and not isMinigame then
+				if tostring(activeGuid or "") ~= tostring(guid) then
+					activeGuid = guid
+					local opponent = safeTryIndex(negotiation, {"player2", "player"})
+					if not (typeof(opponent) == "Instance" and opponent:IsA("Player") and opponent ~= Players.LocalPlayer) then
+						local opponentId = tonumber(safeTryIndex(negotiation, {"player2", "userId"}) or safeTryIndex(negotiation, {"player2", "id"}))
+						opponent = opponentId and Players:GetPlayerByUserId(opponentId) or nil
+					end
+					if not (typeof(opponent) == "Instance" and opponent:IsA("Player") and opponent ~= Players.LocalPlayer) then
+						opponent = safeTryIndex(negotiation, {"player1", "player"})
+					end
+					captured = {
+						Name = typeof(opponent)=="Instance" and opponent.Name or "Unknown",
+						UserId = typeof(opponent)=="Instance"
+							and opponent:IsA("Player")
+							and opponent.UserId
+							or tonumber(
+								safeTryIndex(negotiation, {"player2", "userId"})
+									or safeTryIndex(negotiation, {"player2", "id"})
+							),
+						BalanceBefore = tokenBalance(),
+						SawBothReady = false,
+					}
+				end
+				if captured then
+					captured.MyOffer, captured.MyIds, captured.MyTokens = slotSnapshot(negotiation, "player1")
+					captured.TheirOffer, captured.TheirIds, captured.TheirTokens = slotSnapshot(negotiation, "player2")
+					if safeTryIndex(negotiation, {"player1", "ready"}) == true and safeTryIndex(negotiation, {"player2", "ready"}) == true then captured.SawBothReady = true end
+				end
+			elseif activeGuid ~= nil then
+				local finished = captured
+				activeGuid, captured = nil, nil
+				if finished then task.spawn(logCompletedTrade, finished) end
+			end
+			task.wait(0.10)
 		end
 	end)
 end
@@ -21924,6 +24528,7 @@ if MINIGAME_MODE then
                         Signatures = utility["AutoAccept" .. itemRarity .. "Signatures"],
                         Sizes = utility["AutoAccept" .. itemRarity .. "Sizes"],
                         Levels = utility["AutoAccept" .. itemRarity .. "Levels"],
+                        MinimumTraits = utility["AutoAccept" .. itemRarity .. "MinimumTraits"],
                     }
                 )) then
                     filteredCounts[itemRarity] = (filteredCounts[itemRarity] or 0) + 1
@@ -22014,7 +24619,7 @@ if MINIGAME_MODE then
         local function tokenBalanceAO()
             return math.max(0, math.floor(tonumber(tryIndexAO(playerDataAO, {"TradeTokens"})) or 0))
         end
-        local function validOfferItemIdAO(value)
+        local function validOfferItemIdAO(value, reservedIds)
             if value == nil then return nil end
             local wantedId = tostring(value)
             local inv = inventoryAO()
@@ -22023,6 +24628,9 @@ if MINIGAME_MODE then
                 or (tonumber(wantedId) and inv[tonumber(wantedId)] or nil)
             ) or nil
             if type(item) ~= "table" or item.locked == true then return nil end
+            if type(autoServerHopState.InventoryConsumeAllowed) == "function"
+                and not autoServerHopState.InventoryConsumeAllowed(wantedId, item, "Offer", reservedIds, inv)
+            then return nil end
             local tradeable = false
             local itemRarity = rarityAO(item)
             if itemRarity == "Eternal" then return nil end
@@ -22221,6 +24829,7 @@ if MINIGAME_MODE then
             local inv = inventoryAO()
             if not inv then return nil end
             local byRarity = {}
+            local protectionReserved = {}
             for _, rarity in ipairs(OUTGOING_BRAINROT_RARITY_OPTIONS) do
                 byRarity[rarity] = {}
             end
@@ -22228,8 +24837,9 @@ if MINIGAME_MODE then
                 local sid = tostring(id)
                 local item = inv[id] or inv[sid]
                 local rarity = rarityAO(item)
-                if rarity and rarity ~= "Eternal" and byRarity[rarity] and validOfferItemIdAO(sid) then
+                if rarity and rarity ~= "Eternal" and byRarity[rarity] and validOfferItemIdAO(sid, protectionReserved) then
                     byRarity[rarity][#byRarity[rarity] + 1] = sid
+                    protectionReserved[sid] = true
                 end
             end
             local result = {}
@@ -22260,7 +24870,7 @@ if MINIGAME_MODE then
                     if not tradeable then
                         local okTradeable, result = pcall(ItemIsTradeableAO, item); tradeable = okTradeable and result == true
                     end
-                    if tradeable then return sid end
+                    if tradeable and validOfferItemIdAO(sid, usedIds) then return sid end
                 end
             end
             return nil
@@ -22518,7 +25128,7 @@ if MINIGAME_MODE then
                 fallbackRuleAuthoritative = true
             end
             local function addSpecificPrimaryAO(value)
-                local valid = validOfferItemIdAO(value)
+                local valid = validOfferItemIdAO(value, specificPrimarySeenAO)
                 if not valid or specificPrimarySeenAO[valid] == true then return false end
                 if #specificPrimaryIdsAO >= 6 then return false end
                 specificPrimarySeenAO[valid] = true
@@ -23080,9 +25690,10 @@ if MINIGAME_MODE then
             local slotIndex = 1
             for _, specificId in ipairs(specificPrimaryIdsAO) do
                 if slotIndex > 6 then break end
-                if not usedIds[specificId] then
-                    usedIds[specificId] = true
-                    desiredIds[slotIndex] = specificId
+                local protectedValid = validOfferItemIdAO(specificId, usedIds)
+                if protectedValid and not usedIds[protectedValid] then
+                    usedIds[protectedValid] = true
+                    desiredIds[slotIndex] = protectedValid
                     slotIndex += 1
                 end
             end
@@ -23105,9 +25716,10 @@ if MINIGAME_MODE then
             if slotIndex <= 6 then
                 for _, fallbackId in ipairs(specificFallbackIdsAO) do
                     if slotIndex > 6 then break end
-                    if not usedIds[fallbackId] then
-                        usedIds[fallbackId] = true
-                        desiredIds[slotIndex] = fallbackId
+                    local protectedValid = validOfferItemIdAO(fallbackId, usedIds)
+                    if protectedValid and not usedIds[protectedValid] then
+                        usedIds[protectedValid] = true
+                        desiredIds[slotIndex] = protectedValid
                         slotIndex += 1
                     end
                 end
@@ -23146,9 +25758,10 @@ if MINIGAME_MODE then
                 if (slotIndex - 1) < bestGoal then
                     for _, itemId in ipairs(highestNonEternalOfferIdsAO(100) or {}) do
                         if slotIndex > 6 or (slotIndex - 1) >= bestGoal then break end
-                        if not usedIds[itemId] then
-                            usedIds[itemId] = true
-                            desiredIds[slotIndex] = itemId
+                        local protectedValid = validOfferItemIdAO(itemId, usedIds)
+                        if protectedValid and not usedIds[protectedValid] then
+                            usedIds[protectedValid] = true
+                            desiredIds[slotIndex] = protectedValid
                             slotIndex += 1
                         end
                     end
@@ -23300,6 +25913,7 @@ if MINIGAME_MODE then
 					Signatures = utility[prefix .. "Signatures"],
 					Sizes = utility[prefix .. "Sizes"],
 					Levels = utility[prefix .. "Levels"],
+					MinimumTraits = utility[prefix .. "MinimumTraits"],
 				}
 			)
 		end
@@ -23629,8 +26243,22 @@ if MINIGAME_MODE then
 			return sorted
 		end
 		-- Selection is read-only and follows the game's existing inventory order.
+		-- This worker runs four times per second; briefly cache the expensive
+		-- sort/rideability scan to avoid periodic frame spikes on large inventories.
+		local selectionCacheAE = {}
 		local function selectInventoryAE(inventory, needBest, needRideable, needBiggest)
 			if not (needBest or needRideable or needBiggest) then return nil, nil, nil end
+			local cacheKey = tostring(needBest == true)
+				.. "|" .. tostring(needRideable == true)
+				.. "|" .. tostring(needBiggest == true)
+			local now = os.clock()
+			local cached = selectionCacheAE[cacheKey]
+			if type(cached) == "table"
+				and cached.Inventory == inventory
+				and now - (tonumber(cached.At) or 0) < 0.75
+			then
+				return cached.Best, cached.Rideable, cached.Biggest
+			end
 			local bestId, bestRideableId, biggestRideableId
 			local biggestScale = -math.huge
 			for _, id in ipairs(sortedIdsAE(inventory)) do
@@ -23660,6 +26288,13 @@ if MINIGAME_MODE then
 					break
 				end
 			end
+			selectionCacheAE[cacheKey] = {
+				Inventory = inventory,
+				At = now,
+				Best = bestId,
+				Rideable = bestRideableId,
+				Biggest = biggestRideableId,
+			}
 			return bestId, bestRideableId, biggestRideableId
 		end
 		local tablesFolderCacheAE, nextTablesScanAE = nil, 0
@@ -24021,15 +26656,19 @@ if MINIGAME_MODE then
 				for id in pairs(inventory) do sorted[#sorted + 1] = id end
 			end
 			local result = {}
+			local reserved = {}
 			for _, id in ipairs(sorted) do
 				if #result >= 6 then break end
 				local item = inventory[id] or inventory[tostring(id)]
 				if type(item) == "table" and not item.locked then
 					local okType, itemType = pcall(GetItemTypeAO2, item)
+					local sid = tostring(id)
 					if okType and itemType == "Brainrot" and displayTradeableAO2(item)
 						and autoServerHopState.ItemMatchesSpecificFilters(item, mutations, traits, extra)
+						and (type(autoServerHopState.InventoryConsumeAllowed) ~= "function" or autoServerHopState.InventoryConsumeAllowed(sid, item, "Offer", reserved, inventory))
 					then
-						result[#result + 1] = tostring(id)
+						reserved[sid] = true
+						result[#result + 1] = sid
 					end
 				end
 			end
@@ -24053,6 +26692,7 @@ if MINIGAME_MODE then
 					valid = okType and itemType == "Brainrot"
 						and displayTradeableAO2(item)
 						and used[tostring(selectedId)] ~= true
+						and (type(autoServerHopState.InventoryConsumeAllowed) ~= "function" or autoServerHopState.InventoryConsumeAllowed(tostring(selectedId), item, "Offer", used, inventory))
 				end
 				if valid then
 					desired[slotIndex] = tostring(selectedId)
@@ -24977,22 +27617,6 @@ if MINIGAME_MODE then
 			local root = character and character:FindFirstChild("HumanoidRootPart")
 			if root and root:FindFirstChild("CustomSeatWeld") then return false end
 			if humanoid then
-				local gameObjects = workspace:FindFirstChild("GameObjects")
-				local placeSpecific = gameObjects and gameObjects:FindFirstChild("PlaceSpecific")
-				local tradePlaza = placeSpecific and placeSpecific:FindFirstChild("trade_plaza")
-				local tables = tradePlaza and tradePlaza:FindFirstChild("MinigameTables")
-				if tables then
-					for _, tableModel in ipairs(tables:GetChildren()) do
-						if tableModel:IsA("Model") then
-							for _, seatName in ipairs({"Seat1", "Seat2"}) do
-								local seat = tableModel:FindFirstChild(seatName)
-								if seat and seat:IsA("Seat") and seat.Occupant == humanoid then
-									return false
-								end
-							end
-						end
-					end
-				end
 				if humanoid.SeatPart ~= nil or humanoid.Sit then return false end
 				local ok, state = pcall(humanoid.GetState, humanoid)
 				if ok and state == Enum.HumanoidStateType.Seated then return false end
@@ -25301,6 +27925,7 @@ if MINIGAME_MODE then
 					Signatures = spec.Signatures,
 					Sizes = spec.Sizes,
 					Levels = spec.Levels,
+					MinimumTraits = spec.MinimumTraits,
 				}
 			)
 		end
@@ -25397,19 +28022,56 @@ if MINIGAME_MODE then
 			return nil, 0
 		end
 
+		local function protectionInventoryAB(state)
+			local combined = {}
+			for id, item in pairs(inventoryAB() or {}) do combined[tostring(id)] = item end
+			for offerId, item in pairs(type(state) == "table" and state.items or {}) do
+				if type(item) == "table" then
+					local itemId = item.guid or item.id or offerId
+					combined[tostring(itemId)] = item
+				end
+			end
+			return combined
+		end
+		local function boothPriceForSpecAB(spec, itemId)
+			if type(spec) ~= "table" then return 1 end
+			local starting = math.clamp(math.floor(tonumber(spec.StartingPrice or spec.Price) or 1), 1, 1000000)
+			local slotKey = tostring(spec.Index or 0)
+			autoServerHopState.RuntimeBoothRepriceStartedAt = type(autoServerHopState.RuntimeBoothRepriceStartedAt) == "table" and autoServerHopState.RuntimeBoothRepriceStartedAt or {}
+			autoServerHopState.RuntimeBoothRepriceItemBySlot = type(autoServerHopState.RuntimeBoothRepriceItemBySlot) == "table" and autoServerHopState.RuntimeBoothRepriceItemBySlot or {}
+			if spec.SimpleAutofarm == true or spec.DynamicRepricing ~= true then
+				autoServerHopState.RuntimeBoothRepriceStartedAt[slotKey] = nil
+				autoServerHopState.RuntimeBoothRepriceItemBySlot[slotKey] = nil
+				return starting
+			end
+			local itemKey = tostring(itemId or "")
+			if autoServerHopState.RuntimeBoothRepriceItemBySlot[slotKey] ~= itemKey then
+				autoServerHopState.RuntimeBoothRepriceItemBySlot[slotKey] = itemKey
+				autoServerHopState.RuntimeBoothRepriceStartedAt[slotKey] = os.clock()
+			end
+			local started = tonumber(autoServerHopState.RuntimeBoothRepriceStartedAt[slotKey]) or os.clock()
+			local interval = math.max(60, (tonumber(spec.RepriceMinutes) or 5) * 60)
+			local steps = math.max(0, math.floor((os.clock() - started) / interval))
+			local minimum = math.clamp(math.floor(tonumber(spec.MinimumPrice) or 1), 1, starting)
+			local change = math.max(1, math.floor(tonumber(spec.PriceChange) or 1))
+			return math.max(minimum, starting - (steps * change))
+		end
+
 		local function existingOfferMatchesSpecAB(state, spec)
 			if type(state) ~= "table" or type(spec) ~= "table" then return false end
 			for offerId, offer in pairs(state.offers or {}) do
 				local item = state.items and (state.items[offerId] or state.items[tostring(offerId)]) or nil
 				local itemId = type(item) == "table" and (item.guid or item.id) or offerId
-				if itemMatchesListingSpecAB(item, spec, itemId) and itemPassesGlobalFiltersAB(item) then
+				local protectionAllowed = type(autoServerHopState.InventoryConsumeAllowed) ~= "function"
+					or autoServerHopState.InventoryConsumeAllowed(itemId, item, "Booth", nil, protectionInventoryAB(state))
+				if protectionAllowed and itemMatchesListingSpecAB(item, spec, itemId) and itemPassesGlobalFiltersAB(item) then
 					local price = tonumber(offer and offer.cost and offer.cost.value)
 					if spec.SimpleAutofarm == true then
 						local rarity = rarityAB(item)
 						if (rarity == "Infinity" and price == 100) or (rarity == "Meta" and price == 500) then
 							return true
 						end
-					elseif price == spec.Price then
+					elseif price == boothPriceForSpecAB(spec, itemId) then
 						return true
 					end
 				end
@@ -25433,6 +28095,8 @@ if MINIGAME_MODE then
 					and math.floor(tonumber(utility[prefix .. "Tokens"]) or 100) == 100
 					and math.floor(tonumber(utility[prefix .. "InventoryThreshold"]) or 91) == 91
 					and math.floor(tonumber(utility[prefix .. "MinimumCopies"]) or 1) == 1
+					and math.floor(tonumber(utility[prefix .. "BrainrotMinimumTraits"]) or 0) == 0
+					and utility[prefix .. "DynamicRepricing"] ~= true
 					and utility[prefix .. "MessageWhenListed"] ~= true
 					and tostring(utility[prefix .. "ListedMessage"] or "") == ""
 					and math.abs(tonumber(utility[prefix .. "MessageDelay"]) or 0) < 0.0001
@@ -25464,18 +28128,24 @@ if MINIGAME_MODE then
 				local signatures = type(utility[prefix .. "BrainrotSignatures"]) == "table" and utility[prefix .. "BrainrotSignatures"] or {}
 				local sizes = type(utility[prefix .. "BrainrotSizes"]) == "table" and utility[prefix .. "BrainrotSizes"] or {}
 				local levels = type(utility[prefix .. "BrainrotLevels"]) == "table" and utility[prefix .. "BrainrotLevels"] or {}
+				local minimumTraits = math.clamp(math.floor(tonumber(utility[prefix .. "BrainrotMinimumTraits"]) or 0), 0, 5)
 				local threshold = math.clamp(math.floor(tonumber(utility[prefix .. "InventoryThreshold"]) or 95), 1, 100)
 				local minimumCopies = math.clamp(math.floor(tonumber(utility[prefix .. "MinimumCopies"]) or 1), 1, 100)
 				local spec
 				if listSpecificBrainrot and specificBrainrotId ~= nil and tostring(specificBrainrotId) ~= "" then
 					spec = {Index = index, Mode = "SpecificBrainrot", ItemId = tostring(specificBrainrotId)}
 				elseif listByBrainrot and type(brainrot) == "string" and brainrot ~= "" then
-					spec = {Index = index, Mode = "Brainrot", Brainrot = brainrot, Mutations = mutations, Traits = traits, Signatures = signatures, Sizes = sizes, Levels = levels}
+					spec = {Index = index, Mode = "Brainrot", Brainrot = brainrot, Mutations = mutations, Traits = traits, Signatures = signatures, Sizes = sizes, Levels = levels, MinimumTraits = minimumTraits}
 				elseif listByRarity and type(rarity) == "string" and rarity ~= "" then
-					spec = {Index = index, Mode = "Rarity", Rarity = rarity, Mutations = mutations, Traits = traits, Signatures = signatures, Sizes = sizes, Levels = levels}
+					spec = {Index = index, Mode = "Rarity", Rarity = rarity, Mutations = mutations, Traits = traits, Signatures = signatures, Sizes = sizes, Levels = levels, MinimumTraits = minimumTraits}
 				end
 				if enabled and spec then
 					spec.Price = math.clamp(math.floor(tonumber(utility[prefix .. "Tokens"]) or 1), 1, 1000000)
+					spec.StartingPrice = spec.Price
+					spec.DynamicRepricing = utility[prefix .. "DynamicRepricing"] == true
+					spec.MinimumPrice = math.clamp(math.floor(tonumber(utility[prefix .. "MinimumPrice"]) or 1), 1, spec.StartingPrice)
+					spec.PriceChange = math.clamp(math.floor(tonumber(utility[prefix .. "PriceChange"]) or 1), 1, 1000000)
+					spec.RepriceMinutes = math.clamp(math.floor(tonumber(utility[prefix .. "RepriceMinutes"]) or 5), 1, 60)
 					spec.MessageWhenListed = utility[prefix .. "MessageWhenListed"] == true
 					spec.ListedMessage = tostring(utility[prefix .. "ListedMessage"] or "")
 					spec.MessageDelay = math.clamp(tonumber(utility[prefix .. "MessageDelay"]) or 0, 0, 30)
@@ -25493,6 +28163,8 @@ if MINIGAME_MODE then
 		local function matchExistingAB(state, specs)
 			local matchedOffers, matchedSpecs = {}, {}
 			local protected = simpleAutofarmProtectedBoothIdsAB(state)
+			local protectionInventory = protectionInventoryAB(state)
+			local protectionReserved = {}
 			local function tryMatchPass(simplePass)
 				for specIndex, spec in ipairs(specs) do
 					if matchedSpecs[specIndex] == nil and (spec.SimpleAutofarm == true) == simplePass then
@@ -25501,19 +28173,26 @@ if MINIGAME_MODE then
 								local item = state.items and (state.items[offerId] or state.items[tostring(offerId)]) or nil
 								local itemId = type(item) == "table" and (item.guid or item.id) or offerId
 								local protectedId = tostring(itemId or offerId)
-								local price = tonumber(offer and offer.cost and offer.cost.value)
-								local priceMatches = price == spec.Price
-								if spec.SimpleAutofarm == true then
-									local rarity = rarityAB(item)
-									priceMatches = (rarity == "Infinity" and price == 100) or (rarity == "Meta" and price == 500)
-								end
-								if priceMatches
+								local protectionAllowed = type(autoServerHopState.InventoryConsumeAllowed) ~= "function"
+									or autoServerHopState.InventoryConsumeAllowed(itemId, item, "Booth", protectionReserved, protectionInventory)
+								local itemMatches = protectionAllowed
 									and (spec.SimpleAutofarm == true or protected[protectedId] ~= true)
 									and itemMatchesListingSpecAB(item, spec, itemId)
 									and itemPassesGlobalFiltersAB(item)
+								local priceMatches = false
+								if itemMatches then
+									local price = tonumber(offer and offer.cost and offer.cost.value)
+									priceMatches = price == boothPriceForSpecAB(spec, itemId)
+									if spec.SimpleAutofarm == true then
+										local rarity = rarityAB(item)
+										priceMatches = (rarity == "Infinity" and price == 100) or (rarity == "Meta" and price == 500)
+									end
+								end
+								if itemMatches and priceMatches
 								then
 									matchedSpecs[specIndex] = offerId
 									matchedOffers[tostring(offerId)] = true
+									protectionReserved[tostring(itemId)] = true
 									break
 								end
 							end
@@ -25547,6 +28226,7 @@ if MINIGAME_MODE then
 		end
 		local function findListingItemAB(spec, state, reserved)
 			local inventory = inventoryAB()
+			local protectionInventory = protectionInventoryAB(state)
 			local protected = simpleAutofarmProtectedBoothIdsAB(state)
 			if not inventory or type(spec) ~= "table" then return nil end
 			local simpleTargetRarity
@@ -25574,6 +28254,7 @@ if MINIGAME_MODE then
 					and (spec.SimpleAutofarm ~= true or rarityAB(item) == simpleTargetRarity)
 					and itemMatchesListingSpecAB(item, spec, id)
 					and itemPassesGlobalFiltersAB(item)
+					and (type(autoServerHopState.InventoryConsumeAllowed) ~= "function" or autoServerHopState.InventoryConsumeAllowed(sid, item, "Booth", reserved, protectionInventory))
 					and not boothContainsItemAB(state, id)
 				then
 					local tradeable = false
@@ -25621,7 +28302,7 @@ if MINIGAME_MODE then
 			local tradeable = false
 			pcall(function() tradeable = ItemIsTradeableAB(item) == true end)
 			if not tradeable then return false end
-			local price = spec.Price
+			local price = boothPriceForSpecAB(spec, itemId)
 			if spec.SimpleAutofarm == true then
 				local rarity = rarityAB(item)
 				if rarity ~= "Infinity" and rarity ~= "Meta" then return false end
@@ -25778,6 +28459,527 @@ if MINIGAME_MODE then
 		end
 	end)
 end
+-- Auto Buy Booth Items -------------------------------------------------------
+-- Scans replicated Trade Plaza booth listings and purchases Brainrots or other
+-- configured item types only when they satisfy the user's per-rule filters and
+-- maximum-token price. Specific item rules take precedence over broader Brainrot
+-- rarity rules so a specific price/ownership cap can never be bypassed.
+if MINIGAME_MODE then
+	task.spawn(function()
+		while screenGui.Parent
+			and autoServerHopState.Utility.AutoBoothBuyEnabled ~= true
+			and autoServerHopState.Utility.CheckServerHopNoEligibleBooths ~= true
+		do
+			task.wait(0.50)
+		end
+		if not screenGui.Parent then return end
+
+		local ClientModulesBuy = ReplicatedStorage:WaitForChild("Client"):WaitForChild("Modules")
+		local SharedBuy = ReplicatedStorage:WaitForChild("Shared")
+		local function requireBuy(moduleScript)
+			while screenGui.Parent do
+				local ok, result = pcall(require, moduleScript)
+				if ok and result ~= nil then return result end
+				task.wait(0.25)
+			end
+		end
+		local ReplicatorBuy = requireBuy(ClientModulesBuy:WaitForChild("ReplicatorClient"))
+		local RemotesBuy = requireBuy(SharedBuy:WaitForChild("Remotes"))
+		local EconomyMathBuy = requireBuy(SharedBuy:WaitForChild("utils"):WaitForChild("EconomyMath"))
+		local ItemToStringBuy = requireBuy(SharedBuy:WaitForChild("utils"):WaitForChild("ItemToString"))
+		local LuckyBlocksBuy = requireBuy(SharedBuy:WaitForChild("Config"):WaitForChild("LuckyBlocks"))
+		if not (ReplicatorBuy and RemotesBuy and EconomyMathBuy and ItemToStringBuy) then return end
+		local RequestBoothPurchaseBuy = RemotesBuy.RequestBoothPurchase
+		if not RequestBoothPurchaseBuy then return end
+
+		local offerCooldownUntilBuy = {}
+		local optimisticOwnedBuy = setmetatable({}, {__mode = "k"})
+		local eligibilityCacheAtBuy = 0
+		local eligibilityCacheValueBuy = false
+		local lastPurchaseAtBuy = 0
+		local PURCHASE_INTERVAL_BUY = 0.35
+		local FAILURE_RETRY_BUY = 1.50
+		local SUCCESS_RETRY_BUY = 4.00
+		local REPLICATION_WAIT_BUY = 2.00
+
+		local function dataBuy()
+			return safeRepGet(ReplicatorBuy, "PlayerData"),
+				safeRepGet(ReplicatorBuy, "TradingBooths"),
+				safeRepGet(ReplicatorBuy, "ActiveNegotiation"),
+				safeRepGet(ReplicatorBuy, "ActiveMinigame")
+		end
+
+		local function automationBlockedBuy()
+			local utility = autoServerHopState.Utility
+			if utility.PauseScript == true
+				or utility.AutoBoothBuyEnabled ~= true
+				or autoServerHopState.RuntimeServerHopPending == true
+				or autoServerHopState.RuntimeServerHopHardFreeze == true
+				or autoServerHopState.RuntimeBoothMutationBusy == true
+			then
+				return true
+			end
+			local _, _, negotiation, minigame = dataBuy()
+			if safeTryIndex(negotiation, {"guid"}) ~= nil then return true end
+			if safeTryIndex(minigame, {"queued"}) == true
+				or safeTryIndex(minigame, {"phase"}) ~= nil
+				or safeTryIndex(minigame, {"session", "gameId"}) ~= nil
+				or type(safeTryIndex(minigame, {"voting"})) == "table"
+			then
+				return true
+			end
+			local player = Players.LocalPlayer
+			if player and player:GetAttribute("Seated") == true then return true end
+			return false
+		end
+
+		local function inventoryAndTokensBuy()
+			local playerData = select(1, dataBuy())
+			local inventory = safeTryIndex(playerData, {"Inventory"})
+			if type(inventory) ~= "table" then inventory = {} end
+			local tokens = math.max(
+				0,
+				math.floor(tonumber(safeTryIndex(playerData, {"TradeTokens"})) or 0)
+			)
+			return inventory, tokens
+		end
+
+		local function itemNameBuy(item)
+			if type(item) ~= "table" then return "" end
+			local sub = type(item.sub) == "table" and item.sub or {}
+			local kind = autoServerHopState.ItemKind(item)
+			if kind == "Brainrot" then
+				return tostring(item.name or sub.name or "")
+			elseif kind == "Gear" then
+				return tostring(
+					sub.gearType
+						or sub.GearType
+						or item.gearType
+						or item.GearType
+						or item.name
+						or sub.name
+						or ""
+				)
+			elseif kind == "LuckyBlock" then
+				local luckyType = tostring(
+					sub.luckyBlockType
+						or sub.LuckyBlockType
+						or item.luckyBlockType
+						or item.LuckyBlockType
+						or "Default"
+				)
+				local configEntry = type(LuckyBlocksBuy) == "table"
+					and LuckyBlocksBuy[luckyType] or nil
+				return tostring(
+					type(configEntry) == "table"
+						and (configEntry.DisplayName or configEntry.displayName)
+						or nil
+						or (
+							luckyType == "Default"
+								and "Lucky Block"
+								or (luckyType .. " Lucky Block")
+						)
+				)
+			end
+			local direct = item.name or sub.name or item.displayName or item.DisplayName
+			if direct ~= nil and tostring(direct) ~= "" then
+				return tostring(direct)
+			end
+			local display
+			pcall(function()
+				display = ItemToStringBuy(item, {
+					rich = false,
+					displayLevel = false,
+					displayMutation = false,
+				})
+			end)
+			return tostring(display or "")
+		end
+
+		local function effectiveRarityBuy(item)
+			if type(item) ~= "table"
+				or autoServerHopState.ItemKind(item) ~= "Brainrot"
+			then
+				return nil
+			end
+			local rarity = autoServerHopState.ItemRarity(item)
+			local name = itemNameBuy(item)
+			if (type(rarity) ~= "string" or rarity == "")
+				and name ~= ""
+			then
+				local ok, resolved = pcall(EconomyMathBuy.GetBrainrotRarity, name)
+				if ok and type(resolved) == "string" then rarity = resolved end
+			end
+			local sub = type(item.sub) == "table" and item.sub or {}
+			local meta = item.meta == true or item.Meta == true
+				or item.isMeta == true or item.IsMeta == true
+				or sub.meta == true or sub.Meta == true
+				or sub.isMeta == true or sub.IsMeta == true
+				or (name ~= ""
+					and string.find(string.lower(name), "%f[%a]meta%f[%A]") ~= nil)
+			if rarity == "Infinity" and meta then rarity = "Meta" end
+			return type(rarity) == "string" and rarity or nil
+		end
+
+		local function filtersMatchBuy(item, rule, byRarity)
+			if type(item) ~= "table" or type(rule) ~= "table" then
+				return false
+			end
+			if byRarity then
+				if autoServerHopState.ItemKind(item) ~= "Brainrot" then
+					return false
+				end
+				return autoServerHopState.ItemMatchesSpecificFilters(
+					item,
+					rule.Mutations,
+					rule.Traits,
+					{
+						Signature = rule.Signature,
+						Signatures = rule.Signatures or rule.SpecificSignatures,
+						Sizes = rule.Sizes or rule.SpecificSizes,
+						Level = rule.Level,
+						Levels = rule.Levels or rule.SpecificLevels,
+						MinimumTraits = rule.MinimumTraitCount,
+					}
+				)
+			end
+			return autoServerHopState.ItemMatchesSpecificRule(item, rule)
+		end
+
+		local function identityMatchesBuy(item, rule, byRarity)
+			if type(rule) ~= "table"
+				or rule.Item == nil
+				or tostring(rule.Item) == ""
+			then
+				return false
+			end
+			if byRarity then
+				return effectiveRarityBuy(item) == tostring(rule.Item)
+					and filtersMatchBuy(item, rule, true)
+			end
+			return autoServerHopState.SpecificItemNamesEquivalent(
+				itemNameBuy(item),
+				rule.Item
+			) and filtersMatchBuy(item, rule, false)
+		end
+
+		local function ownedCountBuy(inventory, rule, byRarity)
+			local count = 0
+			for _, owned in pairs(type(inventory) == "table" and inventory or {}) do
+				if identityMatchesBuy(owned, rule, byRarity) then count += 1 end
+			end
+			return count
+		end
+
+		local function effectiveOwnedCountBuy(inventory, rule, byRarity)
+			local actual = ownedCountBuy(inventory, rule, byRarity)
+			local optimistic = math.max(
+				0,
+				math.floor(tonumber(optimisticOwnedBuy[rule]) or 0)
+			)
+			if actual >= optimistic then
+				optimisticOwnedBuy[rule] = actual
+				optimistic = actual
+			end
+			return math.max(actual, optimistic)
+		end
+
+		local function ruleCanBuyBuy(inventory, item, price, rule, byRarity)
+			if not identityMatchesBuy(item, rule, byRarity) then
+				return false, nil
+			end
+			local maxTokens = math.clamp(
+				math.floor(tonumber(rule.MaxTokens) or 1000000),
+				1,
+				1000000
+			)
+			if price > maxTokens then return false, nil end
+			if rule.OwnedLimitEnabled == true then
+				local limit = math.clamp(
+					math.floor(tonumber(rule.OwnedLimit) or 1),
+					1,
+					100
+				)
+				local owned = effectiveOwnedCountBuy(inventory, rule, byRarity)
+				if owned >= limit then return false, owned end
+				return true, owned
+			end
+			return true, nil
+		end
+
+		local function matchingRuleBuy(inventory, item, price)
+			local utility = autoServerHopState.Utility
+			local hadSpecificMatch = false
+			for index, rule in ipairs(
+				type(utility.AutoBoothBuySpecificRules) == "table"
+					and utility.AutoBoothBuySpecificRules or {}
+			) do
+				if identityMatchesBuy(item, rule, false) then
+					hadSpecificMatch = true
+					local allowed, owned = ruleCanBuyBuy(
+						inventory,
+						item,
+						price,
+						rule,
+						false
+					)
+					if allowed then return rule, false, index, owned end
+				end
+			end
+			-- An exact configured item rule owns that matching variant. If its
+			-- price/ownership guard blocks the purchase, do not let a broader
+			-- rarity rule silently bypass the user's specific limit.
+			if hadSpecificMatch then return nil end
+
+			for index, rule in ipairs(
+				type(utility.AutoBoothBuyRarityRules) == "table"
+					and utility.AutoBoothBuyRarityRules or {}
+			) do
+				if identityMatchesBuy(item, rule, true) then
+					local allowed, owned = ruleCanBuyBuy(
+						inventory,
+						item,
+						price,
+						rule,
+						true
+					)
+					if allowed then return rule, true, index, owned end
+				end
+			end
+			return nil
+		end
+
+		local function betterCandidateBuy(candidate, best)
+			if not best then return true end
+			if candidate.ByRarity ~= best.ByRarity then
+				return candidate.ByRarity ~= true
+			end
+			if candidate.RuleIndex ~= best.RuleIndex then
+				return candidate.RuleIndex < best.RuleIndex
+			end
+			if candidate.Price ~= best.Price then
+				return candidate.Price < best.Price
+			end
+			return tostring(candidate.BoothKey) .. "|" .. tostring(candidate.OfferId)
+				< tostring(best.BoothKey) .. "|" .. tostring(best.OfferId)
+		end
+
+		local function findCandidateBuy(ignoreCooldown)
+			local inventory, tokenBalance = inventoryAndTokensBuy()
+			if tokenBalance <= 0 then return nil end
+			local _, booths = dataBuy()
+			local boothData = booths and booths.Data
+			if type(boothData) ~= "table" then return nil end
+			local localPlayer = Players.LocalPlayer
+			local best
+			local now = os.clock()
+			for boothKey, boothState in pairs(boothData) do
+				if type(boothState) == "table"
+					and boothState.player ~= nil
+					and boothState.player ~= localPlayer
+				then
+					local offers = type(boothState.offers) == "table"
+						and boothState.offers or {}
+					local items = type(boothState.items) == "table"
+						and boothState.items or {}
+					for offerId, offer in pairs(offers) do
+						local cooldownKey = tostring(boothKey) .. "|" .. tostring(offerId)
+						if ignoreCooldown == true
+							or now >= (tonumber(offerCooldownUntilBuy[cooldownKey]) or 0)
+						then
+							local item = items[offerId] or items[tostring(offerId)]
+							local price = math.floor(
+								tonumber(type(offer) == "table"
+									and offer.cost
+									and offer.cost.value) or 0
+							)
+							if type(item) == "table"
+								and price >= 1
+								and price <= tokenBalance
+							then
+								local rule, byRarity, ruleIndex, owned =
+									matchingRuleBuy(inventory, item, price)
+								if rule then
+									local candidate = {
+										BoothKey = boothKey,
+										OfferId = offerId,
+										Item = item,
+										Price = price,
+										Rule = rule,
+										ByRarity = byRarity == true,
+										RuleIndex = ruleIndex,
+										OwnedBefore = owned,
+										CooldownKey = cooldownKey,
+										Seller = boothState.player,
+									}
+									if betterCandidateBuy(candidate, best) then
+										best = candidate
+									end
+								end
+							end
+						end
+					end
+				end
+			end
+			return best
+		end
+
+		autoServerHopState.HasEligibleBoothListing = function()
+			local now = os.clock()
+			if now - eligibilityCacheAtBuy < 0.50 then
+				return eligibilityCacheValueBuy
+			end
+			local ok, candidate = pcall(findCandidateBuy, true)
+			eligibilityCacheAtBuy = now
+			eligibilityCacheValueBuy = ok and candidate ~= nil
+			return eligibilityCacheValueBuy
+		end
+
+		local function liveOfferStillMatchesBuy(candidate)
+			local _, booths = dataBuy()
+			local boothData = booths and booths.Data
+			local booth = type(boothData) == "table"
+				and boothData[candidate.BoothKey] or nil
+			if type(booth) ~= "table" then return false end
+			local offer = type(booth.offers) == "table"
+				and (
+					booth.offers[candidate.OfferId]
+						or booth.offers[tostring(candidate.OfferId)]
+				)
+				or nil
+			local item = type(booth.items) == "table"
+				and (
+					booth.items[candidate.OfferId]
+						or booth.items[tostring(candidate.OfferId)]
+				)
+				or nil
+			local price = math.floor(
+				tonumber(type(offer) == "table"
+					and offer.cost
+					and offer.cost.value) or 0
+			)
+			return type(item) == "table"
+				and price == candidate.Price
+				and identityMatchesBuy(
+					item,
+					candidate.Rule,
+					candidate.ByRarity
+				)
+		end
+
+		local function purchaseCandidateBuy(candidate)
+			if not candidate
+				or automationBlockedBuy()
+				or not liveOfferStillMatchesBuy(candidate)
+			then
+				return
+			end
+			local inventory, tokenBalance = inventoryAndTokensBuy()
+			if candidate.Price > tokenBalance then return end
+			local allowed, owned = ruleCanBuyBuy(
+				inventory,
+				candidate.Item,
+				candidate.Price,
+				candidate.Rule,
+				candidate.ByRarity
+			)
+			if not allowed then return end
+
+			autoServerHopState.RuntimeBoothMutationBusy = true
+			local ok, result = pcall(
+				RequestBoothPurchaseBuy.InvokeServer,
+				RequestBoothPurchaseBuy,
+				candidate.BoothKey,
+				candidate.OfferId,
+				candidate.Price
+			)
+			autoServerHopState.RuntimeBoothMutationBusy = false
+			lastPurchaseAtBuy = os.clock()
+			eligibilityCacheAtBuy = 0
+
+			if not ok or not result then
+				offerCooldownUntilBuy[candidate.CooldownKey] =
+					os.clock() + FAILURE_RETRY_BUY
+				return
+			end
+
+			offerCooldownUntilBuy[candidate.CooldownKey] =
+				os.clock() + SUCCESS_RETRY_BUY
+			autoServerHopState.RuntimeLastBoothBuyAt = os.clock()
+			if candidate.Rule.OwnedLimitEnabled == true then
+				optimisticOwnedBuy[candidate.Rule] = math.max(
+					math.floor(tonumber(optimisticOwnedBuy[candidate.Rule]) or 0),
+					math.floor(tonumber(owned) or 0) + 1
+				)
+			end
+
+			if autoServerHopState.Utility.PrintPurchasedBoothListingsToTerminal == true then
+				local parts = {
+					"BOOTH BUY",
+					"Item: " .. itemNameBuy(candidate.Item),
+					"Rarity: " .. tostring(effectiveRarityBuy(candidate.Item) or "Unknown"),
+					"Tokens: " .. tostring(candidate.Price),
+				}
+				if candidate.Seller then
+					parts[#parts + 1] = "Seller: " .. tostring(
+						candidate.Seller.Name
+							or candidate.Seller.DisplayName
+							or candidate.Seller
+					)
+				end
+				print(table.concat(parts, " | "))
+				print(string.rep("\\", 10))
+			end
+
+			-- Wait briefly for the authoritative inventory/booth replication before
+			-- another purchase. The optimistic count above also prevents an owned
+			-- limit from being exceeded if inventory replication is unusually slow.
+			local expectedOwned = candidate.Rule.OwnedLimitEnabled == true
+				and math.floor(tonumber(optimisticOwnedBuy[candidate.Rule]) or 0)
+				or nil
+			local deadline = os.clock() + REPLICATION_WAIT_BUY
+			repeat
+				task.wait(0.05)
+				if not screenGui.Parent then return end
+				if expectedOwned then
+					local liveInventory = select(1, inventoryAndTokensBuy())
+					if ownedCountBuy(
+						liveInventory,
+						candidate.Rule,
+						candidate.ByRarity
+					) >= expectedOwned
+					then
+						break
+					end
+				elseif not liveOfferStillMatchesBuy(candidate) then
+					break
+				end
+			until os.clock() >= deadline
+		end
+
+		while screenGui.Parent do
+			local activeCandidateBuy = false
+			if autoServerHopState.Utility.AutoBoothBuyEnabled == true
+				and not automationBlockedBuy()
+				and os.clock() - lastPurchaseAtBuy >= PURCHASE_INTERVAL_BUY
+			then
+				local ok, candidate = pcall(findCandidateBuy, false)
+				if ok and candidate then
+					activeCandidateBuy = true
+					pcall(purchaseCandidateBuy, candidate)
+				end
+			end
+			local now = os.clock()
+			for key, untilAt in pairs(offerCooldownUntilBuy) do
+				if now >= (tonumber(untilAt) or 0) then
+					offerCooldownUntilBuy[key] = nil
+				end
+			end
+			task.wait(activeCandidateBuy and 0.25 or 0.50)
+		end
+	end)
+end
+
 -- [08] Minigame Autoplay Controllers ----------------------------------------
 if MINIGAME_MODE then
 task.spawn(function()
@@ -34982,7 +38184,7 @@ do
         mobileButton.BorderSizePixel = 0
         mobileButton.AutoButtonColor = false
         mobileButton.Text = "GIVE\nBACK"
-        mobileButton.TextColor3 = Color3.new(1, 1, 1)
+        mobileButton.TextColor3 = UI.MENU_TEXT_SELECTED
         mobileButton.TextWrapped = true
         mobileButton.FontFace = UI.MENU_FONT_BOLD_FACE
         mobileButton.TextSize = 13
@@ -35787,6 +38989,9 @@ local function autoleaveServerBlacklisted(serverId)
     if type(serverId) ~= "string" or serverId == "" then
         return true
     end
+    local mergePersistent = autoServerHopState
+        and autoServerHopState.MergePersistentBlacklistState
+    if type(mergePersistent) == "function" then mergePersistent() end
     local state = autoServerHopState
     if type(state) ~= "table" then
         return serverId == game.JobId
@@ -35842,6 +39047,8 @@ local function rememberAutoleaveDestination(serverId)
     end
     recent[#recent + 1] = serverId
     while #recent > 50 do table.remove(recent, 1) end
+    local persist = autoServerHopState.PersistBlacklistState
+    if type(persist) == "function" then persist() end
 end
 local function resolveDestinationServer()
     local requestFn = getRequestFunction()
@@ -35879,6 +39086,9 @@ local function resolveDestinationServer()
                     fullness = playing / maxPlayers,
                     openSlots = maxPlayers - playing,
                 }
+                if #candidates >= 10 then
+                    break
+                end
             end
         end
         -- Public servers are returned in descending player-count order. Once ten
